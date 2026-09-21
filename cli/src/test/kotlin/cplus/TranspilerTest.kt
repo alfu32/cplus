@@ -148,6 +148,37 @@ class TranspilerTest {
     }
 
     @Test
+    fun lowersGenericMethodsWithFunctionPointerParameters() {
+        val result = CPlusTranspiler().transpile(
+            """
+                @type list(@type T) {
+                    return struct {
+                        T* items;
+                        size_t length;
+                        pub int each(borrowed *self, int (*callback)(borrowed T* item, size_t index)) {
+                            for (size_t i = 0; i < self->length; i++) {
+                                if (callback(&self->items[i], i) != 0) return 1;
+                            }
+                            return 0;
+                        }
+                    };
+                }
+                @list(int) int_list_t;
+                int visit(borrowed int* item, size_t index) { return *item + (int)index; }
+                int main(void) {
+                    int_list_t values;
+                    (&values).each(visit);
+                    return 0;
+                }
+            """.trimIndent()
+        ).code
+        assertTrue("int (*callback)(borrowed int* item, size_t index)" in result, result)
+        assertTrue("int_list__each(borrowed int_list_t *self" in result, result)
+        assertTrue("callback(&self->items[i], i)" in result, result)
+        assertTrue("int_list__each(&values, visit)" in result, result)
+    }
+
+    @Test
     fun materializesComptimeStructReferences() {
         val result = CPlusTranspiler().transpile(
             """

@@ -131,7 +131,11 @@ private data class StructMembers(
                         if (close >= 0) {
                             val after = Delimiters.skipWhitespace(masked, close + 1)
                             if (after < body.text.length && (masked[after] == '{' || masked[after] == ';')) {
-                                val header = body.text.substring(segmentStart, close + 1).trim()
+                                // Inspect only the text before the candidate's outer
+                                // parameter list. This permits function-pointer
+                                // parameters inside a method without mistaking their
+                                // nested parentheses for a struct-level method.
+                                val header = body.text.substring(segmentStart, index).trim()
                                 if (looksLikeMethod(header)) {
                                     val end = if (masked[after] == '{') {
                                         val methodClose = Delimiters.match(masked, after, '{', '}')
@@ -164,9 +168,8 @@ private data class StructMembers(
         }
 
         private fun looksLikeMethod(header: String): Boolean {
-            val beforeOpen = header.substringBeforeLast('(').trim()
-            if (beforeOpen.contains("(*") || beforeOpen.contains("(&")) return false
-            val name = Regex("([A-Za-z_]\\w*)\\s*$").find(beforeOpen)?.groupValues?.get(1) ?: return false
+            if (header.contains("(*") || header.contains("(&")) return false
+            val name = Regex("([A-Za-z_]\\w*)\\s*$").find(header)?.groupValues?.get(1) ?: return false
             return name !in setOf("if", "for", "while", "switch")
         }
     }

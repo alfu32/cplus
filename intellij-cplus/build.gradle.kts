@@ -15,7 +15,7 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        intellijIdea("2024.3.6")
+        intellijIdea("2026.2.2")
     }
 }
 
@@ -34,8 +34,7 @@ intellijPlatform {
     pluginConfiguration {
         version = project.version.toString()
         ideaVersion {
-            sinceBuild = "243"
-            untilBuild = "243.*"
+            sinceBuild = "262"
         }
         vendor {
             name = "C-plus contributors"

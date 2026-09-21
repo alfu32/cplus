@@ -26,6 +26,8 @@ typedef struct counter_t {
 
 int main(int argc,const char** argv) {
     counter_t counter;
+    counter_t cc;
+    (&cc).set(12);
     (&counter).set(1);
     for((&counter).set(5);counter.value<100;(&counter).add(1)){
        (&counter).print();
