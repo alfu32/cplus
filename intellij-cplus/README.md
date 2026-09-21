@@ -1,5 +1,11 @@
 # IntelliJ C-plus Module
 
-This module contains the IntelliJ Platform integration for C-plus: `.cp`/`.c+` file registration, syntax highlighting, annotation completion, and lightweight method completion.
+This module contains a deployable IntelliJ Platform plugin for C-plus: `.cp`/`.c+` file registration, syntax highlighting, annotation and method completion, lightweight symbol indexing, and declaration navigation.
 
-The source is intentionally kept separate from the Kotlin compiler modules. Wire it to the IntelliJ Platform Gradle plugin when the supported IDE baseline is selected. Full PSI-backed navigation, compiler diagnostics, and semantic IntelliSense should build on the same language-server protocol used by the other editors.
+The source is intentionally kept separate from the Kotlin compiler modules. It targets IntelliJ IDEA 2024.3 and Java 21:
+
+```sh
+./gradlew -p intellij-cplus buildPlugin
+```
+
+The deployable ZIP is written to `intellij-cplus/build/distributions/`. Install it from **Settings → Plugins → gear → Install Plugin from Disk**. The plugin uses a flat PSI parser so editor services work without requiring the C-plus compiler to be installed.

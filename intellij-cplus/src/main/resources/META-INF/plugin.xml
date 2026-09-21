@@ -6,8 +6,10 @@
     <depends>com.intellij.modules.platform</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <fileType name="C-plus" language="C-plus" implementationClass="cplus.intellij.CPlusFileType" fieldName="INSTANCE" />
+        <fileType name="C-plus" language="C-plus" implementationClass="cplus.intellij.CPlusFileType" fieldName="INSTANCE" extensions="cp;c+" />
+        <lang.parserDefinition language="C-plus" implementationClass="cplus.intellij.CPlusParserDefinition" />
         <lang.syntaxHighlighterFactory language="C-plus" implementationClass="cplus.intellij.CPlusSyntaxHighlighterFactory" />
         <completion.contributor language="C-plus" implementationClass="cplus.intellij.CPlusCompletionContributor" />
+        <gotoDeclarationHandler implementationClass="cplus.intellij.CPlusGotoDeclarationHandler" />
     </extensions>
 </idea-plugin>

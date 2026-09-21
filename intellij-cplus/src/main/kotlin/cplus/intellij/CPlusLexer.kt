@@ -75,6 +75,7 @@ class CPlusLexer : LexerBase() {
                 val word = buffer.subSequence(position, tokenEnd).toString()
                 when {
                     word in keywords -> CPlusTokenTypes.KEYWORD
+                    word in annotations -> CPlusTokenTypes.ANNOTATION
                     word.endsWith("_t") -> CPlusTokenTypes.TYPE
                     else -> CPlusTokenTypes.IDENTIFIER
                 }
@@ -97,7 +98,9 @@ class CPlusLexer : LexerBase() {
         private val keywords = setOf(
             "typedef", "struct", "enum", "union", "const", "void", "char", "short", "int",
             "long", "float", "double", "signed", "unsigned", "return", "if", "else", "for",
-            "while", "do", "switch", "case", "default", "break", "continue", "static"
+            "while", "do", "switch", "case", "default", "break", "continue", "static",
+            "variable", "function", "size_t"
         )
+        private val annotations = setOf("pub", "priv", "mut", "borrowed", "owned", "stat")
     }
 }

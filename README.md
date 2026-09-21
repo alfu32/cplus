@@ -33,6 +33,14 @@ The bundled TinyCC JNI library is used for compilation, so `compile` and `run` d
 
 The installed application can also be launched from `cli/build/install/c-plus/bin/c-plus` after `./gradlew :cli:installDist`.
 
+Build all deployable editor artifacts with:
+
+```sh
+./gradlew editorArtifacts
+```
+
+This writes `vscode-cplus/dist/cplus-language-support.vsix`, `intellij-cplus/build/distributions/*.zip`, and `vim-cplus/dist/vim-cplus-*.tar.gz`/`.zip`.
+
 Compilation prints each pass to stderr. Generated C contains `#line` directives pointing back to the `.cp` file, and TinyCC diagnostics are normalized and reported with the original C-plus path and line.
 
 ## Repository modules
@@ -40,11 +48,11 @@ Compilation prints each pass to stderr. Generated C contains `#line` directives 
 - `compiler/`: reusable Kotlin transpiler and embedded TinyCC adapter.
 - `cli/`: command-line application and integration tests.
 - `documentation/spec/`: living language, comptime, and compiler specifications.
-- `vscode-cplus/`: VS Code extension with highlighting, completion, symbols, and hover support.
-- `intellij-cplus/`: IntelliJ Platform integration sources for highlighting and completion.
-- `vim-cplus/`: Vim runtime files for file detection, highlighting, and omnifunc completion.
+- `vscode-cplus/`: deployable VS Code extension with highlighting, completion, symbols, navigation, diagnostics, and CLI commands.
+- `intellij-cplus/`: deployable IntelliJ Platform plugin with a flat PSI parser, highlighting, completion, and declaration navigation.
+- `vim-cplus/`: deployable Vim runtime with file detection, highlighting, omnifunc completion, quickfix diagnostics, and compiler commands.
 
-Editor integrations currently provide local syntax and lightweight symbol support. Compiler-backed diagnostics and full semantic IntelliSense will use a shared language-server layer when that interface is introduced.
+Editor integrations provide local syntax and lightweight semantic support without a language server. VS Code and Vim can also invoke the CLI for compiler-backed diagnostics/builds; the IntelliJ plugin remains self-contained and uses its local PSI/index services.
 
 ## Current lowering rules
 

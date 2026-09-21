@@ -5,6 +5,10 @@
   "version": "0.1.0",
   "publisher": "cplus",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/c-plus/c-plus"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -30,11 +34,54 @@
         "scopeName": "source.cplus",
         "path": "./syntaxes/cplus.tmLanguage.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "cplus.transcode",
+        "title": "C-plus: Transcode Current File"
+      },
+      {
+        "command": "cplus.compile",
+        "title": "C-plus: Compile Current File"
+      },
+      {
+        "command": "cplus.run",
+        "title": "C-plus: Run Current File"
+      },
+      {
+        "command": "cplus.check",
+        "title": "C-plus: Check Current File"
+      }
+    ],
+    "configuration": {
+      "title": "C-plus",
+      "properties": {
+        "cplus.compilerCommand": {
+          "type": "string",
+          "default": "cplus",
+          "description": "C-plus CLI command used by compiler-backed checks and build commands."
+        },
+        "cplus.compilerArguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional arguments passed to the C-plus CLI compiler."
+        },
+        "cplus.compilerDiagnostics": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run the C-plus compiler on save and map diagnostics back to the .cp file."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node test/smoke.js",
+    "package": "npm run compile && mkdir -p dist && vsce package --no-dependencies --out dist/cplus-language-support.vsix"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",

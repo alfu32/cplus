@@ -1,0 +1,50 @@
+plugins {
+    kotlin("jvm")
+    id("org.jetbrains.intellij.platform")
+}
+
+group = "cplus"
+version = providers.gradleProperty("release").orElse("0.1.0").get()
+
+repositories {
+    mavenCentral()
+    intellijPlatform {
+        defaultRepositories()
+    }
+}
+
+dependencies {
+    intellijPlatform {
+        intellijIdea("2024.3.6")
+    }
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
+}
+
+intellijPlatform {
+    instrumentCode = false
+    pluginConfiguration {
+        version = project.version.toString()
+        ideaVersion {
+            sinceBuild = "243"
+            untilBuild = "243.*"
+        }
+        vendor {
+            name = "C-plus contributors"
+        }
+    }
+}
+
+tasks {
+    named("buildSearchableOptions") {
+        enabled = false
+    }
+}

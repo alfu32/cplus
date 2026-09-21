@@ -9,4 +9,6 @@
 **/.gradle/
 **/node_modules/
 vscode-cplus/out/
+**/dist/
+intellij-cplus/.intellijPlatform/
 .idea

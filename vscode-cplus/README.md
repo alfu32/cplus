@@ -1,12 +1,19 @@
 # VS Code C-plus Module
 
-This extension provides C-plus file detection for `.cp` and `.c+`, TextMate syntax highlighting, annotation/method completion, symbol navigation, and lightweight hover information.
+This extension provides C-plus file detection for `.cp` and `.c+`, TextMate syntax highlighting, annotation and method completion, symbols, hover information, local delimiter diagnostics, definition/reference navigation, and optional compiler-backed diagnostics.
 
 ## Development
 
 ```sh
 npm install
 npm run compile
+npm run package
 ```
 
-Open this directory in VS Code and press `F5` to launch an Extension Development Host. The provider is intentionally local and lightweight; compiler-backed diagnostics and full semantic IntelliSense will be added when the compiler exposes a language-server protocol.
+`npm run package` creates `dist/cplus-language-support.vsix`, a deployable VS Code extension. Install it with:
+
+```sh
+code --install-extension dist/cplus-language-support.vsix
+```
+
+Open this directory in VS Code and press `F5` to launch an Extension Development Host. Set `cplus.compilerCommand` to the C-plus CLI and enable `cplus.compilerDiagnostics` to run compiler-backed checks on save. The local indexer remains available without a language server and understands structs, methods, fields, comptime names, and generated method names.

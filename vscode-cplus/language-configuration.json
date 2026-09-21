@@ -13,5 +13,16 @@
   ],
   "surroundingPairs": [
     ["{", "}"], ["[", "]"], ["(", ")"], ["\"", "\""], ["'", "'"]
-  ]
+  ],
+  "folding": {
+    "markers": {
+      "start": "^\\s*#region\\b",
+      "end": "^\\s*#endregion\\b"
+    }
+  },
+  "indentationRules": {
+    "increaseIndentPattern": "^((?!//).)*(\\{|\\b(case|default):)\\s*$",
+    "decreaseIndentPattern": "^\\s*\\}"
+  },
+  "wordPattern": "[A-Za-z_][A-Za-z0-9_]*"
 }

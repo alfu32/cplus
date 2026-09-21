@@ -1,8 +1,10 @@
 package cplus.intellij
 
 import com.intellij.psi.tree.IElementType
+import com.intellij.psi.tree.IFileElementType
 
 object CPlusTokenTypes {
+    @JvmField val FILE = IFileElementType(CPlusLanguage)
     @JvmField val ANNOTATION = IElementType("CPLUS_ANNOTATION", CPlusLanguage)
     @JvmField val COMMENT = IElementType("CPLUS_COMMENT", CPlusLanguage)
     @JvmField val KEYWORD = IElementType("CPLUS_KEYWORD", CPlusLanguage)

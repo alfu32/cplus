@@ -9,6 +9,7 @@
     {"include": "#comptime"},
     {"include": "#annotations"},
     {"include": "#keywords"},
+    {"include": "#functions"},
     {"include": "#types"},
     {"include": "#numbers"}
   ],
@@ -32,7 +33,9 @@
     },
     "comptime": {
       "patterns": [
-        {"name": "entity.name.function.comptime.cplus", "match": "@[A-Za-z_]\\w*"}
+        {"name": "keyword.control.comptime.cplus", "match": "@(import|if|else|for|type|var|fn)\\b"},
+        {"name": "entity.name.function.comptime.cplus", "match": "@[A-Za-z_]\\w*"},
+        {"name": "variable.other.comptime.cplus", "match": "\\b[A-Za-z_]\\w*(?=\\.(name|size|align|fields)\\b)"}
       ]
     },
     "annotations": {
@@ -43,7 +46,13 @@
     "keywords": {
       "patterns": [
         {"name": "keyword.control.c", "match": "\\b(if|else|for|while|do|switch|case|default|return|break|continue|goto)\\b"},
-        {"name": "storage.type.c", "match": "\\b(typedef|struct|enum|union|const|volatile|restrict|signed|unsigned|short|long|void|char|int|float|double)\\b"}
+        {"name": "storage.type.c", "match": "\\b(typedef|struct|enum|union|const|volatile|restrict|signed|unsigned|short|long|void|char|int|float|double|size_t)\\b"},
+        {"name": "keyword.control.comptime.cplus", "match": "\\b(variable|function)\\b"}
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {"name": "entity.name.function.cplus", "match": "\\b[A-Za-z_]\\w*(?=\\s*\\()"}
       ]
     },
     "types": {
