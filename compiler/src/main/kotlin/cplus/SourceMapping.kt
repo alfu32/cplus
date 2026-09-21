@@ -54,23 +54,28 @@ class SourceFile(
     }
 }
 
+data class SourceOrigin(
+    val file: SourceFile,
+    val offset: Int
+)
+
 /** Text whose every character can be traced back to an offset in the original C-plus source. */
 class MappedText internal constructor(
     val text: String,
-    private val origins: IntArray
+    private val origins: Array<SourceOrigin?>
 ) {
     init {
         require(text.length == origins.size) { "mapped text and origin arrays must have equal lengths" }
     }
 
-    fun originAt(index: Int): Int? = origins[index].takeIf { it >= 0 }
+    fun originAt(index: Int): SourceOrigin? = origins[index]
 
     fun slice(start: Int, end: Int): MappedText = MappedText(
         text.substring(start, end),
         origins.copyOfRange(start, end)
     )
 
-    fun firstOrigin(start: Int = 0, end: Int = text.length): Int? {
+    fun firstOrigin(start: Int = 0, end: Int = text.length): SourceOrigin? {
         for (index in start until end) {
             originAt(index)?.let { return it }
         }
@@ -78,18 +83,23 @@ class MappedText internal constructor(
     }
 
     companion object {
-        fun identity(source: String): MappedText = MappedText(source, IntArray(source.length) { it })
+        fun identity(sourceFile: SourceFile): MappedText = MappedText(
+            sourceFile.text,
+            Array(sourceFile.text.length) { SourceOrigin(sourceFile, it) }
+        )
 
-        fun generated(text: String, origin: Int? = null): MappedText = MappedText(
+        fun identity(source: String): MappedText = identity(SourceFile(source))
+
+        fun generated(text: String, origin: SourceOrigin? = null): MappedText = MappedText(
             text,
-            IntArray(text.length) { origin ?: -1 }
+            Array(text.length) { origin }
         )
     }
 }
 
 class MappedTextBuilder {
     private val text = StringBuilder()
-    private val origins = ArrayList<Int>()
+    private val origins = ArrayList<SourceOrigin?>()
 
     fun append(mapped: MappedText) {
         append(mapped, 0, mapped.text.length)
@@ -97,15 +107,15 @@ class MappedTextBuilder {
 
     fun append(mapped: MappedText, start: Int, end: Int) {
         text.append(mapped.text, start, end)
-        for (index in start until end) origins += mapped.originAt(index) ?: -1
+        for (index in start until end) origins += mapped.originAt(index)
     }
 
-    fun appendGenerated(value: String, origin: Int? = null) {
+    fun appendGenerated(value: String, origin: SourceOrigin? = null) {
         text.append(value)
-        repeat(value.length) { origins += origin ?: -1 }
+        repeat(value.length) { origins += origin }
     }
 
-    fun build(): MappedText = MappedText(text.toString(), origins.toIntArray())
+    fun build(): MappedText = MappedText(text.toString(), origins.toTypedArray())
 }
 
 data class SourceMapEntry(
@@ -134,18 +144,23 @@ class MappedEmitter(private val sourceFile: SourceFile) {
         val entries = mutableListOf<SourceMapEntry>()
         var physicalLine = prelude.count { it == '\n' } + 1
         var previousSourceLine: Int? = null
+        var previousSourceFile: String? = null
         var cursor = 0
 
         while (cursor < mapped.text.length) {
             val newline = mapped.text.indexOf('\n', cursor)
             val end = if (newline < 0) mapped.text.length else newline + 1
             val firstOrigin = mapped.firstOrigin(cursor, end)
-            val sourceSpan = firstOrigin?.let { sourceFile.span(it) }
-            if (sourceSpan != null && sourceSpan.startLine != previousSourceLine?.plus(1)) {
+            val sourceSpan = firstOrigin?.file?.span(firstOrigin.offset)
+            if (sourceSpan != null && (
+                    sourceSpan.file != previousSourceFile ||
+                        sourceSpan.startLine != previousSourceLine?.plus(1)
+                    )
+            ) {
                 output.append("#line ")
                     .append(sourceSpan.startLine)
                     .append(" \"")
-                    .append(escapeFile(sourceFile.name ?: "<c-plus-input>"))
+                    .append(escapeFile(sourceSpan.file ?: sourceFile.name ?: "<c-plus-input>"))
                     .append("\"\n")
                 physicalLine++
             }
@@ -157,7 +172,11 @@ class MappedEmitter(private val sourceFile: SourceFile) {
             physicalLine += mapped.text.substring(cursor, end).count { it == '\n' }
             previousSourceLine = sourceSpan?.startLine?.plus(mapped.text.substring(cursor, end).count { it == '\n' })
                 ?.minus(if (end > cursor && mapped.text[end - 1] == '\n') 1 else 0)
-            if (sourceSpan == null) previousSourceLine = null
+            previousSourceFile = sourceSpan?.file
+            if (sourceSpan == null) {
+                previousSourceLine = null
+                previousSourceFile = null
+            }
             cursor = end
         }
 

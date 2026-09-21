@@ -56,4 +56,4 @@ Editor integrations currently provide local syntax and lightweight symbol suppor
 
 The receiver type is inferred from declarations such as `name_t value;` or `name_t *value;`. Unknown receivers are left unchanged so ordinary C remains valid.
 
-Comptime and generic declarations beginning with `@` are currently reserved and rejected by the processor. Their planned syntax, materialization rules, and limitations are documented in [`documentation/spec/SPEC.comptime.md`](documentation/spec/SPEC.comptime.md).
+Comptime and generic declarations beginning with `@` are resolved before method lowering for the supported scalar, import, reflection, block, entity, and generic-struct forms. The syntax, materialization rules, and current limitations are documented in [`documentation/spec/SPEC.comptime.md`](documentation/spec/SPEC.comptime.md).

@@ -24,6 +24,8 @@ Compilation logs each pass to stderr. The current passes are:
 ```text
 read-source
 comptime-resolve
+comptime-parse-import-evaluate
+comptime-materialize
 collect-struct-types
 lower-method-calls
 lower-struct-methods
@@ -32,9 +34,9 @@ tcc-compile
 run-executable
 ```
 
-The current `comptime-resolve` pass only detects reserved `@` syntax. The planned implementation will split it into import loading, declaration collection, evaluation, and entity materialization passes as defined in [`SPEC.comptime.md`](SPEC.comptime.md).
+`comptime-parse-import-evaluate` parses the supported `@` forms, resolves imports, evaluates values/functions, and collects reflection metadata. `comptime-materialize` emits mapped runtime C-plus entities. Unsupported forms fail before method lowering and are never passed to the C parser.
 
-Generated C includes `#line` directives. TinyCC diagnostics are normalized and mapped to the original C-plus filename and line where possible. Transcoding and compiler failures return a non-zero exit code; CLI argument or unexpected processing errors return `2`.
+Generated C includes `#line` directives. TinyCC diagnostics are normalized and mapped to the original C-plus filename and line where possible, including imported files and generated entities. Comptime parser/evaluator errors carry the originating source span and the CLI prints `file:line:column`. Transcoding and compiler failures return a non-zero exit code; CLI argument or unexpected processing errors return `2`.
 
 ## Build Layout
 

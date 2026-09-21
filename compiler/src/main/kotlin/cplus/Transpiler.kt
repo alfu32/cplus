@@ -8,11 +8,10 @@ class CPlusTranspiler {
         logger: CompilationLogger = SilentCompilationLogger
     ): TranscodedSource {
         val sourceFile = SourceFile(source, sourceName)
-        val input = MappedText.identity(source)
-
-        logger.pass("comptime-resolve") {
-            ComptimePass().resolve(sourceFile)
+        val input = logger.pass("comptime-resolve") {
+            ComptimeCompiler(sourceFile, logger).compile()
         }
+
         val typeNames = logger.pass("collect-struct-types") {
             StructTypeCollector().collect(input.text)
         }
@@ -47,21 +46,6 @@ private object CPlusPreamble {
         #endif
 
     """.trimIndent() + "\n\n"
-}
-
-private class ComptimePass {
-    fun resolve(source: SourceFile) {
-        val masked = SourceMasker.mask(source.text)
-        val at = masked.indexOf('@')
-        if (at >= 0) {
-            val span = source.span(at)
-            val location = "${span.file ?: "<input>"}:${span.startLine}:${span.startColumn}"
-            throw CPlusSyntaxException(
-                "comptime/generic syntax beginning with '@' is reserved but not implemented ($location)",
-                span
-            )
-        }
-    }
 }
 
 private class StructTypeCollector {
@@ -374,7 +358,7 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
     }
 }
 
-private object SourceMasker {
+internal object SourceMasker {
     fun mask(source: String): String {
         val chars = source.toCharArray()
         var index = 0
@@ -457,7 +441,7 @@ private object SourceMasker {
     private enum class State { CODE, LINE_COMMENT, BLOCK_COMMENT, STRING, CHAR }
 }
 
-private object Delimiters {
+internal object Delimiters {
     fun match(source: String, openIndex: Int, open: Char, close: Char): Int {
         if (openIndex < 0 || openIndex >= source.length || source[openIndex] != open) return -1
         var depth = 0
@@ -494,4 +478,4 @@ private object Delimiters {
     }
 }
 
-private fun Char.isIdentifierPart(): Boolean = this == '_' || isLetterOrDigit()
+internal fun Char.isIdentifierPart(): Boolean = this == '_' || isLetterOrDigit()

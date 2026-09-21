@@ -13,6 +13,14 @@ private val sourceExtensions = listOf(".cp", ".c+")
 fun main(args: Array<String>) {
     val exitCode = try {
         CPlusCli().run(args.toList())
+    } catch (error: CPlusSyntaxException) {
+        val span = error.sourceSpan
+        if (span?.file != null) {
+            System.err.println("${span.file}:${span.startLine}:${span.startColumn}: error: ${error.message}")
+        } else {
+            System.err.println("cplus: error: ${error.message}")
+        }
+        2
     } catch (error: Exception) {
         System.err.println("cplus: ${error.message ?: error::class.simpleName}")
         2
