@@ -9,3 +9,4 @@
 **/.gradle/
 **/node_modules/
 vscode-cplus/out/
+.idea

@@ -51,7 +51,7 @@ counter_t.alloc_init(0);    // counter__alloc_init(0)
 
 ## Comptime and Generics
 
-`@` introduces compile-time values, functions, imports, blocks, generic type values, and reflection. The complete design, materialization rules, intermediate C-plus examples, and limitations are specified in [`SPEC.comptime.md`](SPEC.comptime.md). The compiler implements the documented core forms and rejects unsupported extensions before C lowering.
+`@` introduces compile-time values, functions, imports, blocks, generic type values, and compile-time reflection. The implemented forms, materialization rules, and source-mapping behavior are specified in [`SPEC.comptime.md`](SPEC.comptime.md). Runtime reflection and typed AST decorators are documented there as proposed extensions and are not accepted by the current compiler.
 
 ## Source Mapping
 

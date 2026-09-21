@@ -6,20 +6,32 @@ This is a living specification. Any change to comptime syntax, evaluation, impor
 
 ## Purpose and Phases
 
-Comptime is a deterministic precompilation phase. It produces ordinary C-plus text and entities before the existing C-plus-to-C lowering passes run:
+Comptime is an earlier evaluation phase of the same language, not a separate macro language. A comptime function is an in-source compiler plugin: it receives compile-time values or source fragments, transforms them, and returns values or valid C-plus declarations for the next phase.
 
 ```text
 C-plus source
-  -> load @import graph
-  -> collect and evaluate comptime declarations
-  -> materialize returned runtime C-plus entities
-  -> resolve remaining @ expressions
-  -> intermediate C-plus
-  -> method lowering and mapped C emission
-  -> C
+  -> phase 1: load plugins and resolve @ imports, values, calls, and decorators
+  -> validate and materialize returned C-plus declarations
+  -> phase 2: transpile the resulting C-plus to mapped C
+  -> optional phase 3: compile C with TinyCC
 ```
 
 No unresolved `@` token may reach the C emitter. A comptime value is not a runtime variable, and executing a comptime function never calls generated runtime code.
+
+### One language, two evaluation contexts
+
+The source remains C-plus in both contexts. The difference is when a declaration executes and what it is allowed to produce:
+
+| Context | Input | Output |
+| --- | --- | --- |
+| Phase 1, comptime | comptime C-plus functions, values, fragments, and imports | scalars, type metadata, and valid C-plus declarations |
+| Phase 2, runtime C-plus | the phase-1 materialized source | ordinary C-plus declarations and expressions, then C |
+
+Phase-1 functions may use compiler-provided fragment and reflection APIs. They must not call runtime functions, dereference runtime pointers, execute processes, or access nondeterministic state. This keeps the surface language familiar without pretending that a phase-1 function is an ordinary executable function.
+
+The phase-1 contract is strict: every invocation either produces a supported value, produces a parseable C-plus fragment, or reports a source-mapped diagnostic. Before phase 2 starts, all phase-1 invocations and decorators must have been resolved, generated names must be checked, and the remaining source must be valid C-plus.
+
+Comptime modules can therefore be written in C-plus and imported as compiler plugins. An imported module may expose phase-1 functions and may materialize ordinary runtime declarations; it is not linked as a runtime library merely because it contains a comptime function.
 
 ## Syntax
 
@@ -31,14 +43,16 @@ The core forms are:
 comptime-import       := "@import" string-literal ";"
 comptime-block        := "@" "{" comptime-statement* "}"
 comptime-value        := c-type "@" identifier ("=" comptime-expression)? ";"
-comptime-function     := (c-type | "variable" | "function") "@" identifier "(" parameter* ")" block
-type-generator        := "@type" identifier "(" ("@type" identifier)* ")" block
+comptime-function     := (c-type | "variable" | "function" | "@var" | "@fn") "@" identifier "(" parameter* ")" block
+type-generator        := "@type" ["@"] identifier "(" ("@type" identifier)* ")" block
 comptime-struct       := "typedef struct" "@" identifier "{" cplus-members "}" identifier ";"
 comptime-reference    := "@" identifier
 comptime-call         := "@" identifier "(" argument* ")"
 ```
 
-The ordinary comptime-function form uses a C type for scalar results, `variable` for a variable declaration entity, or `function` for a function declaration entity. The separate `@type name(...)` form produces a generated type. A comptime parameter is marked with `@`; `@type T` declares a type-value parameter.
+The preferred entity result kinds are @type for generated types, @var for generated variables, and @fn for generated functions. The legacy words variable and function remain accepted for variable and function entities. A sigil before the generator name is accepted, so @type @wrapper(...) makes the result kind explicit.
+
+The scalar comptime-function form uses a C type for scalar results. The `@var` and `@fn` forms produce variable and function declaration entities; `@type` produces a type entity. The legacy `variable` and `function` spellings remain accepted. A comptime parameter is marked with `@`; `@type T` declares a type-value parameter.
 
 ### Comptime values and functions
 
@@ -81,7 +95,7 @@ The path is relative to the importing file, must resolve to a `.cp` or `.c+` fil
 `@type` is a type value. It can be used as a generic parameter and inside comptime reflection:
 
 ```c
-@type wrapper(@type T) {
+@type @wrapper(@type T) {
     return struct {
         pub T* wrapped_value;
     };
@@ -129,15 +143,15 @@ typedef struct point_t {
 
 ### Entity-returning comptime functions
 
-Comptime functions may return runtime C-plus entities. The result kind is declared with `@type`, `variable`, or `function`; the returned body is a C-plus declaration fragment:
+Comptime functions may return runtime C-plus entities. The preferred result-kind spellings are `@type` for generated types, `@var` for generated variables, and `@fn` for generated functions. The current compiler also accepts `variable` and `function` as compatibility spellings for variable and function entities. The returned body is a C-plus declaration fragment:
 
 ```c
-variable @make_limit(int @value) {
+@var @make_limit(int @value) {
     return int generated_limit = @value;
 }
 
-function @make_checker(int @limit) {
-    return function int generated_checker(int value) {
+@fn @make_checker(int @limit) {
+    return @fn int generated_checker(int value) {
         return value < @limit;
     };
 }
@@ -172,7 +186,7 @@ int generated_limit = 10;
 int generated_checker(int value) { return value < 10; }
 ```
 
-Entity results are syntax trees, not strings. A function cannot manufacture executable source by concatenating arbitrary text; it must return a parsed C-plus fragment. This keeps delimiters, types, and source locations verifiable.
+The current implementation carries entity results as mapped C-plus text fragments. It does not yet expose a user-facing typed AST, so arbitrary string-to-source evaluation is not available. A future fragment API should replace this internal representation with typed, source-mapped declaration nodes.
 
 ## Materialization Examples
 
@@ -236,7 +250,7 @@ int limit = 8;
 Input:
 
 ```c
-@type wrapper(@type T) {
+@type @wrapper(@type T) {
     return struct {
         T* wrapped_value;
     };
@@ -289,6 +303,155 @@ void log_user_name(char* value);
 
 Those declarations are already ordinary C, so the corresponding C output has the same declarations, plus the annotation preamble and `#line` directives.
 
+## Proposed AST fragments, decorators, and runtime reflection
+
+The next comptime layer should be AST-aware, but should keep a strict distinction between compile-time metadata and runtime data. Rust is a useful comparison: declarative and procedural macros operate on compile-time token streams or syntax structures, not arbitrary runtime strings. C-plus can offer the same power with typed, source-mapped fragments.
+
+### Typed fragments and decorators
+
+The plugin API should expose opaque compile-time fragment values, not runtime structs that happen to describe syntax. A fragment can be inspected and rebuilt during phase 1, then validated before it enters phase 2. Useful operations include:
+
+- visit declarations, parameters, fields, annotations, and expressions;
+- construct or clone a declaration while preserving its source origin;
+- rename an identifier through an explicit hygiene-aware operation;
+- attach or remove C-plus annotations such as `pub`, `borrowed`, or `mut`;
+- return a module containing the original declaration and generated companions.
+
+Source text should still be available for controlled tooling. A proposed API is:
+
+```text
+parse_fragment(text, grammar_kind) -> Fragment
+print_fragment(fragment) -> string
+```
+
+`parse_fragment` must parse only the requested grammar kind, reject unresolved phase-1 forms unless explicitly allowed, and associate failures with the plugin call site. `print_fragment` is useful for diagnostics and snapshots, but text substitution should not be the normal transformation path. Typed fragments are easier to validate, map, and keep hygienic.
+
+The proposed fragment kinds are:
+
+```text
+TypeFragment       a type declaration or type expression
+DeclFragment       a variable, function, typedef, or struct declaration
+StmtFragment       a statement sequence
+ExprFragment       an expression
+ModuleFragment     a sequence of top-level declarations
+```
+
+Each fragment should retain its source span, syntactic kind, identifiers, annotations, and child nodes. A decorator must not be able to return an expression where a declaration is required.
+
+The existing `@ { ... }` form is a good explicit comptime block. A future declaration annotation could mark an entire declaration for compile-time transformation:
+
+```c
+// Proposed; not accepted by the current compiler.
+@typedef struct type_info_t {
+    const char* name;
+    const field_info_t* fields;
+} type_info_t;
+```
+
+`@` at the beginning of a statement should remain an explicit comptime invocation or reference. This keeps a runtime declaration containing a comptime value separate from a declaration that produces another declaration. `@type` should remain the intrinsic type value; use a normal name such as `type_info_t` for emitted reflection data.
+
+A future decorator could look like this:
+
+```c
+// Proposed; exact quote/unquote syntax is not fixed.
+@add_debug_wrapper
+pub int add(int left, int right) {
+    return left + right;
+}
+```
+
+Conceptually, the decorator receives a `DeclFragment` for `add`, inspects its parameters and body, and returns a `ModuleFragment` containing the original function plus a wrapper. The compiler must define whether decorators replace declarations, append declarations, or may do both.
+
+Typed constructors and visitors should be the primary API. String-to-fragment and fragment-to-string helpers are useful for tooling, snapshots, and diagnostics, but should be constrained:
+
+- `parse_decl(string)` must require a grammar kind and reject unresolved `@` forms.
+- `print(fragment)` should not be the primary transformation mechanism.
+- Quasiquoted fragments should preserve source locations and distinguish literal text from interpolated identifiers and expressions.
+
+### In-source compiler plugins
+
+Plugin definitions are ordinary C-plus-shaped source with a phase-1 result contract:
+
+```c
+// Proposed; fragment types and quote syntax are not implemented yet.
+@fn @derive_debug(decl_fragment_t @input) {
+    return @module {
+        @input;
+        // construct a debug helper from @input.fields and @input.name
+    };
+}
+```
+
+The plugin can be imported before the rest of a source module is materialized:
+
+```c
+@import "derive_debug.cp";
+
+@derive_debug
+pub typedef struct user_t {
+    int id;
+} user_t;
+```
+
+Resolution should proceed as follows:
+
+1. Load and register imported phase-1 declarations.
+2. Parse the source module without sending unresolved C-plus extensions to the C parser.
+3. Evaluate comptime values, explicit invocations, and decorators.
+4. Validate each returned fragment and insert its runtime declarations.
+5. Repeat expansion until no phase-1 invocation remains, subject to cycle and expansion limits.
+6. Hand the resulting ordinary C-plus module to the existing transpiler.
+
+This gives C-plus a macro system that is written in C-plus syntax without asking programmers to learn a second macro language. It still has a phase boundary: plugin code is evaluated by the compiler, while generated declarations execute only after phase 2 transpilation.
+
+### Runtime reflection
+
+Compile-time reflection produces source during precompilation. Runtime reflection produces explicit C data in the executable:
+
+| Feature | Available when | Result |
+| --- | --- | --- |
+| Compile-time reflection | During precompilation | `T.name`, `T.size`, `T.fields`, and generated source |
+| Runtime reflection | In the executable | C metadata tables and, optionally, function pointers |
+
+Runtime reflection should be opt-in because it increases binary size, exposes names, and commits the program to an ABI/layout representation. A proposed declaration is:
+
+```c
+// Proposed; not implemented.
+@reflect(user_t) user_type_info;
+```
+
+Its first materialization could be ordinary target-compiled C:
+
+```c
+typedef struct field_info_t {
+    const char* name;
+    size_t offset;
+    size_t size;
+} field_info_t;
+
+typedef struct type_info_t {
+    const char* name;
+    size_t size;
+    size_t align;
+    const field_info_t* fields;
+    size_t field_count;
+} type_info_t;
+
+static const field_info_t user_t_fields[] = {
+    {"id", offsetof(user_t, id), sizeof(((user_t*)0)->id)},
+    {"name", offsetof(user_t, name), sizeof(((user_t*)0)->name)},
+};
+
+static const type_info_t user_type_info = {
+    "user_t", sizeof(user_t), _Alignof(user_t),
+    user_t_fields, 2
+};
+```
+
+The target C compiler evaluates `offsetof`, `sizeof`, and `_Alignof`, keeping the table consistent with the selected ABI. The current evaluator does not yet provide this target-aware layout pipeline. Methods should use a separate explicit table: instance entries include the receiver, static entries do not, and private methods are omitted unless registered.
+
+Useful applications include serializers, generic equality and hashing, debuggers and inspectors, structured logging, plugin registries, FFI schemas, configuration loaders, protocol codecs, and startup schema validation. Runtime reflection must not imply that arbitrary C code can discover or execute every symbol.
+
 ## Reliability Rules and Limitations
 
 - **Determinism:** comptime code cannot read the clock, random values, process state, environment variables, or the network. File access is limited to source files reached through `@import`.
@@ -297,7 +460,8 @@ Those declarations are already ordinary C, so the corresponding C output has the
 - **Hygiene:** generated identifiers are collision-checked and derived from the generator and type arguments. A future explicit hygienic name escape must not silently capture user declarations.
 - **Bounded evaluation:** the current implementation limits the import graph to 256 modules, comptime calls to 10,000, and materialized output to 8 MiB. Exceeding a limit is a source-mapped comptime diagnostic.
 - **Target dependence:** `T.size` and `T.align` currently support the built-in scalar C types. Target-specific struct layout reflection remains reserved until the evaluator receives an explicit target ABI.
-- **No runtime reflection:** `@type`, field metadata, and comptime values disappear before C compilation. Runtime inspection requires ordinary C-plus data and code.
-- **No implicit string evaluation:** strings are values, not source code. Only typed entity results can materialize declarations.
+- **No runtime reflection yet:** `@type`, field metadata, and comptime values disappear before C compilation. Runtime inspection currently requires ordinary C-plus data and code.
+- **No implicit string evaluation:** strings are values, not source code. Current entity results are mapped C-plus fragments, not arbitrary executable source strings.
+- **No general AST API yet:** typed fragments, decorators, quote/unquote, and AST visitors are proposed, not implemented.
 - **Source mapping:** generated entities retain both their generator span and instantiation span. Diagnostics in generated code point to the instantiation first and can explain the generator origin.
 - **Current implementation limits:** scalar comptime functions currently require a single `return` expression; entity functions return one declaration fragment; `@for` currently iterates reflected fields and emits one entity expression per iteration; imports and comptime declarations must occur at file scope. Unsupported forms produce source-mapped diagnostics rather than being passed to C.

@@ -365,7 +365,7 @@ internal class ComptimeCompiler(
             val fragmentStart: Int
             val fragmentEnd: Int
             if (function.resultKind == "function") {
-                val functionKeyword = Regex("function\\s+").find(function.body, returnStart)
+                val functionKeyword = Regex("(?:function|@fn)\\s+").find(function.body, returnStart)
                     ?: throw syntax("function entity @${function.name} must return function ...", function.source, function.start)
                 fragmentStart = functionKeyword.range.last + 1
                 val masked = SourceMasker.mask(function.body)
@@ -678,7 +678,12 @@ private class ComptimeParser(private val source: SourceFile) {
     }
 
     private fun parseTypeGenerator(start: Int, at: Int): ComptimeTypeGenerator {
-        val nameStart = identifierEnd(masked, at + 5).let { skipWhitespace(masked, it) }
+        val typeName = skipWhitespace(masked, at + 5)
+        val nameStart = if (typeName < masked.length && masked[typeName] == '@') {
+            typeName + 1
+        } else {
+            typeName
+        }
         val nameEnd = identifierEnd(masked, nameStart)
         val open = skipWhitespace(masked, nameEnd)
         if (open >= masked.length || masked[open] != '(') throw syntax("@type generator requires parameters", source, at)
@@ -726,7 +731,12 @@ private class ComptimeParser(private val source: SourceFile) {
             if (bodyOpen >= masked.length || masked[bodyOpen] != '{') return null
             val bodyClose = Delimiters.match(masked, bodyOpen, '{', '}')
             if (bodyClose < 0) throw syntax("unclosed comptime function @${source.text.substring(nameStart, nameEnd)}", source, at)
-            val resultKind = prefix.split(Regex("\\s+")).lastOrNull().orEmpty()
+            val declaredResultKind = prefix.split(Regex("\\s+")).lastOrNull().orEmpty()
+            val resultKind = when (declaredResultKind) {
+                "@var" -> "variable"
+                "@fn" -> "function"
+                else -> declaredResultKind
+            }
             return ComptimeFunction(
                 source,
                 start,

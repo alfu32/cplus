@@ -109,6 +109,45 @@ class TranspilerTest {
     }
 
     @Test
+    fun acceptsSigiledComptimeEntityResultKinds() {
+        val result = CPlusTranspiler().transpile(
+            """
+                @var @make_limit(int @value) {
+                    return int generated_limit = @value;
+                }
+                @fn @make_checker(int @limit) {
+                    return @fn int generated_checker(int value) {
+                        return value < @limit;
+                    };
+                }
+                @ {
+                    @make_limit(10);
+                    @make_checker(10);
+                }
+            """.trimIndent()
+        ).code
+        assertTrue("int generated_limit = 10;" in result, result)
+        assertTrue("int generated_checker(int value)" in result, result)
+        assertTrue("return value < 10;" in result, result)
+    }
+
+    @Test
+    fun acceptsSigiledTypeGeneratorNames() {
+        val result = CPlusTranspiler().transpile(
+            """
+                @type @wrapper(@type T) {
+                    return struct {
+                        T* wrapped_value;
+                    };
+                }
+                @wrapper(int) wrapper_int_t;
+            """.trimIndent()
+        ).code
+        assertTrue("typedef struct __int__wrapper_t" in result, result)
+        assertTrue("int* wrapped_value;" in result, result)
+    }
+
+    @Test
     fun materializesComptimeStructReferences() {
         val result = CPlusTranspiler().transpile(
             """
