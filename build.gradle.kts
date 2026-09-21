@@ -1,4 +1,6 @@
 import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.gradle.api.file.DuplicatesStrategy
+import org.gradle.jvm.tasks.Jar
 
 plugins {
     kotlin("jvm") version "2.2.20"
@@ -6,7 +8,7 @@ plugins {
 }
 
 group = "cplus"
-version = "0.1.0-SNAPSHOT"
+version = providers.gradleProperty("release").orElse("0.1.0-SNAPSHOT").get()
 
 dependencies {
     implementation(files("lib/tinycc-embed.jar"))
@@ -33,6 +35,26 @@ tasks.test {
 }
 
 tasks.jar {
+    manifest {
+        attributes["Main-Class"] = "cplus.MainKt"
+    }
+}
+
+tasks.register<Jar>("fatJar") {
+    group = "build"
+    description = "Builds an executable jar containing C-plus and its runtime dependencies."
+    archiveBaseName.set("c-plus")
+    archiveVersion.set(providers.gradleProperty("release").orElse("0.1.0-SNAPSHOT"))
+    archiveClassifier.set("")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    dependsOn(tasks.named("classes"))
+    from(sourceSets.main.get().output)
+    from(configurations.runtimeClasspath.get().map { file ->
+        if (file.isDirectory) file else zipTree(file)
+    })
+
+    exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
     manifest {
         attributes["Main-Class"] = "cplus.MainKt"
     }

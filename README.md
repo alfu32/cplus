@@ -12,6 +12,13 @@ This is a Java 21-compatible Gradle project. The wrapper is the canonical build 
 ./gradlew run --args='help'
 ```
 
+To create a self-contained release jar, pass the release version explicitly:
+
+```sh
+./gradlew -Prelease=0.2.0 fatJar
+java -jar build/libs/c-plus-0.2.0.jar help
+```
+
 The bundled TinyCC JNI library is used for compilation, so `compile` and `run` do not require a system `tcc` executable:
 
 ```sh
