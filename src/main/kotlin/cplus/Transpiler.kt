@@ -2,17 +2,33 @@ package cplus
 
 import java.lang.StringBuilder
 
-/** Converts the C-plus syntax currently supported by the MVP into C. */
+/** Converts the currently supported C-plus syntax into C. */
 class CPlusTranspiler {
     fun transpile(source: String): String {
         ComptimePass().resolve(source)
         val loweredStructs = StructLowerer().lower(source)
         val withCalls = MethodCallLowerer(loweredStructs.typeNames).lower(loweredStructs.source)
-        return AnnotationStripper.strip(withCalls)
+        return CPlusPreamble.text + withCalls
     }
 }
 
 class CPlusSyntaxException(message: String) : IllegalArgumentException(message)
+
+private object CPlusPreamble {
+    val text = """
+        /* C-plus source annotations are intentionally retained in generated C. */
+        #ifndef CPLUS_ANNOTATIONS_DEFINED
+        #define CPLUS_ANNOTATIONS_DEFINED
+        #define pub
+        #define priv
+        #define mut
+        #define borrowed
+        #define owned
+        #define stat
+        #endif
+
+    """.trimIndent() + "\n\n"
+}
 
 private class ComptimePass {
     fun resolve(source: String) {
@@ -144,8 +160,6 @@ private data class StructMembers(
 }
 
 private object MethodLowerer {
-    private val markerWords = setOf("pub", "priv", "mut", "borrowed", "owned", "stat")
-
     fun lower(method: String, typeName: String): String {
         val open = method.indexOf('(')
         val masked = SourceMasker.mask(method)
@@ -160,25 +174,29 @@ private object MethodLowerer {
         val methodName = nameMatch.groupValues[1]
         val annotations = prefix.substring(0, nameMatch.range.first)
         val isStatic = Regex("\\b(?:static|stat)\\b").containsMatchIn(annotations)
-        val returnType = AnnotationStripper.strip(annotations)
-            .replace(Regex("\\bstatic\\b"), "")
-            .trim()
+        val returnType = annotations.replace(Regex("\\bstatic\\b"), "").trim()
         if (returnType.isEmpty()) throw CPlusSyntaxException("method $methodName is missing a return type")
 
         val parameters = splitParameters(params)
         val firstIsSelf = !isStatic && parameters.firstOrNull()?.let { Regex("\\bself\\b").containsMatchIn(it) } == true
         val renderedParameters = if (firstIsSelf) {
-            val mutable = Regex("\\bmut\\b").containsMatchIn(parameters.first())
-            val selfType = if (mutable) "$typeName *self" else "const $typeName *self"
-            listOf(selfType) + parameters.drop(1).map(AnnotationStripper::strip).map(String::trim)
+            val markers = Regex("\\b(?:pub|priv|mut|borrowed|owned|stat)\\b")
+                .findAll(parameters.first())
+                .map { it.value }
+                .toList()
+                .joinToString(" ")
+            val selfType = listOf(markers, "$typeName *self")
+                .filter { it.isNotEmpty() }
+                .joinToString(" ")
+            listOf(selfType) + parameters.drop(1).map(String::trim)
         } else {
-            parameters.map(AnnotationStripper::strip).map(String::trim)
+            parameters.map(String::trim)
         }
 
         val stem = if (typeName.endsWith("_t")) typeName.dropLast(2) else typeName
         val storage = if (isStatic) "static " else ""
         val functionName = "${stem}__${methodName}"
-        val renderedSuffix = AnnotationStripper.strip(suffix)
+        val renderedSuffix = suffix
         return "$storage$returnType $functionName(${renderedParameters.joinToString(", ")})$renderedSuffix"
     }
 
@@ -299,29 +317,6 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
         } else {
             null
         }
-    }
-}
-
-private object AnnotationStripper {
-    private val markerWords = setOf("pub", "priv", "mut", "borrowed", "owned", "stat")
-
-    fun strip(source: String): String {
-        val masked = SourceMasker.mask(source)
-        val output = StringBuilder()
-        var index = 0
-        while (index < source.length) {
-            if (!masked[index].isIdentifierStart()) {
-                output.append(source[index])
-                index++
-                continue
-            }
-            var end = index + 1
-            while (end < source.length && masked[end].isIdentifierPart()) end++
-            val word = source.substring(index, end)
-            if (word !in markerWords) output.append(word)
-            index = end
-        }
-        return output.toString()
     }
 }
 

@@ -1443,7 +1443,7 @@
         },
         {
             "path": "examples/basic.cp",
-            "lastOpenedEpochMillis": 1789994099888,
+            "lastOpenedEpochMillis": 1789995725436,
             "lastModifiedMillis": 1789994078863,
             "editor": {
                 "path": "examples/basic.cp",
@@ -1477,8 +1477,8 @@
                         ""
                     ],
                     "cursor": {
-                        "line": 22,
-                        "column": 13
+                        "line": 18,
+                        "column": 16
                     },
                     "undo": [
                         {
@@ -2541,43 +2541,38 @@
         },
         {
             "path": "Makefile",
-            "lastOpenedEpochMillis": 1789994158180,
-            "lastModifiedMillis": 1789992277570,
+            "lastOpenedEpochMillis": 1789995740442,
+            "lastModifiedMillis": 1789995724707,
             "editor": {
                 "path": "Makefile",
                 "buffer": {
                     "lines": [
-                        "KOTLINC ?= kotlinc",
-                        "JAVA ?= java",
-                        "BUILD_DIR := build",
-                        "MAIN_SOURCES := $(shell find src/main/kotlin -name '*.kt' -print)",
-                        "TEST_SOURCES := $(shell find src/test/kotlin -name '*.kt' -print)",
-                        "",
                         ".PHONY: build test clean",
                         "",
                         "build:",
-                        "\tmkdir -p $(BUILD_DIR)",
-                        "\t$(KOTLINC) $(MAIN_SOURCES) -include-runtime -d $(BUILD_DIR)/cplus.jar",
+                        "\t./gradlew build",
                         "",
                         "test:",
-                        "\tmkdir -p $(BUILD_DIR)",
-                        "\t$(KOTLINC) $(MAIN_SOURCES) $(TEST_SOURCES) -include-runtime -d $(BUILD_DIR)/cplus-tests.jar",
-                        "\t$(JAVA) -cp $(BUILD_DIR)/cplus-tests.jar cplus.TranspilerTestKt",
+                        "\t./gradlew test",
                         "",
                         "clean:",
-                        "\trm -rf $(BUILD_DIR)",
+                        "\t./gradlew clean",
                         "",
                         ""
                     ],
                     "cursor": {
-                        "line": 0,
+                        "line": 11,
+                        "column": 0
+                    },
+                    "anchor": {
+                        "line": 11,
                         "column": 0
                     }
                 },
                 "mime": "text/plain",
                 "language": "plain-text",
                 "grammarLanguage": "plain-text",
-                "lastModifiedMillis": 1789992277570
+                "lastModifiedMillis": 1789995724707
             }
         }
     ],
@@ -3933,8 +3928,8 @@
                     ""
                 ],
                 "cursor": {
-                    "line": 22,
-                    "column": 13
+                    "line": 18,
+                    "column": 16
                 },
                 "undo": [
                     {
@@ -5110,37 +5105,32 @@
             "path": "Makefile",
             "buffer": {
                 "lines": [
-                    "KOTLINC ?= kotlinc",
-                    "JAVA ?= java",
-                    "BUILD_DIR := build",
-                    "MAIN_SOURCES := $(shell find src/main/kotlin -name '*.kt' -print)",
-                    "TEST_SOURCES := $(shell find src/test/kotlin -name '*.kt' -print)",
-                    "",
                     ".PHONY: build test clean",
                     "",
                     "build:",
-                    "\tmkdir -p $(BUILD_DIR)",
-                    "\t$(KOTLINC) $(MAIN_SOURCES) -include-runtime -d $(BUILD_DIR)/cplus.jar",
+                    "\t./gradlew build",
                     "",
                     "test:",
-                    "\tmkdir -p $(BUILD_DIR)",
-                    "\t$(KOTLINC) $(MAIN_SOURCES) $(TEST_SOURCES) -include-runtime -d $(BUILD_DIR)/cplus-tests.jar",
-                    "\t$(JAVA) -cp $(BUILD_DIR)/cplus-tests.jar cplus.TranspilerTestKt",
+                    "\t./gradlew test",
                     "",
                     "clean:",
-                    "\trm -rf $(BUILD_DIR)",
+                    "\t./gradlew clean",
                     "",
                     ""
                 ],
                 "cursor": {
-                    "line": 0,
+                    "line": 11,
+                    "column": 0
+                },
+                "anchor": {
+                    "line": 11,
                     "column": 0
                 }
             },
             "mime": "text/plain",
             "language": "plain-text",
             "grammarLanguage": "plain-text",
-            "lastModifiedMillis": 1789992277570
+            "lastModifiedMillis": 1789995724707
         }
     ],
     "sourceRoots": [

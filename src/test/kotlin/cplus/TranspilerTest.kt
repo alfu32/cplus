@@ -1,51 +1,99 @@
 package cplus
 
-fun main() {
-    lowersStructMethodsAndCalls()
-    stripsAnnotationsOutsideStructs()
-    rejectsUnimplementedComptime()
-    println("cplus tests: ok")
-}
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
+import java.nio.file.Files
 
-private fun lowersStructMethodsAndCalls() {
-    val source = """
-        typedef struct counter_t {
-            int value;
-            pub int add(borrowed mut *self, int amount) {
-                self->value += amount;
+class TranspilerTest {
+    @Test
+    fun lowersStructMethodsAndKeepsAnnotations() {
+        val source = """
+            typedef struct counter_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return 0;
+                }
+                static pub counter_t* alloc_init(int initial) {
+                    return 0;
+                }
+            } counter_t;
+
+            int main(void) {
+                counter_t counter;
+                (&counter).add(3);
+                counter_t.alloc_init(0);
                 return 0;
             }
-            static pub counter_t* alloc_init(int initial) {
-                return 0;
-            }
-        } counter_t;
+        """.trimIndent()
 
-        int main(void) {
-            counter_t counter;
-            (&counter).add(3);
-            counter_t.alloc_init(0);
-            return 0;
+        val result = CPlusTranspiler().transpile(source)
+        assertTrue("#define borrowed" in result, result)
+        assertTrue("pub int counter__add(borrowed mut counter_t *self, int amount)" in result, result)
+        assertTrue("static pub counter_t* counter__alloc_init(int initial)" in result, result)
+        assertTrue("counter__add(&counter, 3)" in result, result)
+        assertTrue("counter__alloc_init(0)" in result, result)
+    }
+
+    @Test
+    fun retainsAnnotationsOutsideStructs() {
+        val result = CPlusTranspiler().transpile(
+            "priv int read(owned char* output);\nborrowed int* value;\n"
+        )
+        assertTrue("priv int read(owned char* output);" in result, result)
+        assertTrue("borrowed int* value;" in result, result)
+    }
+
+    @Test
+    fun reportsComptimeForTheNextPass() {
+        val error = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile("int @value;")
         }
-    """.trimIndent()
+        assertTrue("not implemented" in error.message.orEmpty(), error.message)
+    }
 
-    val result = CPlusTranspiler().transpile(source)
-    check("int counter__add(counter_t *self, int amount)" in result) { result }
-    check("static counter_t* counter__alloc_init(int initial)" in result) { result }
-    check("counter__add(&counter, 3)" in result) { result }
-    check("counter__alloc_init(0)" in result) { result }
-    check("borrowed" !in result && "pub" !in result && "mut" !in result) { result }
-}
+    @Test
+    fun printsCommandHelp() {
+        val help = StringBuilder()
+        assertTrue(CPlusCli(output = help).run(listOf("help")) == 0)
+        assertTrue("transcode filename.cp" in help.toString(), help.toString())
+        assertTrue("compile filename.cp" in help.toString(), help.toString())
+        assertTrue("run filename.cp" in help.toString(), help.toString())
+    }
 
-private fun stripsAnnotationsOutsideStructs() {
-    val result = CPlusTranspiler().transpile(
-        "priv int read(owned char* output);\nborrowed int* value;\n"
-    )
-    check("int read( char* output);" in result) { result }
-    check(" int* value;" in result) { result }
-}
+    @Test
+    fun compilesAndRunsWithBundledTccAndPassthroughFlags() {
+        val directory = Files.createTempDirectory("cplus-test")
+        try {
+            val source = directory.resolve("hello.cp")
+            val executable = directory.resolve("hello")
+            Files.writeString(
+                source,
+                """
+                    typedef struct value_t {
+                        int value;
+                        pub int increment(borrowed mut *self) {
+                            self->value++;
+                            return 0;
+                        }
+                    } value_t;
 
-private fun rejectsUnimplementedComptime() {
-    val error = runCatching { CPlusTranspiler().transpile("int @value;") }.exceptionOrNull()
-    check(error is CPlusSyntaxException) { "expected comptime diagnostic, got $error" }
-    check("not implemented" in error.message.orEmpty()) { error.message.orEmpty() }
+                    int main(void) {
+                        value_t value = {0};
+                        (&value).increment();
+                        return value.value == FLAG ? 0 : 1;
+                    }
+                """.trimIndent()
+            )
+            assertTrue(
+                CPlusCli().run(
+                    listOf("run", source.toString(), "-o", executable.toString(), "-DFLAG=1")
+                ) == 0
+            )
+            assertTrue(Files.isExecutable(executable), "TCC did not produce an executable")
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
 }
