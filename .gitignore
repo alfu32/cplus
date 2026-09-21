@@ -5,3 +5,5 @@
 !lib/*.jar
 
 .kode/
+**/build/
+**/.gradle/

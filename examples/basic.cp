@@ -11,7 +11,7 @@ typedef struct counter_t {
         return 0;
     }
 
-    pub error_t init(borrowed *self,int initial) {
+    pub error_t set(borrowed *self,int initial) {
         self->value=initial;
         return 0;
     }
@@ -24,12 +24,17 @@ typedef struct counter_t {
     }
 } counter_t;
 
-int main(void) {
+int main(int argc,const char** argv) {
     counter_t counter;
-    (&counter).print();
-    (&counter).add(3);
-    (&counter).print();
-    counter_t.alloc_init(0);
+    (&counter).set(1);
+    for((&counter).set(5);counter.value<100;(&counter).add(1)){
+       (&counter).print();
+    }
+    for((&counter).set(0);counter.value<argc;(&counter).add(1)){
+       (&counter).print();
+       printf("[%d]=%s;\n",counter.value,argv[counter.value]);
+    }
+    // counter_t.alloc_init(0);
     return 0;
 }
 

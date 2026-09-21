@@ -1,61 +1,30 @@
-import org.gradle.jvm.toolchain.JavaLanguageVersion
-import org.gradle.api.file.DuplicatesStrategy
-import org.gradle.jvm.tasks.Jar
-
 plugins {
-    kotlin("jvm") version "2.2.20"
-    application
+    base
 }
 
 group = "cplus"
 version = providers.gradleProperty("release").orElse("0.1.0-SNAPSHOT").get()
 
-dependencies {
-    implementation(files("lib/tinycc-embed.jar"))
-    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
+tasks.named("assemble") {
+    dependsOn(":cli:assemble")
 }
 
-kotlin {
-    jvmToolchain(21)
+tasks.named("check") {
+    dependsOn(":cli:check")
 }
 
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
-    }
+tasks.named("clean") {
+    dependsOn(":cli:clean", ":compiler:clean")
 }
 
-application {
-    mainClass.set("cplus.MainKt")
+tasks.register("test") {
+    group = "verification"
+    description = "Runs the CLI module tests."
+    dependsOn(":cli:test")
 }
 
-tasks.test {
-    useJUnitPlatform()
-}
-
-tasks.jar {
-    manifest {
-        attributes["Main-Class"] = "cplus.MainKt"
-    }
-}
-
-tasks.register<Jar>("fatJar") {
+tasks.register("fatJar") {
     group = "build"
-    description = "Builds an executable jar containing C-plus and its runtime dependencies."
-    archiveBaseName.set("c-plus")
-    archiveVersion.set(providers.gradleProperty("release").orElse("0.1.0-SNAPSHOT"))
-    archiveClassifier.set("")
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-
-    dependsOn(tasks.named("classes"))
-    from(sourceSets.main.get().output)
-    from(configurations.runtimeClasspath.get().map { file ->
-        if (file.isDirectory) file else zipTree(file)
-    })
-
-    exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
-    manifest {
-        attributes["Main-Class"] = "cplus.MainKt"
-    }
+    description = "Builds the executable CLI jar."
+    dependsOn(":cli:fatJar")
 }

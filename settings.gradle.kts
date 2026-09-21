@@ -3,6 +3,10 @@ pluginManagement {
         gradlePluginPortal()
         mavenCentral()
     }
+
+    plugins {
+        kotlin("jvm") version "2.2.20"
+    }
 }
 
 dependencyResolutionManagement {
@@ -13,3 +17,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "c-plus"
+include(":compiler", ":cli")

@@ -2,6 +2,8 @@
 
 C-plus is a small Kotlin command-line processor that lowers C-plus source (`.cp` or `.c+`) to ordinary C. C-plus keeps C's expressions and statements, adding struct-scoped methods, method-call syntax, and ownership/visibility annotations.
 
+The `cli/` Gradle module contains the command-line application and its tests. The `compiler/` module contains the transcoder, mapped emitter, source-map model, diagnostics, and embedded TinyCC adapter. The root project only aggregates the modules and forwards lifecycle tasks.
+
 ## Build and run
 
 This is a Java 21-compatible Gradle project. The wrapper is the canonical build entry point:
@@ -12,11 +14,13 @@ This is a Java 21-compatible Gradle project. The wrapper is the canonical build 
 ./gradlew run --args='help'
 ```
 
+The same tasks can be addressed explicitly as `:cli:run`, `:cli:test`, or `:cli:fatJar`.
+
 To create a self-contained release jar, pass the release version explicitly:
 
 ```sh
 ./gradlew -Prelease=0.2.0 fatJar
-java -jar build/libs/c-plus-0.2.0.jar help
+java -jar cli/build/libs/c-plus-0.2.0.jar help
 ```
 
 The bundled TinyCC JNI library is used for compilation, so `compile` and `run` do not require a system `tcc` executable:
@@ -27,7 +31,9 @@ The bundled TinyCC JNI library is used for compilation, so `compile` and `run` d
 ./gradlew run --args='run examples/basic.cp -o build/basic-run -Iinclude'
 ```
 
-The installed application can also be launched from `build/install/c-plus/bin/c-plus` after `./gradlew installDist`.
+The installed application can also be launched from `cli/build/install/c-plus/bin/c-plus` after `./gradlew :cli:installDist`.
+
+Compilation prints each pass to stderr. Generated C contains `#line` directives pointing back to the `.cp` file, and TinyCC diagnostics are normalized and reported with the original C-plus path and line.
 
 ## Current lowering rules
 
