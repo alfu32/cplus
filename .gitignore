@@ -7,3 +7,5 @@
 .kode/
 **/build/
 **/.gradle/
+**/node_modules/
+vscode-cplus/out/

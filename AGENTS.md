@@ -2,17 +2,19 @@
 
 ## Project Structure & Module Organization
 
-This repository is currently a skeleton with no source, test, asset, or build directories. As the project grows, keep production code under `src/`, tests under `tests/`, and non-code resources under `assets/`. Group related functionality into focused modules rather than large catch-all files. Add a README when introducing a new executable, library, or major subsystem.
+Keep production code in the focused module that owns it. The Kotlin compiler is under `compiler/src/main`, the CLI and its tests are under `cli/src`, editor integrations live in `vscode-cplus/`, `intellij-cplus/`, and `vim-cplus/`, and living specifications are under `documentation/spec/`. Add a README when introducing a new executable, library, or major subsystem.
 
 ## Build, Test, and Development Commands
 
-No build system or development scripts are present yet. When adding one, document the canonical commands in `README.md` and keep them reproducible from a clean checkout. Prefer a small, stable interface such as:
+Use the Gradle wrapper and keep commands reproducible from a clean checkout:
 
-- `make build` (or the project’s equivalent) to compile/package the project.
-- `make test` to run the complete automated suite.
-- `make format` and `make lint` for automatic formatting and static checks.
+- `./gradlew build` compiles and packages all Kotlin modules.
+- `./gradlew test` runs the CLI/compiler test suite.
+- `./gradlew run --args='help'` runs the CLI through the aggregate project.
+- `./gradlew -Prelease=0.2.0 fatJar` builds the self-contained CLI jar.
+- `npm install && npm run compile` builds the VS Code extension.
 
-Do not commit generated build output, caches, or local environment files unless explicitly required.
+Do not commit generated build output, caches, `node_modules`, or local environment files unless explicitly required.
 
 ## Coding Style & Naming Conventions
 
@@ -20,7 +22,7 @@ Follow the formatter and linter selected by the project; formatting should be au
 
 ## Testing Guidelines
 
-No testing framework or coverage threshold is configured yet. Add tests alongside each new behavior, placing them under `tests/` and using names that describe the scenario and expected result (for example, `parser_rejects_missing_input`). Cover normal, boundary, and failure cases, and run the full suite before opening a pull request.
+Kotlin tests use JUnit 5 under `cli/src/test`. Name tests for the behavior and expected result, cover normal and failure cases, and run `./gradlew test` before opening a pull request. Editor modules should add focused fixture tests as their tooling is introduced.
 
 ## Commit & Pull Request Guidelines
 
@@ -100,4 +102,3 @@ fix(compiler): resolve memory leaks on dynamic execution evaluation loops
 ## Security & Configuration Tips
 
 Never commit credentials, tokens, private keys, or machine-specific configuration. Provide safe example configuration with placeholder values and document required environment variables. Review dependency and generated-file changes carefully before committing.
-

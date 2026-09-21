@@ -35,6 +35,17 @@ The installed application can also be launched from `cli/build/install/c-plus/bi
 
 Compilation prints each pass to stderr. Generated C contains `#line` directives pointing back to the `.cp` file, and TinyCC diagnostics are normalized and reported with the original C-plus path and line.
 
+## Repository modules
+
+- `compiler/`: reusable Kotlin transpiler and embedded TinyCC adapter.
+- `cli/`: command-line application and integration tests.
+- `documentation/spec/`: living language, comptime, and compiler specifications.
+- `vscode-cplus/`: VS Code extension with highlighting, completion, symbols, and hover support.
+- `intellij-cplus/`: IntelliJ Platform integration sources for highlighting and completion.
+- `vim-cplus/`: Vim runtime files for file detection, highlighting, and omnifunc completion.
+
+Editor integrations currently provide local syntax and lightweight symbol support. Compiler-backed diagnostics and full semantic IntelliSense will use a shared language-server layer when that interface is introduced.
+
 ## Current lowering rules
 
 - `typedef struct name_t { ... } name_t;` method definitions and declarations are moved outside the struct.
@@ -45,4 +56,4 @@ Compilation prints each pass to stderr. Generated C contains `#line` directives 
 
 The receiver type is inferred from declarations such as `name_t value;` or `name_t *value;`. Unknown receivers are left unchanged so ordinary C remains valid.
 
-Comptime and generic declarations beginning with `@` are reserved by the syntax, but are not expanded yet; the processor reports a focused error instead of emitting invalid C. They are intentionally deferred to the next implementation pass.
+Comptime and generic declarations beginning with `@` are currently reserved and rejected by the processor. Their planned syntax, materialization rules, and limitations are documented in [`documentation/spec/SPEC.comptime.md`](documentation/spec/SPEC.comptime.md).

@@ -1,0 +1,60 @@
+{
+  "name": "C-plus",
+  "scopeName": "source.cplus",
+  "fileTypes": ["cp", "c+"],
+  "patterns": [
+    {"include": "#comments"},
+    {"include": "#preprocessor"},
+    {"include": "#strings"},
+    {"include": "#comptime"},
+    {"include": "#annotations"},
+    {"include": "#keywords"},
+    {"include": "#types"},
+    {"include": "#numbers"}
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {"name": "comment.line.double-slash.c", "match": "//.*$"},
+        {"name": "comment.block.c", "begin": "/\\*", "end": "\\*/"}
+      ]
+    },
+    "preprocessor": {
+      "patterns": [
+        {"name": "meta.preprocessor.c", "match": "^\\s*#.*$"}
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {"name": "string.quoted.double.c", "begin": "\"", "end": "\""},
+        {"name": "string.quoted.single.c", "begin": "'", "end": "'"}
+      ]
+    },
+    "comptime": {
+      "patterns": [
+        {"name": "entity.name.function.comptime.cplus", "match": "@[A-Za-z_]\\w*"}
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {"name": "storage.modifier.annotation.cplus", "match": "\\b(pub|priv|mut|borrowed|owned|stat|static)\\b"}
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {"name": "keyword.control.c", "match": "\\b(if|else|for|while|do|switch|case|default|return|break|continue|goto)\\b"},
+        {"name": "storage.type.c", "match": "\\b(typedef|struct|enum|union|const|volatile|restrict|signed|unsigned|short|long|void|char|int|float|double)\\b"}
+      ]
+    },
+    "types": {
+      "patterns": [
+        {"name": "entity.name.type.struct.cplus", "match": "\\b[A-Za-z_]\\w*_t\\b"}
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {"name": "constant.numeric.c", "match": "\\b(0[xX][0-9A-Fa-f]+|[0-9]+(\\.[0-9]*)?)\\b"}
+      ]
+    }
+  }
+}

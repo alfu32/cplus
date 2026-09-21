@@ -1,0 +1,43 @@
+{
+  "name": "cplus-language-support",
+  "displayName": "C-plus Language Support",
+  "description": "Syntax highlighting, completion, and lightweight IntelliSense for C-plus.",
+  "version": "0.1.0",
+  "publisher": "cplus",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:cplus"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "cplus",
+        "aliases": ["C-plus", "cplus"],
+        "extensions": [".cp", ".c+"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cplus",
+        "scopeName": "source.cplus",
+        "path": "./syntaxes/cplus.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.7.3"
+  }
+}

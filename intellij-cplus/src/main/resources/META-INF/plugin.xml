@@ -1,0 +1,13 @@
+<idea-plugin>
+    <id>cplus.intellij</id>
+    <name>C-plus</name>
+    <vendor>c-plus contributors</vendor>
+    <description><![CDATA[Syntax highlighting, completion, and lightweight IntelliSense for C-plus.]]></description>
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType name="C-plus" language="C-plus" implementationClass="cplus.intellij.CPlusFileType" fieldName="INSTANCE" />
+        <lang.syntaxHighlighterFactory language="C-plus" implementationClass="cplus.intellij.CPlusSyntaxHighlighterFactory" />
+        <completion.contributor language="C-plus" implementationClass="cplus.intellij.CPlusCompletionContributor" />
+    </extensions>
+</idea-plugin>

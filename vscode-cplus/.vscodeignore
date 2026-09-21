@@ -1,0 +1,7 @@
+.vscode/**
+src/**
+tsconfig.json
+*.ts
+node_modules/**
+test/**
+README.md

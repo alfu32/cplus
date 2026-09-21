@@ -1,0 +1,29 @@
+if exists("b:current_syntax")
+  finish
+endif
+
+syntax case match
+syntax keyword cplusAnnotation pub priv mut borrowed owned stat
+syntax keyword cplusKeyword typedef struct enum union static const volatile restrict return if else for while do switch case default break continue
+syntax keyword cplusType void char short int long float double signed unsigned
+syntax match cplusStructType /\<[A-Za-z_][A-Za-z0-9_]*_t\>/
+syntax match cplusComptime /@[A-Za-z_][A-Za-z0-9_]*/
+syntax match cplusNumber /\<\%(0[xX][0-9A-Fa-f]\+\|[0-9]\+\%([.][0-9]*\)\?\)\>/
+
+syntax region cplusString start=/"/ skip=/\\./ end=/"/
+syntax region cplusChar start=/'/ skip=/\\./ end=/'/
+syntax match cplusLineComment /\/\/.*$/ contains=@Spell
+syntax region cplusBlockComment start=/\/\*/ end=/\*\// contains=@Spell
+
+highlight default link cplusAnnotation Special
+highlight default link cplusKeyword Keyword
+highlight default link cplusType Type
+highlight default link cplusStructType Type
+highlight default link cplusComptime PreProc
+highlight default link cplusNumber Number
+highlight default link cplusString String
+highlight default link cplusChar Character
+highlight default link cplusLineComment Comment
+highlight default link cplusBlockComment Comment
+
+let b:current_syntax = "cplus"
