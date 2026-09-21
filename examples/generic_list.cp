@@ -28,7 +28,7 @@ typedef struct named_value_t {
             self->capacity = 0;
             return 0;
         }
-        
+
         pub int each(borrowed *self, int (*callback)(borrowed T* item, size_t index)) {
             if (callback == NULL) return 1;
             for (size_t i = 0; i < self->length; i++) {
@@ -37,7 +37,6 @@ typedef struct named_value_t {
             }
             return 0;
         }
-
         pub int reserve(borrowed mut *self, size_t requested) {
             if (requested <= self->capacity) return 0;
             if (requested > ((size_t)-1) / sizeof(T)) return 1;
@@ -114,6 +113,33 @@ typedef struct named_value_t {
 @dynamic_list(cstring_t) string_list_t;
 @dynamic_list(int) int_list_t;
 
+// Map an input list<T> into an initialized output list<R>. The list aliases
+// are explicit because comptime materializes named typedefs for each list.
+@fn @map(@type T, @type R, @type InputList, @type OutputList) {
+    return @fn pub int list_map(
+        borrowed @InputList* input,
+        borrowed mut @OutputList* output,
+        @R (*callback)(borrowed @T* item, size_t index)
+    ) {
+        if (input == NULL || output == NULL || callback == NULL) return 1;
+        for (size_t i = 0; i < input->length; i++) {
+            if (output->length == output->capacity) {
+                if (output->capacity > ((size_t)-1) / 2) return 1;
+                size_t next_capacity = output->capacity == 0 ? 4 : output->capacity * 2;
+                if (next_capacity > ((size_t)-1) / sizeof(@R)) return 1;
+                @R* resized = realloc(output->items, next_capacity * sizeof(@R));
+                if (resized == NULL) return 1;
+                output->items = resized;
+                output->capacity = next_capacity;
+            }
+            output->items[output->length++] = callback(&input->items[i], i);
+        }
+        return 0;
+    };
+}
+
+@map(named_value_t, int, named_value_list_t, int_list_t);
+
 int visit_named_value(borrowed named_value_t* item, size_t index) {
     printf("[%zu] %s=%s (rank %hu)\n", index, item->name, item->value, item->rank);
     return 0;
@@ -129,6 +155,10 @@ int visit_int(borrowed int* item, size_t index) {
     return 0;
 }
 
+int named_value_to_rank(borrowed named_value_t* item, size_t index) {
+    return (int)item->rank + (int)index;
+}
+
 int main(void) {
     named_value_list_t records;
     if ((&records).init() != 0 || (&records).reserve(2) != 0) return 1;
@@ -138,6 +168,13 @@ int main(void) {
     if ((&records).push(&first) != 0 || (&records).push(&second) != 0) return 1;
     if ((&records).set(1, &first) != 0) return 1;
     if ((&records).each(visit_named_value) != 0) return 1;
+
+    int_list_t mapped_ranks;
+    if ((&mapped_ranks).init() != 0) return 1;
+    if (list_map(&records, &mapped_ranks, named_value_to_rank) != 0) return 1;
+    if ((&mapped_ranks).size() != (&records).size()) return 1;
+    printf("mapped rank=%d\n", *(&mapped_ranks).get(0));
+    (&mapped_ranks).destroy();
 
     named_value_t* record = (&records).get(0);
     if (record == NULL || (&records).get(99) != NULL) return 1;
