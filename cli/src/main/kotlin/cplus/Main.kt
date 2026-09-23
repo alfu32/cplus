@@ -35,17 +35,34 @@ class CPlusCli(
     private val compiler: TccCompiler = TccCompiler(),
     private val logger: CompilationLogger = ConsoleCompilationLogger(errors)
 ) {
+    private var cliStdlibRoot: Path? = null
+
     fun run(arguments: List<String>): Int {
-        if (arguments.isEmpty() || arguments.first() in setOf("help", "--help", "-h")) {
+        cliStdlibRoot = null
+        val commandArguments = mutableListOf<String>()
+        var index = 0
+        while (index < arguments.size) {
+            if (arguments[index] == "--stdlib") {
+                if (index + 1 >= arguments.size) throw IllegalArgumentException("--stdlib requires a directory")
+                val directory = Path(arguments[index + 1]).toAbsolutePath().normalize()
+                if (!Files.isDirectory(directory)) throw IllegalArgumentException("standard-library directory does not exist: $directory")
+                cliStdlibRoot = directory
+                index += 2
+            } else {
+                commandArguments += arguments[index++]
+            }
+        }
+        if (commandArguments.isEmpty() || commandArguments.first() in setOf("help", "--help", "-h")) {
             printHelp()
             return 0
         }
 
-        return when (val command = arguments.first()) {
-            "transcode" -> transcode(arguments.drop(1))
-            "compile" -> compile(arguments.drop(1), runAfter = false)
-            "run" -> compile(arguments.drop(1), runAfter = true)
-            "test" -> test(arguments.drop(1))
+        return when (val command = commandArguments.first()) {
+            "transcode" -> transcode(commandArguments.drop(1))
+            "compile" -> compile(commandArguments.drop(1), runAfter = false)
+            "run" -> compile(commandArguments.drop(1), runAfter = true)
+            "test" -> test(commandArguments.drop(1))
+            "new" -> newProject(commandArguments.drop(1))
             "version" -> {
                 output.append(Version().toString()).append('\n')
                 0
@@ -58,8 +75,9 @@ class CPlusCli(
         val parsed = parseFileCommand(arguments, allowTccOptions = false)
         val destination = parsed.output ?: defaultTranscodedPath(parsed.source)
         val sourcePath = parsed.source.toAbsolutePath().normalize()
+        val importPaths = importPathsFor(sourcePath)
         val source = logger.pass("read-source") { readSource(sourcePath) }
-        val transcoded = transpiler.transpile(source, sourcePath.toString(), logger)
+        val transcoded = transpiler.transpile(source, sourcePath.toString(), logger, importPaths)
         printAllocationDiagnostics(transcoded)
         logger.pass("write-c") { writeText(destination, transcoded.code) }
         return 0
@@ -69,12 +87,15 @@ class CPlusCli(
         val parsed = parseFileCommand(arguments, allowTccOptions = true)
         val destination = parsed.output ?: defaultExecutablePath(parsed.source)
         val sourcePath = parsed.source.toAbsolutePath().normalize()
+        val importPaths = importPathsFor(sourcePath)
         val source = logger.pass("read-source") { readSource(sourcePath) }
-        val transcoded = transpiler.transpile(source, sourcePath.toString(), logger)
+        val transcoded = transpiler.transpile(source, sourcePath.toString(), logger, importPaths)
         printAllocationDiagnostics(transcoded)
         val options = buildList {
             sourcePath.parent?.let { add("-I${it}") }
             add("-I${Path("").toAbsolutePath().normalize()}")
+            importPaths.moduleRoots.forEach { add("-I$it") }
+            importPaths.standardLibraryRoots.forEach { add("-I$it") }
             addAll(parsed.passthrough)
         }
 
@@ -101,10 +122,11 @@ class CPlusCli(
         }
 
         val compiledSources = sources.map { path ->
+            val importPaths = importPathsFor(path)
             val source = logger.pass("read-source") { readSource(path) }
-            val testSource = transpiler.transpileTests(source, path.toString(), logger)
+            val testSource = transpiler.transpileTests(source, path.toString(), logger, importPaths)
             printAllocationDiagnostics(testSource.source)
-            TestSource(path, testSource)
+            TestSource(path, testSource, importPaths)
         }
         val allNames = compiledSources.flatMap { it.transcoded.testNames }.toSet()
         if (allNames.isEmpty()) {
@@ -128,6 +150,8 @@ class CPlusCli(
                 val options = buildList {
                     compiled.path.parent?.let { add("-I$it") }
                     add("-I${Path("").toAbsolutePath().normalize()}")
+                    compiled.importPaths.moduleRoots.forEach { add("-I$it") }
+                    compiled.importPaths.standardLibraryRoots.forEach { add("-I$it") }
                 }
                 val result = compiler.compileExecutable(compiled.transcoded.source, executable, options, logger)
                 result.diagnostics.forEach(::printDiagnostic)
@@ -183,6 +207,24 @@ class CPlusCli(
 
     private fun readSource(path: Path): String = path.readText()
 
+    private fun importPathsFor(source: Path): CPlusImportPaths {
+        val project = CPlusProject.find(source) ?: CPlusProject.find(Path("").toAbsolutePath().normalize())
+        return project?.importPaths(cliStdlibRoot, System.getenv("CPLUS_STDLIB"))
+            ?: CPlusImportPaths(
+                CPlusProject.defaultStandardLibraryRoots(cliStdlibRoot, System.getenv("CPLUS_STDLIB")),
+                emptyList()
+            )
+    }
+
+    private fun newProject(arguments: List<String>): Int {
+        if (arguments.size != 1) throw IllegalArgumentException("new requires a project directory or '.'")
+        val target = if (arguments.single() == ".") Path("").toAbsolutePath().normalize() else Path(arguments.single())
+        val created = CPlusProjectScaffolder.create(target)
+        output.append("Created C-plus project at ").append(created.toString()).append('\n')
+        output.append("Next: cd ").append(created.toString()).append(" && cpc run src/main.cp\n")
+        return 0
+    }
+
     private fun writeText(path: Path, text: String) {
         path.toAbsolutePath().parent?.let(Files::createDirectories)
         path.writeText(text, Charsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
@@ -236,11 +278,20 @@ usage:
   cplus compile filename.cp [-o executable] [passthrough tcc parameters]
   cplus run filename.cp [-o executable] [passthrough tcc parameters]
   cplus test filename.cp [filename2.cp ...] [test name ...]
+  cplus new project_name|.
+
+global options:
+  --stdlib directory    use this standard-library root (also settable with CPLUS_STDLIB)
 
 defaults:
   transcode: filename.cp -> filename.c
   compile/run: filename.cp -> filename
   test: runs all @test blocks, or only the exact names supplied after the source files
+  new: creates a C-plus project with cplus.toml and src/main.cp
+
+Imports:
+  comptime import "stdlib:/containers/dynamic_list.cp"
+  comptime import "module:/shared/types.cp"
 
 The access and ownership annotations are retained in generated C and defined as
 empty macros: pub, priv, mut, borrowed, owned, and stat.
@@ -255,5 +306,9 @@ empty macros: pub, priv, mut, borrowed, owned, and stat.
         val passthrough: List<String>
     )
 
-    private data class TestSource(val path: Path, val transcoded: TranscodedTestSource)
+    private data class TestSource(
+        val path: Path,
+        val transcoded: TranscodedTestSource,
+        val importPaths: CPlusImportPaths
+    )
 }

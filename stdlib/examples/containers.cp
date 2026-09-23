@@ -1,9 +1,9 @@
 #include <stdio.h>
 #include <string.h>
 
-comptime import "../containers/dynamic_list.cp";
-comptime import "../containers/dynamic_map.cp";
-comptime import "../comptime/list_mapper.cp";
+comptime import "stdlib:/containers/dynamic_list.cp";
+comptime import "stdlib:/containers/dynamic_map.cp";
+comptime import "stdlib:/comptime/list_mapper.cp";
 
 typedef char* cstring_t;
 

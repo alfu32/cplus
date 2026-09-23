@@ -34,12 +34,94 @@ class TranspilerTest {
     }
 
     @Test
+    fun cliTestResolvesTheAllocatorLibraryThroughTheStdlibNamespace() {
+        val sourcePath = findRepositoryFile("stdlib/tests/allocators.cp")
+        val errors = StringBuilder()
+        val status = CPlusCli(output = StringBuilder(), errors = errors).run(listOf("test", sourcePath.toString()))
+
+        assertEquals(0, status, errors.toString())
+    }
+
+    @Test
     fun cliTestImportsUnchangedCAndRunsRuntimeAssertions() {
         val sourcePath = findRepositoryFile("stdlib/tests/c_import.cp")
         val errors = StringBuilder()
         val status = CPlusCli(output = StringBuilder(), errors = errors).run(listOf("test", sourcePath.toString()))
 
         assertEquals(0, status, errors.toString())
+    }
+
+    @Test
+    fun cliResolvesProjectAndStandardLibraryImportsFromManifest() {
+        val directory = Files.createTempDirectory("cplus-project-imports")
+        try {
+            val project = directory.resolve("sample")
+            val sourceDirectory = project.resolve("src")
+            val moduleDirectory = project.resolve("modules")
+            Files.createDirectories(sourceDirectory)
+            Files.createDirectories(moduleDirectory)
+            val stdlibPath = findRepositoryFile("stdlib/README.md").parent.toAbsolutePath().normalize()
+            Files.writeString(
+                project.resolve("cplus.toml"),
+                """name = "sample"
+                    |version = "0.1.0"
+                    |source = "src"
+                    |stdlib = "${stdlibPath.toString().replace("\\", "\\\\")}"
+                    |module-paths = ["src", "modules"]
+                    |dependencies = []
+                """.trimMargin()
+            )
+            Files.writeString(moduleDirectory.resolve("answer.cp"), "int project_answer(void) { return 42; }\n")
+            val source = sourceDirectory.resolve("main.cp")
+            Files.writeString(
+                source,
+                """comptime import "stdlib:/memory/xmem";
+                    |comptime import "module:/answer";
+                    |int main(void) {
+                    |    if (xmem_init() != 0) return 1;
+                    |    int result = project_answer() == 42 ? 0 : 1;
+                    |    xmem_destroy();
+                    |    return result;
+                    |}
+                """.trimMargin()
+            )
+
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(listOf("run", source.toString()))
+
+            assertEquals(0, status, errors.toString())
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun cliNewScaffoldsAProjectWithoutOverwritingExistingFiles() {
+        val directory = Files.createTempDirectory("cplus-new-project")
+        try {
+            val project = directory.resolve("hello")
+            val output = StringBuilder()
+            val status = CPlusCli(output = output, errors = StringBuilder()).run(listOf("new", project.toString()))
+
+            assertEquals(0, status)
+            assertTrue(Files.isRegularFile(project.resolve("cplus.toml")))
+            assertTrue(Files.isRegularFile(project.resolve("src/main.cp")))
+            assertTrue(Files.isDirectory(project.resolve("modules")))
+            assertTrue(Files.isDirectory(project.resolve("tests")))
+            assertTrue(output.contains("Created C-plus project"), output.toString())
+
+            val errors = StringBuilder()
+            val runStatus = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf("run", project.resolve("src/main.cp").toString())
+            )
+            assertEquals(0, runStatus, errors.toString())
+
+            assertThrows(IllegalArgumentException::class.java) {
+                CPlusCli(output = StringBuilder(), errors = StringBuilder()).run(listOf("new", project.toString()))
+            }
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
     }
 
     @Test
@@ -55,17 +137,70 @@ class TranspilerTest {
             "assertions.cp"
         ).source.code
 
-        assertTrue("CPLUS_TEST_ASSERT(answer == 42);" in generated, generated)
-        assertTrue("CPLUS_TEST_ASSERT_EQUALS(answer, 40 + 2);" in generated, generated)
-        assertFalse("@assert" in generated, generated)
+        assertTrue("CPLUS_TEST_ASSERT_AT(1, 2, answer == 42);" in generated, generated)
+        assertTrue("CPLUS_TEST_ASSERT_EQUALS_AT(2, 2, answer, 40 + 2);" in generated, generated)
+        assertFalse("@assert(" in generated, generated)
+        assertFalse("@assertEquals(" in generated, generated)
         assertTrue("cplus_test_assert_equals_bytes" in generated, generated)
-        assertTrue("expected: true\\n  obtained: false" in generated, generated)
-        assertTrue("cplus_test_print_value(stderr" in generated, generated)
-        assertTrue("expected: \", #expected" in generated, generated)
-        assertTrue("obtained: \");" in generated, generated)
+        assertTrue("given: " in generated, generated)
+        assertTrue("expected: " in generated, generated)
+        assertTrue("cplus_test_print_value(stdout" in generated, generated)
+        assertTrue("CPLUS_TEST_ASSERT_EQUALS_AT(number, total, expected, given)" in generated, generated)
+        assertTrue("passed ? \"\\033[1;32m\" : \"\\033[1;31m\"" in generated, generated)
         assertTrue("BEGIN TEST 1/1: %s" in generated, generated)
         assertTrue("\\033[1;33m========== BEGIN TEST" in generated, generated)
+        assertTrue("\\033[1;32m" in generated, generated)
+        assertTrue("\\033[1;31m" in generated, generated)
         assertTrue("printf(\"\\n\\033[1;33m" in generated, generated)
+    }
+
+    @Test
+    fun runtimeAssertionsAlwaysPrintValuesAndUseGreenRedStatuses() {
+        val directory = Files.createTempDirectory("cplus-assert-output")
+        try {
+            val source = CPlusTranspiler().transpileTests(
+                """
+                    @test "passing assertion" {
+                        int value = 42;
+                        int* value_pointer = &value;
+                        @assertEquals(42, value)
+                        @assert(value == 42)
+                        @assertEquals(value_pointer, value_pointer)
+                    }
+                    @test "failing assertion" {
+                        int value = 7;
+                        @assertEquals(42, value)
+                    }
+                """.trimIndent(),
+                "assert-output.cp"
+            )
+            val executable = directory.resolve("assert-output")
+            val compile = TccCompiler().compileExecutable(source.source, executable, emptyList())
+            assertEquals(0, compile.exitCode, compile.diagnostics.joinToString("\n"))
+
+            val outputPath = directory.resolve("output.txt")
+            val exitCode = ProcessBuilder(executable.toString())
+                .redirectErrorStream(true)
+                .redirectOutput(outputPath.toFile())
+                .start()
+                .waitFor()
+            val output = Files.readString(outputPath)
+
+            assertEquals(1, exitCode, output)
+            assertTrue("\u001B[1;32m@assertEquals [1/4] 42, value [PASS]" in output, output)
+            assertTrue("given: 42" in output, output)
+            assertTrue("expected: 42" in output, output)
+            assertTrue("\u001B[1;32m@assert [2/4] value == 42 [PASS]" in output, output)
+            assertTrue("given: true" in output, output)
+            assertTrue("expected: true" in output, output)
+            assertTrue("\u001B[1;32m@assertEquals [3/4] value_pointer, value_pointer [PASS]" in output, output)
+            assertTrue(Regex("given: bytes\\[\\d+]=0x[0-9a-f]+", RegexOption.IGNORE_CASE).containsMatchIn(output), output)
+            assertTrue("\u001B[1;31m@assertEquals [4/4] 42, value [FAIL]" in output, output)
+            assertTrue("given: 7" in output, output)
+            assertTrue("expected: 42" in output, output)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
     }
 
     @Test

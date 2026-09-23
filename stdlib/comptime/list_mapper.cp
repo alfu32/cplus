@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-comptime import "../memory/xmem.cp";
+comptime import "stdlib:/memory/xmem.cp";
 
 comptime string @name(type T) {
     return T.name;

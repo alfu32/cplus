@@ -5,25 +5,28 @@ class CPlusTranspiler {
     fun transpile(
         source: String,
         sourceName: String? = null,
-        logger: CompilationLogger = SilentCompilationLogger
-    ): TranscodedSource = transpileInternal(source, sourceName, logger, testMode = false).source
+        logger: CompilationLogger = SilentCompilationLogger,
+        importPaths: CPlusImportPaths = CPlusImportPaths()
+    ): TranscodedSource = transpileInternal(source, sourceName, logger, testMode = false, importPaths).source
 
     /** Transcodes a source file and its named `@test` blocks into a runnable test program. */
     fun transpileTests(
         source: String,
         sourceName: String? = null,
-        logger: CompilationLogger = SilentCompilationLogger
-    ): TranscodedTestSource = transpileInternal(source, sourceName, logger, testMode = true)
+        logger: CompilationLogger = SilentCompilationLogger,
+        importPaths: CPlusImportPaths = CPlusImportPaths()
+    ): TranscodedTestSource = transpileInternal(source, sourceName, logger, testMode = true, importPaths)
 
     private fun transpileInternal(
         source: String,
         sourceName: String?,
         logger: CompilationLogger,
-        testMode: Boolean
+        testMode: Boolean,
+        importPaths: CPlusImportPaths
     ): TranscodedTestSource {
         val sourceFile = SourceFile(source, sourceName)
         val comptime = logger.pass("comptime-resolve") {
-            ComptimeCompiler(sourceFile, logger).compile(resolveTestBodies = testMode)
+            ComptimeCompiler(sourceFile, logger, importPaths).compile(resolveTestBodies = testMode)
         }
         val input = if (testMode) {
             logger.pass("collect-tests") { testProgram(comptime.runtime, comptime.tests) }
@@ -54,6 +57,10 @@ class CPlusTranspiler {
         tests: List<ComptimeTestBlock>
     ): Pair<MappedText, List<String>> {
         if (tests.isEmpty()) return runtime to emptyList()
+
+        val assertions = tests.map { test -> testAssertions(test.body) }
+        val assertionTotal = assertions.sumOf { it.size }
+        var nextAssertionNumber = 1
 
         val output = MappedTextBuilder()
         output.appendGenerated("#define main cplus_test_original_main\n")
@@ -133,21 +140,63 @@ class CPlusTranspiler {
                     default: cplus_test_print_bytes(stream, value, size); return;
                 }
             }
-            #define CPLUS_TEST_ASSERT(condition) do { int cplus_assert_obtained = !!(condition); if (!cplus_assert_obtained) { fprintf(stderr, "assertion failed: %s (%s:%d)\n  expected: true\n  obtained: false\n", #condition, __FILE__, __LINE__); return 1; } } while (0)
+            static void cplus_test_print_assert_status(int number, int total, const char* name, const char* input, int passed) {
+                fprintf(stdout, "%s%s [%d/%d] %s [%s]\033[0m\n",
+                    passed ? "\033[1;32m" : "\033[1;31m", name, number, total, input, passed ? "PASS" : "FAIL");
+            }
+            static void cplus_test_report_assert(int number, int total, const char* expression, _Bool given, const char* file, int line) {
+                cplus_test_print_assert_status(number, total, "@assert", expression, given);
+                fputs("    given: ", stdout);
+                cplus_test_print_value(stdout, &given, sizeof given, CPLUS_TEST_VALUE_KIND(given));
+                fputs("\n    expected: true\n", stdout);
+                if (!given) fprintf(stdout, "    at %s:%d\n", file, line);
+                fflush(stdout);
+            }
             static int cplus_test_assert_equals_bytes(const void* expected, size_t expected_size, const void* other, size_t other_size) {
                 if (expected_size != other_size) return 0;
                 if (expected == other) return 1;
                 if (expected == NULL || other == NULL) return 0;
                 return memcmp(expected, other, expected_size) == 0;
             }
-            #define CPLUS_TEST_ASSERT_EQUALS(expected, other) do { __typeof__(expected) cplus_expected_value = (expected); __typeof__(other) cplus_other_value = (other); if (!cplus_test_assert_equals_bytes(&cplus_expected_value, sizeof cplus_expected_value, &cplus_other_value, sizeof cplus_other_value)) { fprintf(stderr, "assertion failed: assertEquals(%s, %s) (%s:%d)\n  expected: ", #expected, #other, __FILE__, __LINE__); cplus_test_print_value(stderr, &cplus_expected_value, sizeof cplus_expected_value, CPLUS_TEST_VALUE_KIND(cplus_expected_value)); fprintf(stderr, "\n  obtained: "); cplus_test_print_value(stderr, &cplus_other_value, sizeof cplus_other_value, CPLUS_TEST_VALUE_KIND(cplus_other_value)); fputc('\n', stderr); return 1; } } while (0)
+            #define CPLUS_TEST_ASSERT_AT(number, total, condition) do { \
+                _Bool cplus_assert_given = !!(condition); \
+                cplus_test_report_assert((number), (total), #condition, cplus_assert_given, __FILE__, __LINE__); \
+                if (!cplus_assert_given) return 1; \
+            } while (0)
+            static void cplus_test_report_assert_equals(int number, int total, const char* expected_expression, const char* given_expression,
+                const void* expected, size_t expected_size, int expected_kind, const void* given, size_t given_size, int given_kind,
+                int passed, const char* file, int line) {
+                char input[1024];
+                snprintf(input, sizeof input, "%s, %s", expected_expression, given_expression);
+                cplus_test_print_assert_status(number, total, "@assertEquals", input, passed);
+                fputs("    given: ", stdout);
+                cplus_test_print_value(stdout, given, given_size, given_kind);
+                fputs("\n    expected: ", stdout);
+                cplus_test_print_value(stdout, expected, expected_size, expected_kind);
+                fputc('\n', stdout);
+                if (!passed) fprintf(stdout, "    at %s:%d\n", file, line);
+                fflush(stdout);
+            }
+            #define CPLUS_TEST_ASSERT_EQUALS_AT(number, total, expected, given) do { \
+                __typeof__(expected) cplus_expected_value = (expected); \
+                __typeof__(given) cplus_given_value = (given); \
+                int cplus_assert_passed = cplus_test_assert_equals_bytes(&cplus_expected_value, sizeof cplus_expected_value, &cplus_given_value, sizeof cplus_given_value); \
+                cplus_test_report_assert_equals((number), (total), #expected, #given, \
+                    &cplus_expected_value, sizeof cplus_expected_value, CPLUS_TEST_VALUE_KIND(cplus_expected_value), \
+                    &cplus_given_value, sizeof cplus_given_value, CPLUS_TEST_VALUE_KIND(cplus_given_value), \
+                    cplus_assert_passed, __FILE__, __LINE__); \
+                if (!cplus_assert_passed) return 1; \
+            } while (0)
+            #define CPLUS_TEST_ASSERT(condition) CPLUS_TEST_ASSERT_AT(0, 0, condition)
+            #define CPLUS_TEST_ASSERT_EQUALS(expected, given) CPLUS_TEST_ASSERT_EQUALS_AT(0, 0, expected, given)
             #define CPLUS_TEST_FAIL(message) do { fprintf(stderr, "test failure: %s\n", (message)); return 1; } while (0)
             """.trimIndent() + "\n",
         )
 
         tests.forEachIndexed { index, test ->
             output.appendGenerated("static int cplus_test_$index(void) {\n")
-            output.append(lowerTestAssertions(test.body))
+            output.append(lowerTestAssertions(test.body, assertions[index], nextAssertionNumber, assertionTotal))
+            nextAssertionNumber += assertions[index].size
             if (test.body.text.isNotEmpty() && !test.body.text.endsWith('\n')) output.appendGenerated("\n")
             output.appendGenerated("    return 0;\n}\n\n")
         }
@@ -176,7 +225,7 @@ class CPlusTranspiler {
                     printf("\n\033[1;33m========== BEGIN TEST ${index + 1}/${tests.size}: %s ==========\033[0m\n", $literal);
                     fflush(stdout);
                     int result = cplus_test_$index();
-                    printf("========== END TEST ${index + 1}/${tests.size}: %s [%s] ==========\n", $literal, result == 0 ? "PASS" : "FAIL");
+                    printf("========== END TEST ${index + 1}/${tests.size}: %s [%s%s\033[0m] ==========\n", $literal, result == 0 ? "\033[1;32m" : "\033[1;31m", result == 0 ? "PASS" : "FAIL");
                     if (result != 0) failed++;
                 }
                 """.trimIndent() + "\n"
@@ -188,7 +237,7 @@ class CPlusTranspiler {
                     fprintf(stderr, "no tests matched the requested names\n");
                     return 2;
                 }
-                printf("========== TEST SUMMARY: %d selected, %d failed ==========\n", selected, failed);
+                printf("%s========== TEST SUMMARY: %d selected, %d failed ==========\033[0m\n", failed == 0 ? "\033[1;32m" : "\033[1;31m", selected, failed);
                 return failed == 0 ? 0 : 1;
             }
             """.trimIndent() + "\n"
@@ -196,23 +245,28 @@ class CPlusTranspiler {
         return output.build() to tests.map { it.name }
     }
 
-    private fun lowerTestAssertions(body: MappedText): MappedText {
+    private fun testAssertions(body: MappedText): List<TestAssertionInvocation> {
         val masked = SourceMasker.mask(body.text)
-        val output = MappedTextBuilder()
-        var cursor = 0
+        val assertions = mutableListOf<TestAssertionInvocation>()
         var index = 0
 
         while (index < body.text.length) {
-            if (masked[index] != '@' || body.text.getOrNull(index + 1)?.let { it == '_' || it.isLetter() } != true) {
+            val isAnnotation = masked[index] == '@'
+            val isIdentifier = masked[index] == '_' || masked[index].isLetter()
+            if ((!isAnnotation && !isIdentifier) || (isAnnotation && body.text.getOrNull(index + 1)?.let { it == '_' || it.isLetter() } != true)) {
                 index++
                 continue
             }
-            var nameEnd = index + 2
+
+            val tokenStart = if (isAnnotation) index + 1 else index
+            var nameEnd = tokenStart + 1
             while (nameEnd < masked.length && masked[nameEnd].isIdentifierPart()) nameEnd++
-            val name = body.text.substring(index + 1, nameEnd)
-            val macro = when (name) {
-                "assert" -> "CPLUS_TEST_ASSERT"
-                "assertEquals" -> "CPLUS_TEST_ASSERT_EQUALS"
+            val name = body.text.substring(tokenStart, nameEnd)
+            val macro = when {
+                isAnnotation && name == "assert" -> "CPLUS_TEST_ASSERT_AT"
+                isAnnotation && name == "assertEquals" -> "CPLUS_TEST_ASSERT_EQUALS_AT"
+                !isAnnotation && name == "CPLUS_TEST_ASSERT" -> "CPLUS_TEST_ASSERT_AT"
+                !isAnnotation && name == "CPLUS_TEST_ASSERT_EQUALS" -> "CPLUS_TEST_ASSERT_EQUALS_AT"
                 else -> {
                     index = nameEnd
                     continue
@@ -226,28 +280,53 @@ class CPlusTranspiler {
             val close = Delimiters.match(masked, open, '(', ')')
             if (close < 0) throw assertionSyntax("unclosed @$name assertion", body, index)
             val arguments = splitAssertionArguments(body.text.substring(open + 1, close))
-            val expectedCount = if (name == "assert") 1 else 2
+            val expectedCount = if (macro == "CPLUS_TEST_ASSERT_AT") 1 else 2
             if (arguments.size != expectedCount || arguments.any(String::isBlank)) {
-                throw assertionSyntax("@$name expects $expectedCount argument${if (expectedCount == 1) "" else "s"}", body, index)
+                val spelling = if (isAnnotation) "@$name" else name
+                throw assertionSyntax("$spelling expects $expectedCount argument${if (expectedCount == 1) "" else "s"}", body, index)
             }
 
-            output.append(body, cursor, index)
-            output.appendGenerated("$macro(${arguments.joinToString(", ")})", body.originAt(index))
-            var semicolon = close + 1
+            assertions += TestAssertionInvocation(index, close, macro, arguments)
+            index = close + 1
+        }
+        return assertions
+    }
+
+    private fun lowerTestAssertions(
+        body: MappedText,
+        assertions: List<TestAssertionInvocation>,
+        firstNumber: Int,
+        total: Int
+    ): MappedText {
+        val output = MappedTextBuilder()
+        var cursor = 0
+        assertions.forEachIndexed { assertionIndex, assertion ->
+            output.append(body, cursor, assertion.start)
+            val arguments = assertion.arguments
+            output.appendGenerated(
+                "${assertion.macro}(${firstNumber + assertionIndex}, $total, ${arguments.joinToString(", ")})",
+                body.originAt(assertion.start)
+            )
+            var semicolon = assertion.close + 1
             while (semicolon < body.text.length && body.text[semicolon].isWhitespace()) semicolon++
             if (semicolon < body.text.length && body.text[semicolon] == ';') {
-                output.append(body, close + 1, semicolon + 1)
+                output.append(body, assertion.close + 1, semicolon + 1)
                 cursor = semicolon + 1
-                index = cursor
             } else {
-                output.appendGenerated(";", body.originAt(index))
-                cursor = close + 1
-                index = cursor
+                output.appendGenerated(";", body.originAt(assertion.start))
+                cursor = assertion.close + 1
             }
         }
         output.append(body, cursor, body.text.length)
         return output.build()
     }
+
+    private data class TestAssertionInvocation(
+        val start: Int,
+        val close: Int,
+        val macro: String,
+        val arguments: List<String>
+    )
 
     private fun splitAssertionArguments(text: String): List<String> {
         if (text.isBlank()) return emptyList()

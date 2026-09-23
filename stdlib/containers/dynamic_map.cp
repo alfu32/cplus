@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-comptime import "../memory/xmem.cp";
+comptime import "stdlib:/memory/xmem.cp";
 
 // Generic contiguous key/value storage. Equality is supplied by the caller;
 // entries and pointer-valued members are copied, never deep-owned.

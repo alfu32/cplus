@@ -1,4 +1,6 @@
 import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.Sync
+import org.gradle.api.tasks.bundling.Zip
 import java.time.LocalDate
 
 plugins {
@@ -132,6 +134,112 @@ tasks.register("fatJar") {
     group = "build"
     description = "Builds the executable CLI jar."
     dependsOn(":cli:fatJar")
+}
+
+val bundleOs = providers.gradleProperty("os").orElse("all").get().trim().lowercase()
+val bundleArch = providers.gradleProperty("arch").orElse("all").get().trim().lowercase()
+if (bundleOs !in setOf("linux", "mac", "win", "all")) {
+    throw GradleException("Invalid -Pos='$bundleOs'; expected linux, mac, win, or all.")
+}
+if (bundleArch !in setOf("x86_64", "arm64", "all")) {
+    throw GradleException("Invalid -Parch='$bundleArch'; expected x86_64, arm64, or all.")
+}
+
+val bundleOsLabel = if (bundleOs == "all") "all" else bundleOs
+val bundleName = "cplus-$resolvedVersion-$bundleOsLabel-$bundleArch"
+val bundleStageDirectory = layout.buildDirectory.dir("distributions/$bundleName")
+val distributionDirectory = rootProject.file("distribution")
+val bundledOperatingSystems = if (bundleOs == "all") listOf("linux", "mac", "win") else listOf(bundleOs)
+val bundleTargetList = bundledOperatingSystems.flatMap { os ->
+    val nativeOs = when (os) {
+        "win" -> "windows"
+        "mac" -> "macos"
+        else -> os
+    }
+    val architectures = if (bundleArch == "all") listOf("x86_64", "arm64") else listOf(bundleArch)
+    architectures.map { arch -> "$nativeOs-${if (arch == "arm64") "aarch64" else arch}" }
+}
+
+val stageBundleDist = tasks.register<Sync>("stageBundleDist") {
+    group = "distribution"
+    description = "Stages the C-plus CLI, standard library, documentation, launchers, and installers."
+    dependsOn(":cli:fatJar")
+    inputs.property("bundleOs", bundleOs)
+    inputs.property("bundleArch", bundleArch)
+    into(bundleStageDirectory)
+
+    from(rootProject.file("cli/build/libs/c-plus.jar")) {
+        rename { "c-plus.jar" }
+    }
+    from(rootProject.file("stdlib")) {
+        into("stdlib")
+        exclude("**/*.swp", "**/build/**", "**/.DS_Store")
+    }
+    from(rootProject.file("documentation")) {
+        into("documentation")
+        exclude("**/.DS_Store")
+    }
+    from(rootProject.file("README.md"))
+    from(distributionDirectory.resolve("README.md")) {
+        rename { "DISTRIBUTION.md" }
+    }
+    from(rootProject.file("examples")) {
+        into("examples")
+        include("**/*.cp", "**/*.c")
+    }
+
+    if (bundleOs == "all") {
+        from(distributionDirectory.resolve("launchers"))
+        from(distributionDirectory.resolve("linux"))
+        from(distributionDirectory.resolve("macos"))
+        from(distributionDirectory.resolve("windows"))
+        from(distributionDirectory.resolve("linux")) { into("install/linux") }
+        from(distributionDirectory.resolve("macos")) { into("install/macos") }
+        from(distributionDirectory.resolve("windows")) { into("install/windows") }
+    } else {
+        when (bundleOs) {
+            "linux" -> {
+                from(distributionDirectory.resolve("launchers/cpc.sh"))
+                from(distributionDirectory.resolve("linux"))
+            }
+            "mac" -> {
+                from(distributionDirectory.resolve("launchers/cpc.zsh"))
+                from(distributionDirectory.resolve("macos"))
+            }
+            "win" -> {
+                from(distributionDirectory.resolve("launchers/cpc.cmd"))
+                from(distributionDirectory.resolve("windows"))
+            }
+        }
+    }
+
+    doLast {
+        val stage = bundleStageDirectory.get().asFile
+        stage.resolve("VERSION").writeText("$resolvedVersion\n")
+        stage.resolve("TARGETS.txt").writeText(bundleTargetList.joinToString("\n", postfix = "\n"))
+        listOf("cpc.sh", "cpc.zsh", "install.sh", "uninstall.sh", "install.zsh", "uninstall.zsh")
+            .map(stage::resolve)
+            .filter { it.isFile }
+            .forEach { it.setExecutable(true, false) }
+        listOf("install/linux/install.sh", "install/linux/uninstall.sh", "install/macos/install.zsh", "install/macos/uninstall.zsh")
+            .map(stage::resolve)
+            .filter { it.isFile }
+            .forEach { it.setExecutable(true, false) }
+    }
+}
+
+tasks.register<Zip>("bundleDist") {
+    group = "distribution"
+    description = "Builds a versioned C-plus distribution bundle for -Pos and -Parch."
+    dependsOn(stageBundleDist)
+    from(bundleStageDirectory)
+    eachFile {
+        if (name in setOf("cpc.sh", "cpc.zsh", "install.sh", "install.zsh", "uninstall.sh", "uninstall.zsh")) {
+            permissions { unix("rwxr-xr-x") }
+        }
+    }
+    archiveFileName.set("$bundleName.zip")
+    destinationDirectory.set(rootProject.layout.projectDirectory.dir("dist"))
 }
 
 fun findNpmExecutable(): String? {

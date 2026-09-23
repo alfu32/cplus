@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 
-comptime import "../memory/xmem.cp";
+comptime import "stdlib:/memory/xmem.cp";
 
 @test "allocator context initializes idempotently" {
     @assertEquals(0, xmem_init())

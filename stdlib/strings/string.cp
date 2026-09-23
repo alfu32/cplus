@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-comptime import "../memory/xmem.cp";
+comptime import "stdlib:/memory/xmem.cp";
 
 #ifndef CPLUS_ERROR_T_DEFINED
 #define CPLUS_ERROR_T_DEFINED

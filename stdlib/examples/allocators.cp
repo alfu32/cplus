@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
-comptime import "../memory/xmem.cp";
+comptime import "stdlib:/memory/xmem.cp";
 
 int main(void) {
     if (xmem_init() != 0) return 1;

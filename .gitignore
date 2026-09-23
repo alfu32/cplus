@@ -8,6 +8,8 @@
 **/build/
 **/.gradle/
 **/node_modules/
+/cli/bin/
+/compiler/bin/
 vscode-cplus/out/
 **/dist/
 intellij-cplus/.intellijPlatform/

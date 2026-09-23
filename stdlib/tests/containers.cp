@@ -2,9 +2,9 @@
 #include <string.h>
 #include "fixtures/plain_c_struct.c"
 
-comptime import "../containers/dynamic_list.cp";
-comptime import "../containers/dynamic_map.cp";
-comptime import "../comptime/list_mapper.cp";
+comptime import "stdlib:/containers/dynamic_list.cp";
+comptime import "stdlib:/containers/dynamic_map.cp";
+comptime import "stdlib:/comptime/list_mapper.cp";
 
 typedef char* cstring_t;
 
@@ -60,36 +60,36 @@ comptime int expected_answer = 42;
     int_list_t* values_ptr = &values;
     int first = 17;
     int second = 23;
-    CPLUS_TEST_ASSERT(values.init() == 0);
-    CPLUS_TEST_ASSERT(values_ptr->reserve(8) == 0);
-    CPLUS_TEST_ASSERT(values.capacity() >= 8);
-    CPLUS_TEST_ASSERT(values.push(&first) == 0);
-    CPLUS_TEST_ASSERT(values.push(&second) == 0);
-    CPLUS_TEST_ASSERT(values.size() == 2);
-    CPLUS_TEST_ASSERT(!values.empty());
+    @assert(values.init() == 0);
+    @assert(values_ptr->reserve(8) == 0);
+    @assert(values.capacity() >= 8);
+    @assert(values.push(&first) == 0);
+    @assert(values.push(&second) == 0);
+    @assert(values.size() == 2);
+    @assert(!values.empty());
     visited_int_count = 0;
-    CPLUS_TEST_ASSERT(values.each(count_int_visits) == 0);
-    CPLUS_TEST_ASSERT(visited_int_count == 2);
-    CPLUS_TEST_ASSERT(*values.get(1) == 23);
-    CPLUS_TEST_ASSERT(values.set(0, &second) == 0);
-    CPLUS_TEST_ASSERT(*values.get(0) == 23);
-    CPLUS_TEST_ASSERT(values.data() != NULL);
-    CPLUS_TEST_ASSERT(values.pop(NULL) == 0);
-    CPLUS_TEST_ASSERT(values.size() == 1);
-    CPLUS_TEST_ASSERT(values.reserve(0) != 0);
-    CPLUS_TEST_ASSERT(map_ints_in_place(&values, &values, identity_int) != 0);
+    @assert(values.each(count_int_visits) == 0);
+    @assert(visited_int_count == 2);
+    @assert(*values.get(1) == 23);
+    @assert(values.set(0, &second) == 0);
+    @assert(*values.get(0) == 23);
+    @assert(values.data() != NULL);
+    @assert(values.pop(NULL) == 0);
+    @assert(values.size() == 1);
+    @assert(values.reserve(0) != 0);
+    @assert(map_ints_in_place(&values, &values, identity_int) != 0);
     values.clear();
-    CPLUS_TEST_ASSERT(values.empty());
+    @assert(values.empty());
     values.destroy();
-    CPLUS_TEST_ASSERT(values.capacity() == 0);
+    @assert(values.capacity() == 0);
 }
 
 @test "dynamic list stores pointer elements" {
     string_list_t values;
     cstring_t text = "borrowed string";
-    CPLUS_TEST_ASSERT(values.init() == 0);
-    CPLUS_TEST_ASSERT(values.push(&text) == 0);
-    CPLUS_TEST_ASSERT(strcmp(*values.get(0), "borrowed string") == 0);
+    @assert(values.init() == 0);
+    @assert(values.push(&text) == 0);
+    @assert(strcmp(*values.get(0), "borrowed string") == 0);
     values.destroy();
 }
 
@@ -97,23 +97,23 @@ comptime int expected_answer = 42;
     score_map_t scores;
     cstring_t key = "compiler";
     int score = 7;
-    CPLUS_TEST_ASSERT(scores.init(string_keys_equal) == 0);
-    CPLUS_TEST_ASSERT(scores.reserve(8) == 0);
-    CPLUS_TEST_ASSERT(scores.capacity() >= 8);
-    CPLUS_TEST_ASSERT(scores.put(&key, &score) == 0);
-    CPLUS_TEST_ASSERT(scores.contains(&key));
+    @assert(scores.init(string_keys_equal) == 0);
+    @assert(scores.reserve(8) == 0);
+    @assert(scores.capacity() >= 8);
+    @assert(scores.put(&key, &score) == 0);
+    @assert(scores.contains(&key));
     score = 12;
-    CPLUS_TEST_ASSERT(scores.put(&key, &score) == 0);
-    CPLUS_TEST_ASSERT(scores.size() == 1);
-    CPLUS_TEST_ASSERT(*scores.get(&key) == 12);
-    CPLUS_TEST_ASSERT(scores.remove(&key) == 0);
-    CPLUS_TEST_ASSERT(scores.empty());
-    CPLUS_TEST_ASSERT(!scores.contains(&key));
-    CPLUS_TEST_ASSERT(scores.put(&key, &score) == 0);
+    @assert(scores.put(&key, &score) == 0);
+    @assert(scores.size() == 1);
+    @assert(*scores.get(&key) == 12);
+    @assert(scores.remove(&key) == 0);
+    @assert(scores.empty());
+    @assert(!scores.contains(&key));
+    @assert(scores.put(&key, &score) == 0);
     scores.clear();
-    CPLUS_TEST_ASSERT(scores.empty());
+    @assert(scores.empty());
     scores.destroy();
-    CPLUS_TEST_ASSERT(scores.capacity() == 0);
+    @assert(scores.capacity() == 0);
 }
 
 @test "generic mapper materializes a result list" {
@@ -121,14 +121,14 @@ comptime int expected_answer = 42;
     int_list_t ranks;
     named_value_t first = {"parser", "C-plus", 3};
     named_value_t second = {"compiler", "C", 5};
-    CPLUS_TEST_ASSERT(records.init() == 0);
-    CPLUS_TEST_ASSERT(ranks.init() == 0);
-    CPLUS_TEST_ASSERT(records.push(&first) == 0);
-    CPLUS_TEST_ASSERT(records.push(&second) == 0);
-    CPLUS_TEST_ASSERT(map_records_to_rank(&records, &ranks, rank_with_index) == 0);
-    CPLUS_TEST_ASSERT(ranks.size() == 2);
-    CPLUS_TEST_ASSERT(*ranks.get(0) == 3);
-    CPLUS_TEST_ASSERT(*ranks.get(1) == 6);
+    @assert(records.init() == 0);
+    @assert(ranks.init() == 0);
+    @assert(records.push(&first) == 0);
+    @assert(records.push(&second) == 0);
+    @assert(map_records_to_rank(&records, &ranks, rank_with_index) == 0);
+    @assert(ranks.size() == 2);
+    @assert(*ranks.get(0) == 3);
+    @assert(*ranks.get(1) == 6);
     ranks.destroy();
     records.destroy();
 }
@@ -137,5 +137,5 @@ comptime int expected_answer = 42;
     plain_record_t value = (plain_record_t){1, 2, 3};
     char hash[32];
     plain_record__hash(&value, hash);
-    CPLUS_TEST_ASSERT(strcmp(hash, "1:2:3") == 0);
+    @assert(strcmp(hash, "1:2:3") == 0);
 }

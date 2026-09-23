@@ -1,4 +1,4 @@
-comptime import "../memory/xmem.cp";
+comptime import "stdlib:/memory/xmem.cp";
 
 int main(void) {
     warm void* value = alloc_warm(sizeof(int));

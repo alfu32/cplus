@@ -23,7 +23,16 @@ To create a self-contained release jar, pass the release version explicitly:
 java -jar cli/build/libs/c-plus-0.2.0.jar help
 ```
 
-The fat jar includes TinyCC and its sysroot for every supported target by default. Restrict the embedded bundles with `-Parch=x86_64|arm64|all` and `-Pos=win|mac|linux|all`; both default to `all`. For example, `./gradlew -Prelease=0.2.0 -Parch=x86_64 -Pos=linux fatJar` creates a smaller Linux x86-64 jar. `arm64` maps to the embedded `aarch64` bundle, while `win` and `mac` map to `windows` and `macos`. A restricted jar only supports the OS/architecture combinations it contains.
+The fat jar includes TinyCC and its sysroot for every supported target by default. Restrict the embedded bundles with `-Parch=x86_64|arm64|all` and `-Pos=win|mac|linux|all`; both default to `all`. For example, `./gradlew -Prelease=0.3.3 -Parch=x86_64 -Pos=linux fatJar` creates a smaller Linux x86-64 jar. `arm64` maps to the embedded `aarch64` bundle, while `win` and `mac` map to `windows` and `macos`. A restricted jar only supports the OS/architecture combinations it contains.
+
+Build an installable folder and zip with platform launchers and installers:
+
+```sh
+./gradlew -Prelease=0.3.3 -Pos=linux -Parch=x86_64 bundleDist
+./gradlew -Prelease=0.3.3 -Pos=all -Parch=all bundleDist
+```
+
+The first command creates a Linux x86-64 bundle; the second creates the all-target bundle with Linux, macOS, and Windows scripts. Output goes to `dist/cplus-<version>-<os>-<arch>.zip` and `build/distributions/`.
 
 The bundled TinyCC JNI library is used for compilation, so `compile` and `run` do not require a system `tcc` executable:
 
@@ -37,7 +46,11 @@ The bundled TinyCC JNI library is used for compilation, so `compile` and `run` d
 
 The test command also accepts multiple source paths before optional exact test names; shell globs expand normally, for example `java -jar c-plus.jar test test/folder/*.cp "some test"`.
 
-Inside `@test` bodies, use `@assert(condition)` or bytewise `@assertEquals(expected, actual)`. Failed assertions report expected and obtained values (common scalar values are formatted; other objects are shown as bytes), and test headings are numbered and highlighted in yellow. Use `strcmp` when checking string contents. Existing C sources can be included with `#include "fixture.c"` or `@import("fixture.c")`; both use the C preprocessor/compiler without rewriting the C file.
+Inside `@test` bodies, use `@assert(condition)` or bytewise `@assertEquals(expected, actual)`. Every assertion prints its fixture-wide `[number/total]`, input expression(s), given value, expected value, and green/red PASS/FAIL status; common scalar values are formatted and unsupported types are printed as hex bytes. Test headings are numbered and yellow. Use `strcmp` when checking string contents. Existing C sources can be included with `#include "fixture.c"` or `@import("fixture.c")`; both use the C preprocessor/compiler without rewriting the C file.
+
+Use `cpc new project_name` or `cpc new .` to scaffold `cplus.toml`, `src/main.cp`, and project module/test directories. Project-local modules use `comptime import "module:/path.cp"`; the built-in library uses `comptime import "stdlib:/containers/dynamic_list.cp"`. The CLI searches the project manifest, `--stdlib directory`, `CPLUS_STDLIB`, and installed/bundle locations for the standard library.
+
+Project manifest and module search behavior, including current limitations, is specified in [`documentation/spec/SPEC.project.md`](documentation/spec/SPEC.project.md).
 
 The installed application can also be launched from `cli/build/install/c-plus/bin/c-plus` after `./gradlew :cli:installDist`.
 

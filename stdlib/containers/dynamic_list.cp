@@ -1,7 +1,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-comptime import "../memory/xmem.cp";
+comptime import "stdlib:/memory/xmem.cp";
 
 // Value-semantic resizable storage. Pointer members are never deep-freed.
 @type @dynamic_list(@type T) {

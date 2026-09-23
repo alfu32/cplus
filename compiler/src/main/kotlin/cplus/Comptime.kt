@@ -5,6 +5,11 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import java.security.MessageDigest
 
+data class CPlusImportPaths(
+    val standardLibraryRoots: List<Path> = emptyList(),
+    val moduleRoots: List<Path> = emptyList()
+)
+
 private val primitiveSizes = mapOf(
     "char" to 1L,
     "short" to 2L,
@@ -21,7 +26,8 @@ private val primitiveTypes = primitiveSizes.keys + setOf("void", "bool", "size_t
  */
 internal class ComptimeCompiler(
     private val root: SourceFile,
-    private val logger: CompilationLogger
+    private val logger: CompilationLogger,
+    private val importPaths: CPlusImportPaths = CPlusImportPaths()
 ) {
     private companion object {
         const val MAX_IMPORT_MODULES = 256
@@ -247,14 +253,7 @@ internal class ComptimeCompiler(
     }
 
     private fun loadImport(source: SourceFile, item: ComptimeImport): SourceFile {
-        val sourceName = source.name
-            ?: throw syntax("@import requires a named source file", source, item.start)
-        val base = Paths.get(sourceName).toAbsolutePath().normalize().parent
-            ?: throw syntax("cannot determine the directory of $sourceName", source, item.start)
-        val path = base.resolve(item.path).normalize()
-        if (!Files.isRegularFile(path)) {
-            throw syntax("imported C-plus file does not exist: $path", source, item.start)
-        }
+        val path = resolveImportPath(source, item.start, item.path, listOf("cp", "c+"))
         if (path.extension() !in setOf("cp", "c+")) {
             throw syntax("C-plus imports must use .cp or .c+: $path", source, item.start)
         }
@@ -266,19 +265,59 @@ internal class ComptimeCompiler(
     }
 
     private fun materializeCImport(item: ComptimeCImport): MappedText {
-        val sourceName = item.source.name
-            ?: throw syntax("@import requires a named source file", item.source, item.start)
-        val base = Paths.get(sourceName).toAbsolutePath().normalize().parent
-            ?: throw syntax("cannot determine the directory of $sourceName", item.source, item.start)
-        val path = base.resolve(item.path).normalize().toAbsolutePath()
+        val path = resolveImportPath(item.source, item.start, item.path, listOf("c")).toAbsolutePath().normalize()
         if (path.extension() != "c") {
             throw syntax("C source imports must use a .c file: $path", item.source, item.start)
         }
-        if (!Files.isRegularFile(path)) {
-            throw syntax("imported C source file does not exist: $path", item.source, item.start)
-        }
         val includePath = path.toString().replace("\\", "\\\\").replace("\"", "\\\"")
         return MappedText.generated("#include \"$includePath\"\n", SourceOrigin(item.source, item.start))
+    }
+
+    private fun resolveImportPath(
+        source: SourceFile,
+        offset: Int,
+        requestedPath: String,
+        extensionlessCandidates: List<String>
+    ): Path {
+        val (roots, relativePath, confined) = when {
+            requestedPath.startsWith("stdlib:/") -> Triple(importPaths.standardLibraryRoots, requestedPath.removePrefix("stdlib:/"), true)
+            requestedPath.startsWith("module:/") -> Triple(importPaths.moduleRoots, requestedPath.removePrefix("module:/"), true)
+            requestedPath.startsWith("project:/") -> Triple(importPaths.moduleRoots, requestedPath.removePrefix("project:/"), true)
+            else -> {
+                val sourceName = source.name
+                    ?: throw syntax("import requires a named source file", source, offset)
+                val base = Paths.get(sourceName).toAbsolutePath().normalize().parent
+                    ?: throw syntax("cannot determine the directory of $sourceName", source, offset)
+                Triple(listOf(base), requestedPath, false)
+            }
+        }
+        if (roots.isEmpty()) {
+            val namespace = requestedPath.substringBefore(":/")
+            throw syntax("no $namespace search path is configured for import '$requestedPath'", source, offset)
+        }
+
+        val requested = try {
+            Paths.get(relativePath.replace('/', java.io.File.separatorChar))
+        } catch (error: Exception) {
+            throw syntax("invalid import path '$requestedPath': ${error.message}", source, offset)
+        }
+        val extension = requestedPath.substringAfterLast('/').substringAfterLast('\\').substringAfterLast('.', "")
+        val candidates = if (extension.isNotEmpty()) {
+            listOf(requested)
+        } else {
+            extensionlessCandidates.map { suffix -> requested.resolveSibling(requested.fileName.toString() + ".$suffix") }
+        }
+        for (rootPath in roots) {
+            val normalizedRoot = rootPath.toAbsolutePath().normalize()
+            for (candidate in candidates) {
+                val resolved = (if (requested.isAbsolute) requested else normalizedRoot.resolve(candidate)).normalize()
+                if (confined && !resolved.startsWith(normalizedRoot)) {
+                    throw syntax("import path escapes its configured root: '$requestedPath'", source, offset)
+                }
+                if (Files.isRegularFile(resolved)) return resolved
+            }
+        }
+        throw syntax("imported file does not exist: '$requestedPath'", source, offset)
     }
 
     private fun materializeModule(
@@ -1280,12 +1319,13 @@ private class ComptimeParser(private val source: SourceFile) {
         }
         if (cursor < source.text.length && source.text[cursor] == ';') cursor++
 
-        val extension = Paths.get(path).extension()
+        val extension = path.substringAfterLast('/').substringAfterLast('\\').substringAfterLast('.', "")
         return when (extension) {
             "cp", "c+" -> ComptimeImport(source, start, cursor, path)
             "c" -> if (allowC) ComptimeCImport(source, start, cursor, path) else {
                 throw syntax("comptime import accepts only .cp or .c+ files; use @import or #include for C", source, keywordAt)
             }
+            "" -> if (allowC) ComptimeCImport(source, start, cursor, path) else ComptimeImport(source, start, cursor, path)
             else -> throw syntax("unsupported import extension '$extension'", source, keywordAt)
         }
     }

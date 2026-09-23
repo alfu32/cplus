@@ -12,6 +12,8 @@ cplus transcode filename.cp [-o some_file_name.c]
 cplus compile filename.cp [-o executable] [passthrough tcc parameters]
 cplus run filename.cp [-o executable] [passthrough tcc parameters]
 cplus test filename.cp [filename2.cp ...] [exact test name ...]
+cplus new project_name|.
+cplus --stdlib directory <subcommand> ...
 ```
 
 `transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. Additional arguments for `compile` and `run` are passed to the embedded TinyCC compiler; for example, `-DFLAG=1` or `-Iinclude`.
@@ -26,7 +28,11 @@ java -jar c-plus.jar test test/folder/some_file.cp "print and init struct"
 java -jar c-plus.jar test test/folder/*.cp "print and init struct" "list grows"
 ```
 
-Each source file gets a temporary test executable, and its temporary output is deleted after execution. The driver prints numbered start/end banners for selected tests, with the test name highlighted yellow and a blank line before each start banner, plus a per-file summary. Numbers indicate each test's position in source order out of all tests in that file. A failed assertion reports the expected and obtained values, marks that test failed, and continues to later tests; common scalar types print as values and other objects use a byte representation. A nonzero test run returns `1`, an unknown requested name or CLI error returns `2`. Test bodies support `@assert(condition)`, bytewise `@assertEquals(expected, actual)`, `CPLUS_TEST_ASSERT(condition)`, and `CPLUS_TEST_FAIL(message)`. Existing C files can be used with `#include "fixture.c"` or `@import("fixture.c")`; C imports become normal preprocessor includes. Their `main` definition is renamed in test builds so the generated driver can supply `main`.
+Each source file gets a temporary test executable, and its temporary output is deleted after execution. The driver prints numbered start/end banners for selected tests, with the test name highlighted yellow and a blank line before each start banner. Test PASS is green and FAIL is red. Every assertion prints its original expression(s), fixture-wide assertion number/total, given value, and expected value even when it passes. `@assert(condition)` reports the condition's boolean result; `@assertEquals(expected, actual)` prints scalar values where recognized and otherwise emits byte hex. Assertions are numbered in source order across all tests in each file. A failed assertion marks that test failed and continues to later tests; a nonzero test run returns `1`, an unknown requested name or CLI error returns `2`. Test bodies support `@assert(condition)`, bytewise `@assertEquals(expected, actual)`, the corresponding `CPLUS_TEST_ASSERT` compatibility macro, and `CPLUS_TEST_FAIL(message)`. Existing C files can be used with `#include "fixture.c"` or `@import("fixture.c")`; C imports become normal preprocessor includes. Their `main` definition is renamed in test builds so the generated driver can supply `main`.
+
+`new` creates `cplus.toml`, `src/main.cp`, and `modules/`/`tests/` directories. It accepts a new directory or `.` for the current directory; it never overwrites an existing manifest, main source, or README. `--stdlib directory` overrides the standard-library root. Otherwise the CLI checks `--stdlib`, the project manifest, `CPLUS_STDLIB`, `CPLUS_HOME`, jar/bundle location, repository ancestors, and conventional user/system install paths, in that order.
+
+C-plus module imports support stable search prefixes: `comptime import "stdlib:/memory/xmem.cp"` searches the standard library; `comptime import "module:/shared/types.cp"` searches project module paths. The `.cp`/`.c+` suffix may be omitted. Ordinary relative imports remain relative to the importing file. C `@import` continues to emit a C preprocessor include and may resolve `stdlib:/...` paths as well.
 
 ## Diagnostics and Passes
 
@@ -60,7 +66,7 @@ Generated C includes `#line` directives. TinyCC diagnostics are normalized and m
 - `compiler/` contains the reusable Kotlin transcoder, mapped emitter, diagnostics, and TinyCC adapter.
 - `cli/` contains the command-line application and its tests.
 - `stdlib/` contains generic C-plus container sources, comptime generators, examples, and tests.
-- `documentation/spec/` contains the living language, comptime, and compiler specifications.
+- `documentation/spec/` contains the living language, comptime, compiler, and project specifications.
 - `vscode-cplus/`, `intellij-cplus/`, and `vim-cplus/` contain editor integrations.
 
 The project targets Java 21:
@@ -69,9 +75,15 @@ The project targets Java 21:
 ./gradlew build
 ./gradlew test
 ./gradlew -Prelease=0.2.0 fatJar
+./gradlew -Prelease=0.2.0 -Pos=linux -Parch=x86_64 bundleDist
+./gradlew -Prelease=0.2.0 -Pos=all -Parch=all bundleDist
 java -jar cli/build/libs/c-plus-0.2.0.jar help
 ```
 
 `-Prelease=VERSION` sets the shared CLI/editor release version. The root `editorArtifacts` task passes it to VS Code, IntelliJ, and Vim packaging; standalone VS Code/IntelliJ packaging falls back to generated CLI version metadata or the latest Git tag.
 
 The fat jar embeds TinyCC together with the sysroot for each selected platform. `-Parch=x86_64|arm64|all` and `-Pos=win|mac|linux|all` select which platform bundles are included; both default to `all`. For example, `./gradlew -Parch=arm64 -Pos=linux fatJar` includes only Linux ARM64. `arm64` selects TinyCC's `aarch64` bundle; `win` and `mac` select `windows` and `macos`. A jar built with restricted targets can compile and run programs only on a matching included platform.
+
+`bundleDist` creates an expanded install folder and a versioned zip under `dist/`. Build one target with `-Pos=linux|mac|win -Parch=x86_64|arm64`, or all six native targets and all platform scripts with `-Pos=all -Parch=all`. Platform bundles include `cpc.sh`, `cpc.zsh`, or `cpc.cmd` and the matching install/uninstall scripts. Linux/macOS installers probe `/usr/local` and fall back to `$HOME/.local`; Windows probes `%ProgramData%`, falls back to `%USERPROFILE%\.bin`, updates the current-user `PATH`, registers `.cmdrc` through CMD's AutoRun registry value, and creates a `C+ Developer Console` shortcut.
+
+The archive path is `dist/cplus-VERSION-OS-ARCH.zip`, with an expanded staging directory under `build/distributions/`. CI runs tests and a Linux bundle smoke test, packages each OS/architecture pair, validates selected native resources, checks macOS/Windows installer syntax on their respective runners, and uploads the complete all/all archive.
