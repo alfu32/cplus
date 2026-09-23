@@ -161,50 +161,50 @@ int named_value_to_rank(borrowed named_value_t* item, size_t index) {
 
 int main(void) {
     named_value_list_t records;
-    if ((&records).init() != 0 || (&records).reserve(2) != 0) return 1;
+    if (records.init() != 0 || records.reserve(2) != 0) return 1;
 
     named_value_t first = {"language", "C-plus", 1};
     named_value_t second = {"phase", "comptime", 2};
-    if ((&records).push(&first) != 0 || (&records).push(&second) != 0) return 1;
-    if ((&records).set(1, &first) != 0) return 1;
-    if ((&records).each(visit_named_value) != 0) return 1;
+    if (records.push(&first) != 0 || records.push(&second) != 0) return 1;
+    if (records.set(1, &first) != 0) return 1;
+    if (records.each(visit_named_value) != 0) return 1;
 
     int_list_t mapped_ranks;
-    if ((&mapped_ranks).init() != 0) return 1;
+    if (mapped_ranks.init() != 0) return 1;
     if (list_map(&records, &mapped_ranks, named_value_to_rank) != 0) return 1;
-    if ((&mapped_ranks).size() != (&records).size()) return 1;
-    printf("mapped rank=%d\n", *(&mapped_ranks).get(0));
-    (&mapped_ranks).destroy();
+    if (mapped_ranks.size() != records.size()) return 1;
+    printf("mapped rank=%d\n", *mapped_ranks.get(0));
+    mapped_ranks.destroy();
 
-    named_value_t* record = (&records).get(0);
-    if (record == NULL || (&records).get(99) != NULL) return 1;
+    named_value_t* record = records.get(0);
+    if (record == NULL || records.get(99) != NULL) return 1;
     printf("%s=%s (rank %hu, size %zu/%zu)\n",
            record->name,
            record->value,
            record->rank,
-           (&records).size(),
-           (&records).capacity());
+           records.size(),
+           records.capacity());
     named_value_t removed_record;
-    if ((&records).pop(&removed_record) != 0 || (&records).size() != 1) return 1;
-    (&records).clear();
-    if (!(&records).empty() || (&records).data() == NULL) return 1;
-    (&records).destroy();
-    if ((&records).size() != 0 || (&records).capacity() != 0) return 1;
+    if (records.pop(&removed_record) != 0 || records.size() != 1) return 1;
+    records.clear();
+    if (!records.empty() || records.data() == NULL) return 1;
+    records.destroy();
+    if (records.size() != 0 || records.capacity() != 0) return 1;
 
     string_list_t strings;
-    if ((&strings).init() != 0) return 1;
+    if (strings.init() != 0) return 1;
     cstring_t greeting = "hello";
-    if ((&strings).push(&greeting) != 0 || (&strings).each(visit_string) != 0) return 1;
+    if (strings.push(&greeting) != 0 || strings.each(visit_string) != 0) return 1;
     cstring_t popped_string = NULL;
-    if ((&strings).pop(&popped_string) != 0) return 1;
+    if (strings.pop(&popped_string) != 0) return 1;
     printf("%s\n", popped_string);
-    (&strings).destroy();
+    strings.destroy();
 
     int_list_t numbers;
-    if ((&numbers).init() != 0) return 1;
+    if (numbers.init() != 0) return 1;
     int answer = 42;
-    if ((&numbers).push(&answer) != 0 || (&numbers).each(visit_int) != 0) return 1;
-    printf("number=%d\n", *(&numbers).get(0));
-    (&numbers).destroy();
+    if (numbers.push(&answer) != 0 || numbers.each(visit_int) != 0) return 1;
+    printf("number=%d\n", *numbers.get(0));
+    numbers.destroy();
     return 0;
 }

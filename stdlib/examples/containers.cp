@@ -36,16 +36,16 @@ int main(void) {
     int score = 42;
     cstring_t key = "answer";
 
-    if ((&records).init() || (&records).push(&record)) return 1;
-    if ((&ranks).init() || map_records_to_rank(&records, &ranks, rank_with_index)) return 1;
-    if ((&scores).init(string_keys_equal) || (&scores).put(&key, &score)) return 1;
+    if (records.init() || records.push(&record)) return 1;
+    if (ranks.init() || map_records_to_rank(&records, &ranks, rank_with_index)) return 1;
+    if (scores.init(string_keys_equal) || scores.put(&key, &score)) return 1;
 
     printf("%s=%s rank=%d mapped=%d score=%d\n",
            record.name, record.value, record.rank,
-           *(&ranks).get(0), *(&scores).get(&key));
+           *ranks.get(0), *scores.get(&key));
 
-    (&scores).destroy();
-    (&ranks).destroy();
-    (&records).destroy();
+    scores.destroy();
+    ranks.destroy();
+    records.destroy();
     return 0;
 }

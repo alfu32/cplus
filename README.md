@@ -65,7 +65,7 @@ Editor integrations provide local syntax and lightweight semantic support withou
 
 - `typedef struct name_t { ... } name_t;` method definitions and declarations are moved outside the struct.
 - An instance method whose first parameter is `*self` receives an implicit `name_t *self` parameter.
-- Methods become `name__method(...)`; for example, `(&value).reset()` becomes `name__reset(&value)`.
+- Methods become `name__method(...)`; a struct value call such as `value.reset()` supplies `&value`, while `value_ptr->reset()` supplies the pointer directly. The explicit `(&value).reset()` form remains accepted.
 - `name_t.method(...)` becomes the corresponding static method call.
 - `pub`, `priv`, `mut`, `borrowed`, `owned`, and `stat` are retained as empty C macros. A `static` method remains a C `static` function.
 

@@ -26,12 +26,12 @@ typedef struct value_t {
 
 int main(void) {
     value_t value = {0};
-    (&value).increment();
+    value.increment();
 
     /// wrapper_t(int) w_int;
-    /// (&w_int).set(5);
+    /// w_int.set(5);
     /// printf("%d\n",w_int.value);
-    /// long l=(&w_int).(long)cast();
+    /// long l=w_int.(long)cast();
 
     return value.value == FLAG ? 0 : 1;
 }

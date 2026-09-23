@@ -27,16 +27,16 @@ typedef struct counter_t {
 int main(int argc,const char** argv) {
     counter_t counter;
     counter_t cc;
-    (&cc).set(12);
-    (&counter).set(1);
-    for((&counter).set(5);counter.value<100;(&counter).add(1)){
-       (&counter).print();
+    counter_t* cc_ptr = &cc;
+    cc_ptr->set(12);
+    counter.set(1);
+    for(counter.set(5);counter.value<100;counter.add(1)){
+       counter.print();
     }
-    for((&counter).set(0);counter.value<argc;(&counter).add(1)){
-       (&counter).print();
+    for(counter.set(0);counter.value<argc;counter.add(1)){
+       counter.print();
        printf("[%d]=%s;\n",counter.value,argv[counter.value]);
     }
     // counter_t.alloc_init(0);
     return 0;
 }
-
