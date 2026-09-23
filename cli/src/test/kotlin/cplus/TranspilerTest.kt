@@ -345,6 +345,47 @@ class TranspilerTest {
     }
 
     @Test
+    fun interpolatesTypeNamesInGeneratedGenericFunctionNames() {
+        val directory = Files.createTempDirectory("cplus-comptime-mapper-name")
+        try {
+            val source = directory.resolve("mapper.cp")
+            val executable = directory.resolve("mapper")
+            Files.writeString(
+                source,
+                """
+                    comptime string @name(type T) {
+                        return T.name;
+                    }
+                    comptime function @generic_mapper(type T, type R) {
+                        return R mapper__@name(T)__to__@name(R)(R (*mapper_callback)(T, int), T item, int index) {
+                            return mapper_callback(item, index);
+                        }
+                    }
+                    comptime generic_mapper(int, float);
+                    float add_index(int item, int index) {
+                        return (float)(item + index);
+                    }
+                    int main(void) {
+                        return mapper__int__to__float(add_index, 40, 2) == 42.0f ? 0 : 1;
+                    }
+                """.trimIndent()
+            )
+
+            val generatedC = CPlusTranspiler().transpile(Files.readString(source), source.toString()).code
+            assertTrue("float mapper__int__to__float(float (*mapper_callback)(int, int), int item, int index)" in generatedC, generatedC)
+            assertTrue("@name" !in generatedC, generatedC)
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf("run", source.toString(), "-o", executable.toString())
+            )
+            assertTrue(status == 0, errors.toString())
+            assertTrue(Files.isExecutable(executable), "TinyCC did not produce the specialized mapper executable")
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun acceptsSigiledTypeGeneratorNames() {
         val result = CPlusTranspiler().transpile(
             """

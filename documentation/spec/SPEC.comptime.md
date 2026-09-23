@@ -56,7 +56,7 @@ type-parameter        := "type" identifier
 comptime-invocation   := "comptime" identifier "(" argument* ")" ";" | "comptime typedef" identifier "(" argument* ")" identifier ";"
 inline-value          := "comptime" comptime-expression
 code-fragment         := "@code" "{" cplus-top-level-item* "}"
-identifier-splice     := "@" identifier "(" argument* ")" ; only in an identifier within @code
+identifier-splice     := "@" identifier "(" argument* ")" ; inside identifiers in materialized type/function entities
 comptime-struct       := "typedef struct" "@" identifier "{" cplus-members "}" identifier ";"
 legacy-import         := "@import" string-literal ";"
 legacy-block          := "@" "{" comptime-statement* "}"
@@ -89,7 +89,7 @@ int count = comptime item_count;
 
 `comptime type` functions return exactly one `@code` fragment containing one named `struct` definition. A `comptime typedef generator(args) alias;` invocation turns it into `typedef struct tag { ... } alias;`. Other comptime invocations materialize the runtime entity returned by the function. Previous `@type`, `@fn`, `@var`, and scalar sigil-led forms remain accepted.
 
-Inside the `@code` returned by a `comptime type` function, a comptime scalar call embedded in an identifier, such as `list_of_@typename(T)`, is an identifier splice. Its result must be a string containing a valid C identifier token and is inserted without C string quotes. Other `@code` fragments do not eagerly evaluate nested declarations or embedded names; those declarations remain opaque until a later expansion pass. Outside identifier splices, strings keep their normal quoted C representation. Strings are not parsed as source by themselves; source is introduced explicitly by `@code`.
+Inside source materialized by a `comptime type` or `comptime function` generator, a comptime scalar call embedded in an identifier, such as `list_of_@typename(T)` or `mapper__@name(T)__to__@name(R)`, is an identifier splice. The called comptime function must return a string containing one valid C identifier token; it is inserted without quotes. Other `@code` fragments do not eagerly evaluate nested declarations or embedded names; those declarations remain opaque until a later expansion pass. Outside identifier splices, strings keep their normal quoted C representation. Strings are not parsed as source by themselves; source is introduced explicitly by `@code`.
 
 Parameters of a comptime function are compile-time values by context. `type T` declares a type-valued parameter. Legacy parameters such as `int @value` and `@type T` remain accepted.
 
@@ -220,6 +220,24 @@ int some_gen_name(int param) {
 ```
 
 The generated function is ordinary C-plus after expansion and can be called from runtime code, for example `some_gen_name(40)`. The result kind selects what the generator returns; the generated C declaration supplies its own name and signature.
+
+Identifier splices allow a generated function name to encode its type arguments:
+
+```c
+comptime string @name(type T) {
+    return T.name;
+}
+
+comptime function @generic_mapper(type T, type R) {
+    return R mapper__@name(T)__to__@name(R)(R (*mapper_callback)(T, int), T item, int index) {
+        return mapper_callback(item, index);
+    }
+}
+
+comptime generic_mapper(int, float);
+```
+
+This materializes `float mapper__int__to__float(float (*mapper_callback)(int, int), int item, int index)`. Each splice is validated as a single C identifier before insertion.
 
 The C output keeps the normal C-plus lowering preamble and contains the same runtime declarations:
 

@@ -51,7 +51,7 @@ counter_t.alloc_init(0);    // counter__alloc_init(0)
 
 ## Comptime and Generics
 
-`comptime` marks compile-time declarations, invocations, blocks, and inline scalar evaluation; `@name` explicitly refers to comptime symbols and performs interpolation in `@code` fragments. The implemented forms, materialization rules, and source-mapping behavior are specified in [`SPEC.comptime.md`](SPEC.comptime.md). Runtime reflection and typed AST decorators are documented there as proposed extensions and are not accepted by the current compiler.
+`comptime` marks compile-time declarations, invocations, blocks, and inline scalar evaluation; comptime string calls can splice validated identifiers into generated type and function declarations. The implemented forms, materialization rules, and source-mapping behavior are specified in [`SPEC.comptime.md`](SPEC.comptime.md). Runtime reflection and typed AST decorators are documented there as proposed extensions and are not accepted by the current compiler.
 
 ## Source Mapping
 

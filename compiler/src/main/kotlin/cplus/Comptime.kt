@@ -650,15 +650,19 @@ internal class ComptimeCompiler(
                 function.bodyStart + fragmentEnd
             )
             val replacements = function.parameters.mapIndexed { index, parameter -> parameter.name to values[index].render() }.toMap()
-            return CtEntity(
-                substituteMapped(
-                    fragment,
-                    replacements,
-                    callSource,
-                    callOffset,
-                    bareIdentifiers = function.parameters.filter { it.type == "type" }.map { it.name }.toSet()
-                )
+            val substituted = substituteMapped(
+                fragment,
+                replacements,
+                callSource,
+                callOffset,
+                bareIdentifiers = function.parameters.filter { it.type == "type" }.map { it.name }.toSet()
             )
+            val materialized = if (function.resultKind == "function") {
+                interpolateIdentifierCalls(substituted, environment, callSource, callOffset)
+            } else {
+                substituted
+            }
+            return CtEntity(materialized)
         }
         val match = Regex("return\\s+([\\s\\S]*?);(?:\\s*})?\\s*$").find(function.body.trim())
             ?: throw syntax("comptime function @${function.name} must return a value", function.source, function.start)

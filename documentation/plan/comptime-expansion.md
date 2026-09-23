@@ -27,6 +27,7 @@ Bound expansion to 128 passes, 10,000 comptime calls, 8 MiB of generated source,
 - Keyword-led declarations, imports, blocks, invocations, and inline scalar expressions parse and materialize without changing legacy syntax behavior.
 - A `comptime type` generator can return one named struct in `@code`, splice a reflected type name into its tag, and typedef it under the requested alias.
 - A `comptime function` generator can directly return a C function definition, substitute a `type T` parameter in its signature, and produce a function that compiles and runs.
+- A function generator can use a comptime string call embedded in its returned identifier to produce a validated type-specialized name such as `mapper__int__to__float`.
 - Identifier splices insert valid string tokens without quotes and reject invalid C identifiers; ordinary scalar strings remain quoted in runtime expressions.
 - Generated imports register compile-time values and contribute mapped runtime declarations to the module output.
 - Existing generic struct and function generation, scalar evaluation, imports, and source mappings continue to work.
