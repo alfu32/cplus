@@ -134,13 +134,56 @@ tasks.register("fatJar") {
     dependsOn(":cli:fatJar")
 }
 
+fun findNpmExecutable(): String? {
+    val configured = providers.gradleProperty("npmExecutable").orNull
+        ?: providers.environmentVariable("NPM").orNull
+    if (!configured.isNullOrBlank()) return configured
+
+    // Gradle daemons can outlive shell PATH changes (for example, activating
+    // nvm after the daemon starts). Resolve npm through a login shell so the
+    // task sees the same Node installation as the user's terminal.
+    if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+        return "npm.cmd"
+    }
+
+    return try {
+        val process = ProcessBuilder("bash", "-lc", "type -P npm")
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readLines() }
+        if (process.waitFor() != 0) return null
+        output.asReversed()
+            .map(String::trim)
+            .firstOrNull { candidate ->
+                candidate.isNotEmpty() && File(candidate).let { it.isFile && it.canExecute() }
+            }
+    } catch (_: Exception) {
+        null
+    }
+}
+
 val packageVscode = tasks.register<Exec>("packageVscode") {
     group = "build"
     description = "Packages the VS Code extension."
     workingDir(rootProject.file("vscode-cplus"))
     dependsOn(generateVersion)
     environment("CPLUS_RELEASE_VERSION", resolvedVersion)
-    commandLine("npm", "run", "package")
+    doFirst {
+        val npmExecutable = findNpmExecutable()
+            ?: throw GradleException(
+                "npm was not found. Activate Node in your shell or set NPM / -PnpmExecutable to its path."
+            )
+        executable(npmExecutable)
+        args("run", "package")
+
+        // npm and its node shebang must resolve to the same installation.
+        val npmDirectory = File(npmExecutable).absoluteFile.parent
+        if (!npmDirectory.isNullOrBlank()) {
+            val inheritedPath = System.getenv("PATH").orEmpty()
+            environment("PATH", npmDirectory + File.pathSeparator + inheritedPath)
+        }
+    }
 }
 
 val packageVim = tasks.register<Exec>("packageVim") {
