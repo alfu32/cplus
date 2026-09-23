@@ -79,7 +79,7 @@ java -jar dist/c-plus.linux-x86_64.jar test stdlib/tests/allocators.cp
 java -jar dist/c-plus.linux-x86_64.jar test stdlib/tests/string.cp
 ```
 
-The tests cover alignment, scratch region growth/reset, warm calloc/realloc/free and coalescing, pointer stability across regions, hot alignment, cold direct maps, statistics, and destroy/reinitialization. To verify debug mismatch, boundary-guard, and double-free reporting, run the intentional misuse fixture with `java -jar dist/c-plus.linux-x86_64.jar run stdlib/examples/allocator_debug.cp -DXMEM_DEBUG`; it should report all three cases and still exit successfully.
+The tests cover alignment, scratch region growth/reset, warm calloc/realloc/free and coalescing, pointer stability across regions, hot alignment, cold direct maps, statistics, and destroy/reinitialization. They use `@assert` for predicates and `@assertEquals(expected, actual)` for direct value checks so failures show both values. To verify debug mismatch, boundary-guard, and double-free reporting, run the intentional misuse fixture with `java -jar dist/c-plus.linux-x86_64.jar run stdlib/examples/allocator_debug.cp -DXMEM_DEBUG`; it should report all three cases and still exit successfully.
 
 ## Containers
 

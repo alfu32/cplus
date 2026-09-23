@@ -1446,8 +1446,8 @@ And:
         );
 
     @assert(values != NULL)
-    @assert(values[0] == 10)
-    @assert(values[1] == 20)
+    @assertEquals(10, values[0])
+    @assertEquals(20, values[1])
 
     free_warm(values);
 }
