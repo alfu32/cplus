@@ -35,21 +35,21 @@ val packageVscode = tasks.register<Exec>("packageVscode") {
     group = "build"
     description = "Packages the VS Code extension."
     workingDir(rootProject.file("vscode-cplus"))
-    commandLine("npm", "run", "package")
+    commandLine("npm", "run", "package", "-Prelease=${providers.gradleProperty("release").orElse("0.1.0-SNAPSHOT")}")
 }
 
 val packageVim = tasks.register<Exec>("packageVim") {
     group = "build"
     description = "Packages the Vim runtime."
     workingDir(rootProject.file("vim-cplus"))
-    commandLine("make", "package")
+    commandLine("make", "package", "release=${providers.gradleProperty("release").orElse("0.1.0-SNAPSHOT")}")
 }
 
 val packageIntellij = tasks.register<Exec>("packageIntellij") {
     group = "build"
     description = "Packages the IntelliJ plugin."
     workingDir(rootProject.projectDir)
-    commandLine("./gradlew", "-p", "intellij-cplus", "buildPlugin")
+    commandLine("./gradlew", "-p", "intellij-cplus", "buildPlugin", "-Prelease=${providers.gradleProperty("release").orElse("0.1.0-SNAPSHOT")}")
 }
 
 tasks.register("editorArtifacts") {

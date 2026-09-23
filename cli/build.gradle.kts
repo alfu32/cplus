@@ -65,4 +65,11 @@ tasks.register<Jar>("fatJar") {
     manifest {
         attributes["Main-Class"] = "cplus.MainKt"
     }
+
+    doLast {
+        val sourceJar = archiveFile.get().asFile
+        val targetJar = sourceJar.parentFile.resolve("${archiveBaseName.get()}.jar")
+
+        sourceJar.copyTo(targetJar, overwrite = true)
+    }
 }
