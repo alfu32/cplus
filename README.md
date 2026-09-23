@@ -1,89 +1,75 @@
 # C-plus
 
-C-plus is a small Kotlin command-line processor that lowers C-plus source (`.cp` or `.c+`) to ordinary C. C-plus keeps C's expressions and statements, adding struct-scoped methods, method-call syntax, and ownership/visibility annotations.
+C-plus is C with struct-scoped methods and a staged compile-time language. It accepts `.cp` and `.c+` files and transcodes them to ordinary C; the generated program keeps C's data layout, ABI, and runtime model.
 
-The `cli/` Gradle module contains the command-line application and its tests. The `compiler/` module contains the transcoder, mapped emitter, source-map model, diagnostics, and embedded TinyCC adapter. The root project only aggregates the modules and forwards lifecycle tasks.
+## Language and examples
 
-## Build and run
+Write methods inside a struct and call them on values or pointers. C-plus infers the receiver address and lowers the method to a normal C function:
 
-This is a Java 21-compatible Gradle project. The wrapper is the canonical build entry point:
+```c
+typedef struct counter_t {
+    int value;
+
+    pub int increment(borrowed mut *self) {
+        self->value++;
+        return 0;
+    }
+} counter_t;
+
+int main(void) {
+    counter_t counter = {0};
+    counter.increment();       // counter__increment(&counter)
+
+    counter_t* pointer = &counter;
+    pointer->increment();      // counter__increment(pointer)
+    return 0;
+}
+```
+
+The annotations `pub`, `priv`, `mut`, `borrowed`, and `owned` document intent and remain empty C macros; they do not change the ABI or enforce ownership. Static methods use `static` inside the struct and are emitted as C `static` functions.
+
+Comptime declarations generate C-plus declarations before C lowering. Imports can use stable standard-library paths, and type/function generators can materialize generic containers and functions over multiple passes:
+
+```c
+comptime import "stdlib:/containers/dynamic_list.cp";
+comptime typedef dynamic_list(int) int_list_t;
+```
+
+Named `@test` blocks run through the CLI test command. `@assert(condition)` and `@assertEquals(expected, actual)` print their inputs and colored results. C sources can be included unchanged with `#include` or `@import("file.c")`.
+
+See the [language specification](documentation/spec/SPEC.language.md), [comptime specification](documentation/spec/SPEC.comptime.md), and [project/module guide](documentation/spec/SPEC.project.md) for syntax, examples, and current limitations.
+
+## Standard library
+
+The [standard-library guide](stdlib/README.md) is the consolidated catalog of the modules currently in `stdlib/`, their APIs, lifecycle rules, examples, and tests:
+
+- OS-backed `scratch`, `hot`, `warm`, and `cold` allocation arenas, with allocation-intent diagnostics.
+- An owning, mutable `string` type with C string/memory helpers and indentation operations.
+- Generic resizable `dynamic_list(T)` and `dynamic_map(K, V)` containers.
+- A comptime `list_mapper(T, R, InputList, OutputList)` generator for callback-driven list conversion.
+
+Detailed references: [allocator behavior and design](documentation/spec/stdlib/ALLOCATORS.SPEC.md) and [string API](documentation/spec/stdlib/STRING.SPEC.md). Run the library tests with `cpc test stdlib/tests/*.cp`; see the guide for examples and allocator-specific test notes.
+
+## IDE support
+
+Deployable editor bundles are attached to [GitHub releases](https://github.com/c-plus/c-plus/releases):
+
+- [VS Code](vscode-cplus/README.md): highlighting, completion, navigation, and optional compiler diagnostics. Install a downloaded VSIX with `code --install-extension cplus-language-support-<version>.vsix`.
+- [IntelliJ IDEA](intellij-cplus/README.md): highlighting, completion, and declaration navigation; targets IntelliJ IDEA 2026.2.2. CI caches the target platform between runs. Install its ZIP with **Settings → Plugins → Install Plugin from Disk**.
+- [Vim](vim-cplus/README.md): syntax highlighting, omnifunc completion, quickfix diagnostics, and compiler commands.
+
+## Releases and building from source
+
+Most users can download a CLI bundle or editor plugin from [Releases](https://github.com/c-plus/c-plus/releases). The manual GitHub Actions workflow builds the selected branch or tag; branch runs publish workflow artifacts, while a successful tag run creates or updates a GitHub Release with the CLI and editor bundles. It does not run automatically on push.
+
+For local development, install a Java 21 JDK and use the Gradle wrapper:
 
 ```sh
-./gradlew build
-./gradlew test
+./gradlew build test
 ./gradlew run --args='help'
+./gradlew -Prelease=0.3.4 fatJar
+./gradlew -Prelease=0.3.4 -Pos=linux -Parch=x86_64 bundleDist
+./gradlew -Prelease=0.3.4 editorArtifacts
 ```
 
-The same tasks can be addressed explicitly as `:cli:run`, `:cli:test`, or `:cli:fatJar`.
-
-To create a self-contained release jar, pass the release version explicitly:
-
-```sh
-./gradlew -Prelease=0.2.0 fatJar
-java -jar cli/build/libs/c-plus-0.2.0.jar help
-```
-
-The fat jar includes TinyCC and its sysroot for every supported target by default. Restrict the embedded bundles with `-Parch=x86_64|arm64|all` and `-Pos=win|mac|linux|all`; both default to `all`. For example, `./gradlew -Prelease=0.3.3 -Parch=x86_64 -Pos=linux fatJar` creates a smaller Linux x86-64 jar. `arm64` maps to the embedded `aarch64` bundle, while `win` and `mac` map to `windows` and `macos`. A restricted jar only supports the OS/architecture combinations it contains.
-
-Build an installable folder and zip with platform launchers and installers:
-
-```sh
-./gradlew -Prelease=0.3.3 -Pos=linux -Parch=x86_64 bundleDist
-./gradlew -Prelease=0.3.3 -Pos=all -Parch=all bundleDist
-```
-
-The first command creates a Linux x86-64 bundle; the second creates the all-target bundle with Linux, macOS, and Windows scripts. Output goes to `dist/cplus-<version>-<os>-<arch>.zip` and `build/distributions/`.
-
-The bundled TinyCC JNI library is used for compilation, so `compile` and `run` do not require a system `tcc` executable:
-
-```sh
-./gradlew run --args='transcode examples/basic.cp -o build/basic.c'
-./gradlew run --args='compile examples/basic.cp -o build/basic -DDEBUG=1'
-./gradlew run --args='run examples/basic.cp -o build/basic-run -Iinclude'
-./gradlew run --args='test stdlib/tests/containers.cp'
-./gradlew run --args='test stdlib/tests/containers.cp "generic map insert update remove"'
-```
-
-The test command also accepts multiple source paths before optional exact test names; shell globs expand normally, for example `java -jar c-plus.jar test test/folder/*.cp "some test"`.
-
-Inside `@test` bodies, use `@assert(condition)` or bytewise `@assertEquals(expected, actual)`. Every assertion prints its fixture-wide `[number/total]`, input expression(s), given value, expected value, and green/red PASS/FAIL status; common scalar values are formatted and unsupported types are printed as hex bytes. Test headings are numbered and yellow. Use `strcmp` when checking string contents. Existing C sources can be included with `#include "fixture.c"` or `@import("fixture.c")`; both use the C preprocessor/compiler without rewriting the C file.
-
-Use `cpc new project_name` or `cpc new .` to scaffold `cplus.toml`, `src/main.cp`, and project module/test directories. Project-local modules use `comptime import "module:/path.cp"`; the built-in library uses `comptime import "stdlib:/containers/dynamic_list.cp"`. The CLI searches the project manifest, `--stdlib directory`, `CPLUS_STDLIB`, and installed/bundle locations for the standard library.
-
-Project manifest and module search behavior, including current limitations, is specified in [`documentation/spec/SPEC.project.md`](documentation/spec/SPEC.project.md).
-
-The installed application can also be launched from `cli/build/install/c-plus/bin/c-plus` after `./gradlew :cli:installDist`.
-
-Build all deployable editor artifacts with:
-
-```sh
-./gradlew editorArtifacts
-```
-
-This writes a versioned VSIX such as `vscode-cplus/dist/cplus-language-support-0.3.1.vsix`, `intellij-cplus/build/distributions/*.zip`, and `vim-cplus/dist/vim-cplus-*.tar.gz`/`.zip`. Pass `-Prelease=0.3.1` to apply the same explicit version to the CLI and all editor artifacts. Direct VS Code and IntelliJ builds use generated CLI metadata or the latest Git tag when no release property is supplied.
-
-Compilation prints each pass to stderr. Generated C contains `#line` directives pointing back to the `.cp` file, and TinyCC diagnostics are normalized and reported with the original C-plus path and line.
-
-## Repository modules
-
-- `compiler/`: reusable Kotlin transpiler and embedded TinyCC adapter.
-- `cli/`: command-line application and integration tests.
-- `stdlib/`: source-level OS-mapped allocation arenas, generic containers, comptime mapper generators, examples, and `@test` suites.
-- `documentation/spec/`: living language, comptime, and compiler specifications.
-- `vscode-cplus/`: deployable VS Code extension with highlighting, completion, symbols, navigation, diagnostics, and CLI commands.
-- `intellij-cplus/`: deployable IntelliJ Platform plugin with a flat PSI parser, highlighting, completion, and declaration navigation.
-- `vim-cplus/`: deployable Vim runtime with file detection, highlighting, omnifunc completion, quickfix diagnostics, and compiler commands.
-
-Editor integrations provide local syntax and lightweight semantic support without a language server. VS Code and Vim can also invoke the CLI for compiler-backed diagnostics/builds; the IntelliJ plugin remains self-contained and uses its local PSI/index services.
-
-## Current lowering rules
-
-- `typedef struct name_t { ... } name_t;` method definitions and declarations are moved outside the struct.
-- An instance method whose first parameter is `*self` receives an implicit `name_t *self` parameter.
-- Methods become `name__method(...)`; a struct value call such as `value.reset()` supplies `&value`, while `value_ptr->reset()` supplies the pointer directly. The explicit `(&value).reset()` form remains accepted.
-- `name_t.method(...)` becomes the corresponding static method call.
-- `pub`, `priv`, `mut`, `borrowed`, `owned`, and `stat` are retained as empty C macros. A `static` method remains a C `static` function.
-
-The receiver type is inferred from declarations such as `name_t value;` or `name_t *value;`. Unknown receivers are left unchanged so ordinary C remains valid.
-
-Keyword-led and legacy comptime declarations are resolved before method lowering. Comptime string calls can splice validated type names into generated function identifiers; for a more source-visible public name, use an ordinary C `#define` alias before the comptime invocation. This is a coding convention handled by the C preprocessor, not a special C-plus alias feature. The syntax, materialization rules, and current limitations are documented in [`documentation/spec/SPEC.comptime.md`](documentation/spec/SPEC.comptime.md).
+The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. Platform bundle options are `-Pos=win|mac|linux|all` and `-Parch=x86_64|arm64|all`; both default to `all`.

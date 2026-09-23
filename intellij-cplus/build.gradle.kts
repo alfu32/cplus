@@ -51,6 +51,11 @@ java {
 
 intellijPlatform {
     instrumentCode = false
+    caching {
+        ides {
+            enabled.set(true)
+        }
+    }
     pluginConfiguration {
         version = project.version.toString()
         ideaVersion {

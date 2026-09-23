@@ -13,3 +13,5 @@ Build the deployable plugin with:
 ```
 
 The deployable ZIP is written to `intellij-cplus/build/distributions/`. Install it from **Settings → Plugins → gear → Install Plugin from Disk**. The plugin uses a flat PSI parser so editor services work without requiring the C-plus compiler to be installed.
+
+CI targets IntelliJ IDEA 2026.2.2 with the IntelliJ Platform Gradle Plugin and caches that platform under `.intellijPlatform/ides`. The first uncached build resolves the IDE; subsequent GitHub Actions runs restore the cached distribution rather than downloading it again.

@@ -128,6 +128,11 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: vscode-cplus/package-lock.json
+      - name: Cache IntelliJ IDEA 2026.2.2 platform
+        uses: actions/cache@v4
+        with:
+          path: intellij-cplus/.intellijPlatform/ides
+          key: intellij-platform-${{ runner.os }}-idea-2026.2.2-${{ hashFiles('intellij-cplus/build.gradle.kts', 'intellij-cplus/settings.gradle.kts') }}
       - uses: gradle/actions/setup-gradle@v4
       - name: Install VS Code extension dependencies
         run: npm ci --prefix vscode-cplus
