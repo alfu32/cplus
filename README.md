@@ -45,7 +45,7 @@ Build all deployable editor artifacts with:
 ./gradlew editorArtifacts
 ```
 
-This writes `vscode-cplus/dist/cplus-language-support.vsix`, `intellij-cplus/build/distributions/*.zip`, and `vim-cplus/dist/vim-cplus-*.tar.gz`/`.zip`. Pass `-Prelease=0.3.1` to apply the same explicit version to the CLI and all editor artifacts. Direct VS Code and IntelliJ builds use generated CLI metadata or the latest Git tag when no release property is supplied.
+This writes a versioned VSIX such as `vscode-cplus/dist/cplus-language-support-0.3.1.vsix`, `intellij-cplus/build/distributions/*.zip`, and `vim-cplus/dist/vim-cplus-*.tar.gz`/`.zip`. Pass `-Prelease=0.3.1` to apply the same explicit version to the CLI and all editor artifacts. Direct VS Code and IntelliJ builds use generated CLI metadata or the latest Git tag when no release property is supplied.
 
 Compilation prints each pass to stderr. Generated C contains `#line` directives pointing back to the `.cp` file, and TinyCC diagnostics are normalized and reported with the original C-plus path and line.
 

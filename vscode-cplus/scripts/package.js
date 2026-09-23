@@ -36,7 +36,7 @@ function resolveVersion(environment = process.env) {
 
 function packageExtension() {
   const version = resolveVersion();
-  const outputPath = path.join("dist", "cplus-language-support.vsix");
+  const outputPath = path.join("dist", `cplus-language-support-${version}.vsix`);
   fs.mkdirSync(path.dirname(path.join(extensionRoot, outputPath)), { recursive: true });
 
   const result = spawnSync(
