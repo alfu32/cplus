@@ -4,6 +4,7 @@ tsconfig.json
 *.ts
 node_modules/**
 test/**
+scripts/**
 dist/**
 *.vsix
 package-lock.json

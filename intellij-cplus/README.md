@@ -4,7 +4,7 @@ This module contains a deployable IntelliJ Platform plugin for C-plus: `.cp`/`.c
 
 The source is intentionally kept separate from the Kotlin compiler modules. It targets IntelliJ IDEA 2026.2.2 and Java 21-compatible plugin bytecode.
 
-Comptime keywords including `@test` and identifier splices (for example, `mapper__@name(T)__to__@name(R)`) are highlighted and offered in completion. Simple object-like `#define generated_name public_name` aliases are suggested as callable names. The plugin does not evaluate comptime expansions; the alias uses ordinary C preprocessor behavior, not a C-plus alias feature.
+Comptime keywords and the `self` receiver have dedicated highlighting; `@test` and identifier splices (for example, `mapper__@name(T)__to__@name(R)`) are highlighted and offered in completion. Simple object-like `#define generated_name public_name` aliases are suggested as callable names. The plugin does not evaluate comptime expansions; the alias uses ordinary C preprocessor behavior, not a C-plus alias feature. Without `-Prelease`, its version uses generated CLI metadata or the repository's latest Git tag.
 
 Build the deployable plugin with:
 

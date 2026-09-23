@@ -4,6 +4,7 @@ endif
 
 syntax case match
 syntax keyword cplusAnnotation pub priv mut borrowed owned stat
+syntax keyword cplusSelf self
 syntax keyword cplusKeyword typedef struct enum union static const volatile restrict return if else for while do switch case default break continue variable function
 syntax keyword cplusType void char short int long float double signed unsigned size_t
 syntax keyword cplusComptimeKeyword comptime import if else for type var fn variable function code test
@@ -21,6 +22,7 @@ syntax match cplusLineComment /\/\/.*$/ contains=@Spell
 syntax region cplusBlockComment start=/\/\*/ end=/\*\// contains=@Spell
 
 highlight default link cplusAnnotation Special
+highlight default link cplusSelf Special
 highlight default link cplusKeyword Keyword
 highlight default link cplusType Type
 highlight default link cplusStructType Type

@@ -4,7 +4,27 @@ plugins {
 }
 
 group = "cplus"
-version = providers.gradleProperty("release").orElse("0.1.0").get()
+val generatedCliVersionFile = rootDir.resolve("../cli/src/main/kotlin/cplus/Version.kt")
+val generatedCliVersion = generatedCliVersionFile.takeIf { it.isFile }
+    ?.readText()
+    ?.let { Regex("val version: String = \\\"([^\\\"]+)\\\"").find(it)?.groupValues?.get(1) }
+val requestedRelease = providers.gradleProperty("release").orNull?.trim()?.takeIf(String::isNotEmpty)
+fun gitVersion(vararg args: String): String? = try {
+    val process = ProcessBuilder("git", *args)
+        .directory(rootDir.resolve(".."))
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+    output.takeIf { process.waitFor() == 0 && it.isNotEmpty() }
+} catch (_: Exception) {
+    null
+}
+val resolvedVersion = requestedRelease
+    ?: generatedCliVersion
+    ?: gitVersion("describe", "--tags", "--abbrev=0")
+    ?: gitVersion("rev-parse", "--short=12", "HEAD")
+    ?: "0.1.0"
+version = resolvedVersion
 
 repositories {
     mavenCentral()

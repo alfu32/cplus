@@ -14,6 +14,7 @@ class CPlusSyntaxHighlighter : SyntaxHighlighterBase() {
 
     override fun getTokenHighlights(tokenType: IElementType): Array<TextAttributesKey> = when (tokenType) {
         CPlusTokenTypes.ANNOTATION -> pack(ANNOTATION)
+        CPlusTokenTypes.COMPTIME_KEYWORD -> pack(COMPTIME_KEYWORD)
         CPlusTokenTypes.COMMENT -> pack(DefaultLanguageHighlighterColors.LINE_COMMENT)
         CPlusTokenTypes.PREPROCESSOR -> pack(DefaultLanguageHighlighterColors.METADATA)
         CPlusTokenTypes.KEYWORD -> pack(DefaultLanguageHighlighterColors.KEYWORD)
@@ -21,12 +22,16 @@ class CPlusSyntaxHighlighter : SyntaxHighlighterBase() {
         CPlusTokenTypes.NUMBER -> pack(DefaultLanguageHighlighterColors.NUMBER)
         CPlusTokenTypes.STRING -> pack(DefaultLanguageHighlighterColors.STRING)
         CPlusTokenTypes.IDENTIFIER -> pack(DefaultLanguageHighlighterColors.IDENTIFIER)
+        CPlusTokenTypes.SELF -> pack(DefaultLanguageHighlighterColors.PARAMETER)
         else -> emptyArray()
     }
 
     companion object {
         private val ANNOTATION = TextAttributesKey.createTextAttributesKey(
             "CPLUS_ANNOTATION", DefaultLanguageHighlighterColors.METADATA
+        )
+        private val COMPTIME_KEYWORD = TextAttributesKey.createTextAttributesKey(
+            "CPLUS_COMPTIME_KEYWORD", DefaultLanguageHighlighterColors.KEYWORD
         )
     }
 }

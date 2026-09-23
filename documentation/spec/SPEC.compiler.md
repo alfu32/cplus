@@ -71,3 +71,5 @@ The project targets Java 21:
 ./gradlew -Prelease=0.2.0 fatJar
 java -jar cli/build/libs/c-plus-0.2.0.jar help
 ```
+
+`-Prelease=VERSION` sets the shared CLI/editor release version. The root `editorArtifacts` task passes it to VS Code, IntelliJ, and Vim packaging; standalone VS Code/IntelliJ packaging falls back to generated CLI version metadata or the latest Git tag.

@@ -1,5 +1,9 @@
 const assert = require("node:assert/strict");
 const { indexText } = require("../out/index.js");
+const { resolveVersion } = require("../scripts/package.js");
+
+assert.equal(resolveVersion({ CPLUS_RELEASE_VERSION: "2.3.4" }), "2.3.4");
+assert.equal(resolveVersion({ CPLUS_RELEASE_VERSION: "  " }), resolveVersion({}));
 
 const source = [
   "typedef struct counter_t {",

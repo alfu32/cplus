@@ -78,6 +78,8 @@ class CPlusLexer : LexerBase() {
                 consume(::isIdentifierPart)
                 val word = buffer.subSequence(position, tokenEnd).toString()
                 when {
+                    word == "self" -> CPlusTokenTypes.SELF
+                    word in comptimeKeywords -> CPlusTokenTypes.COMPTIME_KEYWORD
                     word in keywords -> CPlusTokenTypes.KEYWORD
                     word in annotations -> CPlusTokenTypes.ANNOTATION
                     word.endsWith("_t") -> CPlusTokenTypes.TYPE
@@ -105,11 +107,14 @@ class CPlusLexer : LexerBase() {
     private fun isIdentifierPart(character: Char): Boolean = character.isLetterOrDigit() || character == '_'
 
     companion object {
+        private val comptimeKeywords = setOf(
+            "comptime", "import", "type", "var", "fn", "variable", "function", "code", "test"
+        )
         private val keywords = setOf(
             "typedef", "struct", "enum", "union", "const", "void", "char", "short", "int",
             "long", "float", "double", "signed", "unsigned", "return", "if", "else", "for",
             "while", "do", "switch", "case", "default", "break", "continue", "static",
-            "variable", "function", "comptime", "type", "import", "code", "string", "size_t"
+            "string", "size_t"
         )
         private val annotations = setOf("pub", "priv", "mut", "borrowed", "owned", "stat")
     }

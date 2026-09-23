@@ -138,14 +138,16 @@ val packageVscode = tasks.register<Exec>("packageVscode") {
     group = "build"
     description = "Packages the VS Code extension."
     workingDir(rootProject.file("vscode-cplus"))
-    commandLine("npm", "run", "package", "-Prelease=$version")
+    dependsOn(generateVersion)
+    environment("CPLUS_RELEASE_VERSION", resolvedVersion)
+    commandLine("npm", "run", "package")
 }
 
 val packageVim = tasks.register<Exec>("packageVim") {
     group = "build"
     description = "Packages the Vim runtime."
     workingDir(rootProject.file("vim-cplus"))
-    commandLine("make", "package", "release=$version")
+    commandLine("make", "package", "VERSION=$version")
 }
 
 val packageIntellij = tasks.register<Exec>("packageIntellij") {
