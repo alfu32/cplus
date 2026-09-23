@@ -73,3 +73,5 @@ java -jar cli/build/libs/c-plus-0.2.0.jar help
 ```
 
 `-Prelease=VERSION` sets the shared CLI/editor release version. The root `editorArtifacts` task passes it to VS Code, IntelliJ, and Vim packaging; standalone VS Code/IntelliJ packaging falls back to generated CLI version metadata or the latest Git tag.
+
+The fat jar embeds TinyCC together with the sysroot for each selected platform. `-Parch=x86_64|arm64|all` and `-Pos=win|mac|linux|all` select which platform bundles are included; both default to `all`. For example, `./gradlew -Parch=arm64 -Pos=linux fatJar` includes only Linux ARM64. `arm64` selects TinyCC's `aarch64` bundle; `win` and `mac` select `windows` and `macos`. A jar built with restricted targets can compile and run programs only on a matching included platform.

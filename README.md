@@ -23,6 +23,8 @@ To create a self-contained release jar, pass the release version explicitly:
 java -jar cli/build/libs/c-plus-0.2.0.jar help
 ```
 
+The fat jar includes TinyCC and its sysroot for every supported target by default. Restrict the embedded bundles with `-Parch=x86_64|arm64|all` and `-Pos=win|mac|linux|all`; both default to `all`. For example, `./gradlew -Prelease=0.2.0 -Parch=x86_64 -Pos=linux fatJar` creates a smaller Linux x86-64 jar. `arm64` maps to the embedded `aarch64` bundle, while `win` and `mac` map to `windows` and `macos`. A restricted jar only supports the OS/architecture combinations it contains.
+
 The bundled TinyCC JNI library is used for compilation, so `compile` and `run` do not require a system `tcc` executable:
 
 ```sh

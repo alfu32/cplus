@@ -47,6 +47,34 @@ tasks.jar {
     }
 }
 
+val tccArchOption = providers.gradleProperty("arch").orElse("all").get().trim().lowercase()
+val tccOsOption = providers.gradleProperty("os").orElse("all").get().trim().lowercase()
+
+val tccArchitectures = when (tccArchOption) {
+    "x86_64" -> setOf("x86_64")
+    "arm64" -> setOf("aarch64")
+    "all" -> setOf("x86_64", "aarch64")
+    else -> throw GradleException("Invalid -Parch='$tccArchOption'; expected x86_64, arm64, or all.")
+}
+
+val tccOperatingSystems = when (tccOsOption) {
+    "win" -> setOf("windows")
+    "mac" -> setOf("macos")
+    "linux" -> setOf("linux")
+    "all" -> setOf("windows", "macos", "linux")
+    else -> throw GradleException("Invalid -Pos='$tccOsOption'; expected win, mac, linux, or all.")
+}
+
+val allTccTargets = setOf(
+    "linux-x86_64", "linux-aarch64",
+    "macos-x86_64", "macos-aarch64",
+    "windows-x86_64", "windows-aarch64"
+)
+val selectedTccTargets = tccOperatingSystems
+    .flatMap { os -> tccArchitectures.map { arch -> "$os-$arch" } }
+    .toSet()
+val tinyccEmbedJar = rootProject.file("lib/tinycc-embed.jar").canonicalFile
+
 tasks.register<Jar>("fatJar") {
     group = "build"
     description = "Builds an executable jar containing C-plus and its runtime dependencies."
@@ -54,16 +82,31 @@ tasks.register<Jar>("fatJar") {
     archiveVersion.set(providers.gradleProperty("release").orElse("0.1.0-SNAPSHOT"))
     archiveClassifier.set("")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    inputs.property("tccArch", tccArchOption)
+    inputs.property("tccOs", tccOsOption)
 
     dependsOn(tasks.named("classes"))
     from(sourceSets.main.get().output)
-    from(configurations.runtimeClasspath.get().map { file ->
+    val runtimeArtifacts = configurations.runtimeClasspath.get().filterNot {
+        it.canonicalFile == tinyccEmbedJar
+    }
+    from(runtimeArtifacts.map { file ->
         if (file.isDirectory) file else zipTree(file)
     })
+    from(zipTree(tinyccEmbedJar)) {
+        exclude { details ->
+            val target = details.path
+                .takeIf { it.startsWith("native/") }
+                ?.removePrefix("native/")
+                ?.substringBefore('/')
+            target != null && target in allTccTargets && target !in selectedTccTargets
+        }
+    }
 
     exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
     manifest {
         attributes["Main-Class"] = "cplus.MainKt"
+        attributes["Cplus-Tcc-Targets"] = selectedTccTargets.sorted().joinToString(",")
     }
 
     doLast {
@@ -71,5 +114,6 @@ tasks.register<Jar>("fatJar") {
         val targetJar = sourceJar.parentFile.resolve("${archiveBaseName.get()}.jar")
 
         sourceJar.copyTo(targetJar, overwrite = true)
+        logger.lifecycle("Bundled TinyCC targets: ${selectedTccTargets.sorted().joinToString(", ")}")
     }
 }
