@@ -1,6 +1,6 @@
 # C-plus Comptime Specification
 
-Status: core implementation. Scalar values/functions, imports, comptime blocks, entity materialization, generic struct generation, basic reflection, cycle detection, and mapped diagnostics are implemented. The limitations below are normative for the current implementation.
+Status: core implementation. Scalar values/functions, imports, comptime blocks, entity materialization, generic struct generation, basic reflection, iterative generated-declaration expansion, and mapped diagnostics are implemented. The limitations below are normative for the current implementation.
 
 This is a living specification. Any change to comptime syntax, evaluation, imports, reflection, or materialization must update this file and its examples.
 
@@ -10,8 +10,9 @@ Comptime is an earlier evaluation phase of the same language, not a separate mac
 
 ```text
 C-plus source
-  -> phase 1: load plugins and resolve @ imports, values, calls, and decorators
-  -> validate and materialize returned C-plus declarations
+  -> phase 1: parse and resolve active comptime declarations
+  -> repeat: register generated declarations, expand calls, and preserve source maps
+  -> stop when no active comptime declarations remain
   -> phase 2: transpile the resulting C-plus to mapped C
   -> optional phase 3: compile C with TinyCC
 ```
@@ -33,6 +34,12 @@ The phase-1 contract is strict: every invocation either produces a supported val
 
 Comptime modules can therefore be written in C-plus and imported as compiler plugins. An imported module may expose phase-1 functions and may materialize ordinary runtime declarations; it is not linked as a runtime library merely because it contains a comptime function.
 
+### Repeated expansion passes
+
+The compiler parses active declarations at module scope, registers their comptime definitions, expands their invocations, and reparses the resulting mapped C-plus. A returned fragment stays opaque while it is part of a generator body. Once a call emits that fragment into the module, its declarations become active on the next pass. Expansion repeats until no active comptime syntax remains; C-plus lowering starts afterward.
+
+Each pass carries source origins forward. Diagnostics in generated declarations resolve through every expansion to the source location that contributed the text. Imports and comptime definitions remain available to later passes. Repeated source states, passes that make no progress, more than 128 passes, and unresolved `@` forms produce source-mapped diagnostics.
+
 ## Syntax
 
 `@` is the comptime sigil. It binds to the following identifier or starts a comptime construct; whitespace is allowed only where shown for a block.
@@ -43,16 +50,26 @@ The core forms are:
 comptime-import       := "@import" string-literal ";"
 comptime-block        := "@" "{" comptime-statement* "}"
 comptime-value        := c-type "@" identifier ("=" comptime-expression)? ";"
-comptime-function     := (c-type | "variable" | "function" | "@var" | "@fn") "@" identifier "(" parameter* ")" block
+comptime-function     := (c-type | "variable" | "function" | "@var" | "@fn" | "@code") "@" identifier "(" parameter* ")" block
 type-generator        := "@type" ["@"] identifier "(" ("@type" identifier)* ")" block
+code-fragment         := "@code" "{" cplus-top-level-item* "}"
 comptime-struct       := "typedef struct" "@" identifier "{" cplus-members "}" identifier ";"
 comptime-reference    := "@" identifier
 comptime-call         := "@" identifier "(" argument* ")"
+type-instantiation    := "typedef" comptime-call identifier ";"
 ```
 
-The preferred entity result kinds are @type for generated types, @var for generated variables, and @fn for generated functions. The legacy words variable and function remain accepted for variable and function entities. A sigil before the generator name is accepted, so @type @wrapper(...) makes the result kind explicit.
+The preferred entity result kinds are @type for generated types, @var for generated variables, @fn for generated functions, and @code for a C-plus source fragment. The legacy words variable and function remain accepted for variable and function entities. A sigil before the generator name is accepted, so @type @wrapper(...) makes the result kind explicit.
 
-The scalar comptime-function form uses a C type for scalar results. The `@var` and `@fn` forms produce variable and function declaration entities; `@type` produces a type entity. The legacy `variable` and `function` spellings remain accepted. A comptime parameter is marked with `@`; `@type T` declares a type-value parameter.
+The scalar comptime-function form uses a C type for scalar results. The `@var` and `@fn` forms produce variable and function declaration entities; `@type` produces a type entity. `@code` produces an explicitly delimited C-plus fragment that can contain several top-level declarations, including declarations for later comptime passes. Strings remain scalar values and are never implicitly parsed as source. The legacy `variable` and `function` spellings remain accepted. A comptime parameter is marked with `@`; `@type T` declares a type-value parameter.
+
+Type-producing comptime calls may use the C-like `typedef` form:
+
+```c
+typedef @wrapper(int) wrapper_int_t;
+```
+
+The bare `@wrapper(int) wrapper_int_t;` spelling is not part of the current grammar. `typedef` is required for file-scope type instantiation. The parser does not special-case `wrapper`, `dynamic_list`, or any other generator name; the generator's `@type` result kind determines that the call produces a type. Local type instantiations are not implemented yet.
 
 ### Comptime values and functions
 
@@ -101,7 +118,7 @@ The path is relative to the importing file, must resolve to a `.cp` or `.c+` fil
     };
 }
 
-@wrapper(int) wrapper_int_t;
+typedef @wrapper(int) wrapper_int_t;
 ```
 
 The supported reflection surface is compile-time-only:
@@ -186,7 +203,43 @@ int generated_limit = 10;
 int generated_checker(int value) { return value < 10; }
 ```
 
-The current implementation carries entity results as mapped C-plus text fragments. It does not yet expose a user-facing typed AST, so arbitrary string-to-source evaluation is not available. A future fragment API should replace this internal representation with typed, source-mapped declaration nodes.
+Entity results are mapped C-plus fragments. The compiler does not expose a user-facing typed AST, and ordinary strings are never evaluated as source. `@code` is the explicit source-fragment form.
+
+### Generated declarations across passes
+
+Use `@code` when a comptime function needs to return several declarations or introduce another comptime generator. Declarations inside the returned block are inert while the block is part of the function template. After the function emits the block, later passes parse and resolve those declarations.
+
+```c
+@code @emit_seed() {
+    return @code {
+        @code @emit_box(@type T) {
+            return @code {
+                @type @box(@type U) {
+                    return struct { U value; };
+                }
+                typedef @box(@T) generated_box_t;
+            };
+        }
+        @ {
+            @emit_box(int);
+        }
+    };
+}
+
+@ {
+    @emit_seed();
+}
+```
+
+The first expansion emits `@emit_box` and its comptime block. A later pass registers `@emit_box`, runs it, and emits `@box` and its typedef invocation. Another pass materializes the struct:
+
+```c
+typedef struct __int__box_t {
+    int value;
+} generated_box_t;
+```
+
+An emitted fragment contains module-level C-plus declarations. Declarations inside ordinary runtime function bodies are not comptime expansion sites in this version.
 
 ## Materialization Examples
 
@@ -256,7 +309,7 @@ Input:
     };
 }
 
-@wrapper(int) wrapper_int_t;
+typedef @wrapper(int) wrapper_int_t;
 ```
 
 The generator is instantiated once. Its intermediate C-plus materialization is:
@@ -458,10 +511,10 @@ Useful applications include serializers, generic equality and hashing, debuggers
 - **Sandboxing:** comptime functions cannot call runtime C functions, dereference runtime pointers, execute subprocesses, or mutate compiler-global state.
 - **Dependency safety:** imports are canonicalized, evaluated once, and rejected on cycles. Duplicate generated declarations with incompatible definitions are errors.
 - **Hygiene:** generated identifiers are collision-checked and derived from the generator and type arguments. A future explicit hygienic name escape must not silently capture user declarations.
-- **Bounded evaluation:** the current implementation limits the import graph to 256 modules, comptime calls to 10,000, and materialized output to 8 MiB. Exceeding a limit is a source-mapped comptime diagnostic.
+- **Bounded evaluation:** the current implementation limits the import graph to 256 modules, comptime calls to 10,000, expansion to 128 passes, and materialized output to 8 MiB. Repeated source states and passes that make no progress are diagnosed; exceeding a limit is a source-mapped comptime error.
 - **Target dependence:** `T.size` and `T.align` currently support the built-in scalar C types. Target-specific struct layout reflection remains reserved until the evaluator receives an explicit target ABI.
 - **No runtime reflection yet:** `@type`, field metadata, and comptime values disappear before C compilation. Runtime inspection currently requires ordinary C-plus data and code.
-- **No implicit string evaluation:** strings are values, not source code. Current entity results are mapped C-plus fragments, not arbitrary executable source strings.
+- **Explicit source fragments:** strings remain values. Only a typed `@code { ... }` fragment is interpreted as C-plus source, and the fragment is reparsed on a later pass.
 - **No general AST API yet:** typed fragments, decorators, quote/unquote, and AST visitors are proposed, not implemented.
 - **Source mapping:** generated entities retain both their generator span and instantiation span. Diagnostics in generated code point to the instantiation first and can explain the generator origin.
-- **Current implementation limits:** scalar comptime functions currently require a single `return` expression; entity functions return one declaration fragment; `@for` currently iterates reflected fields and emits one entity expression per iteration; imports and comptime declarations must occur at file scope. Unsupported forms produce source-mapped diagnostics rather than being passed to C.
+- **Current implementation limits:** scalar comptime functions currently require a single `return` expression; `@var` and `@fn` entity functions return one declaration; `@code` returns one explicitly delimited module fragment; `@for` currently iterates reflected fields and emits one entity expression per iteration; imports and active comptime declarations must occur at file scope or inside a comptime block. Unsupported forms produce source-mapped diagnostics rather than being passed to C.

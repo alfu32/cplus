@@ -16,6 +16,12 @@ class SourceFile(
     val text: String,
     val name: String? = null
 ) {
+    private var mappedOrigins: MappedText? = null
+
+    internal constructor(text: String, name: String?, mappedOrigins: MappedText) : this(text, name) {
+        this.mappedOrigins = mappedOrigins
+    }
+
     private val lineStarts = buildList {
         add(0)
         text.forEachIndexed { index, character ->
@@ -42,6 +48,7 @@ class SourceFile(
     fun span(startOffset: Int, endOffset: Int = startOffset + 1): SourceSpan {
         val start = startOffset.coerceIn(0, text.length)
         val end = endOffset.coerceIn(start, text.length)
+        mappedSpan(start, end)?.let { return it }
         return SourceSpan(
             file = name,
             startOffset = start,
@@ -51,6 +58,22 @@ class SourceFile(
             endLine = lineOf(end),
             endColumn = columnOf(end)
         )
+    }
+
+    private fun mappedSpan(start: Int, end: Int): SourceSpan? {
+        val mapping = mappedOrigins ?: return null
+        val first = mapping.originAt(start)
+            ?: (if (start > 0) mapping.originAt(start - 1)?.let { SourceOrigin(it.file, it.offset + 1) }
+            else null)
+            ?: return null
+        if (first.file === this) return null
+        val last = if (end > start) mapping.originAt(end - 1) else null
+        val mappedEnd = if (last?.file === first.file && last.offset >= first.offset) {
+            last.offset + 1
+        } else {
+            first.offset + 1
+        }
+        return first.file.span(first.offset, mappedEnd)
     }
 }
 

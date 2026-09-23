@@ -96,7 +96,7 @@ class TranspilerTest {
                     @make_limit(10);
                     @make_checker(10);
                 }
-                @wrapper(int) wrapper_int_t;
+                typedef @wrapper(int) wrapper_int_t;
             """.trimIndent()
         ).code
         assertTrue("int generated_limit = 10;" in result, result)
@@ -140,11 +140,155 @@ class TranspilerTest {
                         T* wrapped_value;
                     };
                 }
-                @wrapper(int) wrapper_int_t;
+                typedef @wrapper(int) wrapper_int_t;
             """.trimIndent()
         ).code
         assertTrue("typedef struct __int__wrapper_t" in result, result)
         assertTrue("int* wrapped_value;" in result, result)
+    }
+
+    @Test
+    fun requiresTypedefForFileScopeTypeInstantiation() {
+        val error = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile(
+                """
+                    @type @wrapper(@type T) {
+                        return struct {
+                            T* wrapped_value;
+                        };
+                    }
+                    @wrapper(int) wrapper_int_t;
+                """.trimIndent()
+            )
+        }
+        assertTrue(error.message.orEmpty().contains("must use typedef"), error.message)
+    }
+
+    @Test
+    fun resolvesComptimeDeclarationsGeneratedAcrossPasses() {
+        val source = """
+            @code @emit_seed() {
+                return @code {
+                    @code @emit_box(@type T) {
+                        return @code {
+                            @type @box(@type U) {
+                                return struct {
+                                    U value;
+                                    pub U get(borrowed *self) {
+                                        return self->value;
+                                    }
+                                };
+                            }
+                            typedef @box(@T) generated_box_t;
+                        };
+                    }
+                    @ {
+                        @emit_box(int);
+                    }
+                };
+            }
+            @ {
+                @emit_seed();
+            }
+            int main(void) {
+                generated_box_t box = {42};
+                return (&box).get() == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val result = CPlusTranspiler().transpile(source, "nested-expansion.cp").code
+
+        assertTrue("typedef struct generated_box_t" in result, result)
+        assertTrue("int generated_box__get(borrowed generated_box_t *self)" in result, result)
+        assertTrue("generated_box__get(&box)" in result, result)
+        assertTrue("@emit_seed" !in result, result)
+        assertTrue("@emit_box" !in result, result)
+        assertTrue("@type" !in result, result)
+        assertTrue("@box" !in result, result)
+
+        val directory = Files.createTempDirectory("cplus-generated-declarations")
+        try {
+            val sourcePath = directory.resolve("nested.cp")
+            val executable = directory.resolve("nested")
+            Files.writeString(sourcePath, source)
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf("run", sourcePath.toString(), "-o", executable.toString())
+            )
+            assertTrue(status == 0, errors.toString())
+            assertTrue(Files.isExecutable(executable), "TinyCC did not produce the generated-declaration executable")
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun mapsErrorsFromLaterComptimePassesBackToGeneratedSource() {
+        val source = """
+            @code @emit_failure() {
+                return @code {
+                    @missing_generator();
+                };
+            }
+            @ {
+                @emit_failure();
+            }
+        """.trimIndent()
+
+        val error = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile(source, "nested-error.cp")
+        }
+
+        assertTrue(error.message.orEmpty().contains("unknown comptime function @missing_generator"), error.message)
+        assertTrue(error.sourceSpan?.file == "nested-error.cp", error.sourceSpan.toString())
+        assertTrue(error.sourceSpan?.startLine == 3, error.sourceSpan.toString())
+    }
+
+    @Test
+    fun resolvesImportsAndScalarReferencesIntroducedByGeneratedFragments() {
+        val directory = Files.createTempDirectory("cplus-generated-import")
+        try {
+            val imported = directory.resolve("generated_constants.cp")
+            Files.writeString(imported, "int @generated_value = 73;\nint imported_runtime = 1;\n")
+            val source = """
+                @code @emit_import() {
+                    return @code {
+                        @import "generated_constants.cp";
+                    };
+                }
+                @ {
+                    @emit_import();
+                }
+                int result = @generated_value;
+            """.trimIndent()
+
+            val result = CPlusTranspiler().transpile(source, directory.resolve("main.cp").toString())
+
+            assertTrue("int result = 73;" in result.code, result.code)
+            assertTrue("imported_runtime = 1;" in result.code, result.code)
+            assertTrue("#line 1 \"${imported.toAbsolutePath()}\"" in result.code, result.code)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun reportsComptimeExpansionThatMakesNoProgress() {
+        val error = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile(
+                """
+                    @code @repeat() {
+                        return @code {
+                            @repeat();
+                        };
+                    }
+                    @ {
+                        @repeat();
+                    }
+                """.trimIndent()
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("comptime expansion made no progress"), error.message)
     }
 
     @Test
@@ -163,7 +307,7 @@ class TranspilerTest {
                         }
                     };
                 }
-                @list(int) int_list_t;
+                typedef @list(int) int_list_t;
                 int visit(borrowed int* item, size_t index) { return *item + (int)index; }
                 int main(void) {
                     int_list_t values;

@@ -3,6 +3,7 @@ package cplus
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.MessageDigest
 
 private val primitiveSizes = mapOf(
     "char" to 1L,
@@ -25,7 +26,12 @@ internal class ComptimeCompiler(
     private companion object {
         const val MAX_IMPORT_MODULES = 256
         const val MAX_COMPTIME_CALLS = 10_000
+        const val MAX_COMPTIME_PASSES = 128
         const val MAX_GENERATED_BYTES = 8 * 1024 * 1024
+        val mergingOperators = setOf(
+            "++", "--", "->", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||",
+            "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "##", ".."
+        )
     }
 
     private val modules = linkedMapOf<Path, ComptimeModuleResult>()
@@ -59,29 +65,163 @@ internal class ComptimeCompiler(
             }
             stack.addLast(key)
         }
+        try {
+            val environment = ComptimeEnvironment()
+            val importedModules = linkedMapOf<String, ComptimeModuleResult>()
+            val seenSources = mutableSetOf<String>()
+            var mapped = MappedText.identity(source)
 
-        val parsed = ComptimeParser(source).parse()
-        val imported = linkedMapOf<ComptimeImport, ComptimeModuleResult>()
-        parsed.items.filterIsInstance<ComptimeImport>().forEach { item ->
-            val importedSource = loadImport(source, item)
-            imported[item] = compileModule(importedSource, stack)
+            for (passIndex in 0 until MAX_COMPTIME_PASSES) {
+                val passSource = SourceFile(mapped.text, source.name, mapped)
+                val fingerprint = fingerprint(mapped.text)
+                val firstComptimeToken = firstComptimeToken(passSource)
+                if (!seenSources.add(fingerprint)) {
+                    throw syntax(
+                        "comptime expansion repeated a previous source state",
+                        passSource,
+                        firstComptimeToken ?: 0
+                    )
+                }
+
+                val parsed = logger.pass("comptime-pass-${passIndex + 1}-parse") {
+                    ComptimeParser(passSource).parse()
+                }
+                environment.registerRuntimeTypes(passSource)
+                parsed.items.filterIsInstance<ComptimeImport>().forEach { item ->
+                    val importedSource = loadImport(passSource, item)
+                    val imported = compileModule(importedSource, stack)
+                    if (imported.identity !in importedModules) {
+                        importedModules[imported.identity] = imported
+                        environment.merge(imported.environment, passSource, item.start)
+                    }
+                }
+
+                parsed.items.forEach(environment::register)
+
+                val next = logger.pass("comptime-pass-${passIndex + 1}-expand") {
+                    materializeModule(parsed, environment, deferUnknown = parsed.items.isNotEmpty())
+                }
+                if (next.text.toByteArray(Charsets.UTF_8).size > MAX_GENERATED_BYTES) {
+                    throw syntax(
+                        "comptime generated output exceeds $MAX_GENERATED_BYTES bytes",
+                        passSource,
+                        parsed.items.firstOrNull()?.start ?: 0
+                    )
+                }
+                if (fingerprint(next.text) == fingerprint(mapped.text)) {
+                    if (parsed.items.isEmpty()) {
+                        val finalSource = SourceFile(next.text, source.name, next)
+                        val unresolved = firstComptimeToken(finalSource)
+                        if (unresolved != null) {
+                            throw syntax(
+                                "unresolved comptime syntax remains after expansion",
+                                finalSource,
+                                unresolved
+                            )
+                        }
+                        val result = ComptimeModuleResult(
+                            environment,
+                            next,
+                            key?.toString() ?: "<input:${source.name}>",
+                            importedModules.values.toList()
+                        )
+                        if (key != null) modules[key] = result
+                        return result
+                    }
+                    // Retry deferred names strictly once expansion reaches a fixed point.
+                    materializeModule(parsed, environment, deferUnknown = false)
+                    throw syntax("comptime expansion made no progress", passSource, parsed.items.first().start)
+                }
+                mapped = next
+            }
+
+            val passSource = SourceFile(mapped.text, source.name, mapped)
+            throw syntax(
+                "comptime expansion exceeded the $MAX_COMPTIME_PASSES pass limit",
+                passSource,
+                firstComptimeToken(passSource) ?: 0
+            )
+        } finally {
+            if (key != null) stack.removeLast()
         }
-
-        val environment = ComptimeEnvironment()
-        environment.registerRuntimeTypes(source)
-        imported.values.distinctBy { it.identity }.forEach { environment.merge(it.environment, source, 0) }
-        parsed.items.forEach { item -> environment.register(item) }
-        val runtime = materializeModule(parsed, imported, environment)
-        val result = ComptimeModuleResult(
-            environment,
-            runtime,
-            key?.toString() ?: "<input:${source.name}>",
-            imported.values.distinctBy { it.identity }
-        )
-        if (key != null) modules[key] = result
-        if (key != null) stack.removeLast()
-        return result
     }
+
+    private fun fingerprint(text: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(normalizeForFingerprint(text).toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+
+    private fun normalizeForFingerprint(text: String): String {
+        val normalized = StringBuilder(text.length)
+        var index = 0
+        var pendingSpace = false
+        while (index < text.length) {
+            val character = text[index]
+            when {
+                character.isWhitespace() -> {
+                    pendingSpace = true
+                    index++
+                }
+                character == '/' && text.getOrNull(index + 1) == '/' -> {
+                    index += 2
+                    while (index < text.length && text[index] != '\n') index++
+                    pendingSpace = true
+                }
+                character == '/' && text.getOrNull(index + 1) == '*' -> {
+                    index += 2
+                    while (index + 1 < text.length && !(text[index] == '*' && text[index + 1] == '/')) index++
+                    index = (index + 2).coerceAtMost(text.length)
+                    pendingSpace = true
+                }
+                character == '"' || character == '\'' -> {
+                    index = appendQuotedToken(text, index, character, normalized, pendingSpace)
+                    pendingSpace = false
+                }
+                else -> {
+                    val previous = normalized.lastOrNull()
+                    if (pendingSpace && previous != null && needsTokenSeparator(previous, character)) {
+                        normalized.append(' ')
+                    }
+                    normalized.append(character)
+                    pendingSpace = false
+                    index++
+                }
+            }
+        }
+        return normalized.toString()
+    }
+
+    private fun appendQuotedToken(
+        source: String,
+        start: Int,
+        quote: Char,
+        output: StringBuilder,
+        pendingSpace: Boolean
+    ): Int {
+        var index = start
+        val previous = output.lastOrNull()
+        if (pendingSpace && previous != null && needsTokenSeparator(previous, quote)) output.append(' ')
+        output.append(quote)
+        index++
+        while (index < source.length) {
+            val character = source[index++]
+            output.append(character)
+            if (character == '\\' && index < source.length) {
+                output.append(source[index++])
+            } else if (character == quote) {
+                break
+            }
+        }
+        return index
+    }
+
+    private fun needsTokenSeparator(left: Char, right: Char): Boolean {
+        if ((left.isLetterOrDigit() || left == '_') && (right.isLetterOrDigit() || right == '_')) return true
+        return "$left$right" in mergingOperators ||
+            (right == '"' || right == '\'') && (left.isLetterOrDigit() || left == '_')
+    }
+
+    private fun firstComptimeToken(source: SourceFile): Int? =
+        SourceMasker.mask(source.text).indexOf('@').takeIf { it >= 0 }
 
     private fun loadImport(source: SourceFile, item: ComptimeImport): SourceFile {
         val sourceName = source.name
@@ -104,27 +244,34 @@ internal class ComptimeCompiler(
 
     private fun materializeModule(
         parsed: ParsedModule,
-        imported: Map<ComptimeImport, ComptimeModuleResult>,
-        environment: ComptimeEnvironment
+        environment: ComptimeEnvironment,
+        deferUnknown: Boolean
     ): MappedText {
         val output = MappedTextBuilder()
         val input = parsed.mapped
         var cursor = 0
         parsed.items.sortedBy { it.start }.forEach { item ->
-            output.append(resolveRuntimeReferences(input.slice(cursor, item.start), environment, cursor, parsed.source))
-            when (item) {
-                is ComptimeImport -> Unit
-                is ComptimeBlock -> output.append(evaluateBlock(item, environment))
-                is ComptimeInvocation -> output.append(evaluateInvocation(item, environment, item.start))
-                is ComptimeReference -> output.append(evaluateReference(item, environment, item.start))
-                is ComptimeStruct -> Unit
-                is ComptimeValue -> Unit
-                is ComptimeFunction -> Unit
-                is ComptimeTypeGenerator -> Unit
+            output.append(resolveRuntimeReferences(input.slice(cursor, item.start), environment, cursor, parsed.source, deferUnknown))
+            val replacement = try {
+                when (item) {
+                    is ComptimeImport,
+                    is ComptimeStruct,
+                    is ComptimeValue,
+                    is ComptimeFunction,
+                    is ComptimeTypeGenerator -> MappedText.generated("")
+                    is ComptimeBlock -> evaluateBlock(item, environment)
+                    is ComptimeInvocation -> evaluateInvocation(item, environment, item.start)
+                    is ComptimeReference -> evaluateReference(item, environment, item.start)
+                }
+            } catch (error: CPlusSyntaxException) {
+                if (!deferUnknown || !error.isUnknownComptimeLookup()) throw error
+                null
             }
+            if (replacement == null) output.append(input, item.start, item.end)
+            else output.append(replacement)
             cursor = item.end
         }
-        output.append(resolveRuntimeReferences(input.slice(cursor, input.text.length), environment, cursor, parsed.source))
+        output.append(resolveRuntimeReferences(input.slice(cursor, input.text.length), environment, cursor, parsed.source, deferUnknown))
         return output.build()
     }
 
@@ -193,6 +340,9 @@ internal class ComptimeCompiler(
     }
 
     private fun evaluateInvocation(item: ComptimeInvocation, environment: ComptimeEnvironment, offset: Int): MappedText {
+        if (environment.functions[item.name] is ComptimeTypeGenerator && item.alias != null && !item.typedef) {
+            throw syntax("file-scope type-generator invocations must use typedef", item.source, offset)
+        }
         val value = evaluateCall(item.name, item.arguments, environment, item.source, offset, item.alias)
         if (value !is CtEntity) throw syntax("comptime call @${item.name} did not return a runtime entity", item.source, offset)
         return value.text
@@ -208,7 +358,8 @@ internal class ComptimeCompiler(
         input: MappedText,
         environment: ComptimeEnvironment,
         offset: Int,
-        source: SourceFile
+        source: SourceFile,
+        deferUnknown: Boolean
     ): MappedText {
         if ('@' !in SourceMasker.mask(input.text)) return input
         val masked = SourceMasker.mask(input.text)
@@ -223,21 +374,30 @@ internal class ComptimeCompiler(
             val nameEnd = identifierEnd(masked, index + 1)
             val name = input.text.substring(index + 1, nameEnd)
             val open = Delimiters.skipWhitespace(masked, nameEnd)
-            val replacement = if (open < input.text.length && masked[open] == '(') {
-                val close = Delimiters.match(masked, open, '(', ')')
-                if (close < 0) throw syntax("unclosed comptime call @$name", source, offset + index)
-                val arguments = splitArguments(input.text.substring(open + 1, close))
-                val value = evaluateCall(name, arguments, environment, source, offset + index)
-                if (value !is CtScalar && value !is CtTypeValue) {
-                    throw syntax("comptime value @$name(...) is not scalar in runtime code", source, offset + index)
+            val isCall = open < input.text.length && masked[open] == '('
+            val callClose = if (isCall) Delimiters.match(masked, open, '(', ')') else -1
+            if (isCall && callClose < 0) throw syntax("unclosed comptime call @$name", source, offset + index)
+            val tokenEnd = if (isCall) callClose + 1 else nameEnd
+            val replacement = try {
+                if (isCall) {
+                    val close = callClose
+                    val arguments = splitArguments(input.text.substring(open + 1, close))
+                    val value = evaluateCall(name, arguments, environment, source, offset + index)
+                    if (value !is CtScalar && value !is CtTypeValue) {
+                        throw syntax("comptime value @$name(...) is not scalar in runtime code", source, offset + index)
+                    }
+                    Triple(index, close + 1, value.render())
+                } else {
+                    val value = resolveValue(name, environment, source, offset + index)
+                    if (value !is CtScalar && value !is CtTypeValue) {
+                        throw syntax("comptime entity @$name must be materialized in a comptime block", source, offset + index)
+                    }
+                    Triple(index, nameEnd, value.render())
                 }
-                Triple(index, close + 1, value.render())
-            } else {
-                val value = resolveValue(name, environment, source, offset + index)
-                if (value !is CtScalar && value !is CtTypeValue) {
-                    throw syntax("comptime entity @$name must be materialized in a comptime block", source, offset + index)
-                }
-                Triple(index, nameEnd, value.render())
+            } catch (error: CPlusSyntaxException) {
+                if (!deferUnknown || !error.isUnknownComptimeLookup()) throw error
+                index = tokenEnd
+                continue
             }
             output.append(input, cursor, replacement.first)
             output.appendGenerated(replacement.third, input.originAt(index))
@@ -359,6 +519,31 @@ internal class ComptimeCompiler(
         callSource: SourceFile,
         callOffset: Int
     ): CtValue {
+        if (function.resultKind == "code") {
+            val masked = SourceMasker.mask(function.body)
+            val returnStart = Regex("\\breturn\\s+").find(masked)?.range?.last?.plus(1)
+                ?: throw syntax("comptime function @${function.name} must return an @code fragment", function.source, function.start)
+            val codeMatch = Regex("@code\\s*\\{").find(masked, returnStart)
+                ?: throw syntax("comptime function @${function.name} must return @code { ... }", function.source, function.start)
+            val open = masked.indexOf('{', codeMatch.range.first)
+            val close = Delimiters.match(masked, open, '{', '}')
+            if (open < 0 || close < 0) {
+                throw syntax("unclosed @code fragment returned by @${function.name}", function.source, function.start)
+            }
+            val semicolon = skipWhitespace(masked, close + 1)
+            if (semicolon >= masked.length || masked[semicolon] != ';' || masked.substring(semicolon + 1).isNotBlank()) {
+                throw syntax("@code fragment must be the single returned entity", function.source, function.start)
+            }
+            val fragment = MappedText.identity(function.source).slice(
+                function.bodyStart + open + 1,
+                function.bodyStart + close
+            )
+            val replacements = function.parameters.mapIndexed { index, parameter ->
+                parameter.name to values[index].render()
+            }.toMap()
+            return CtEntity(substituteMapped(fragment, replacements, callSource, callOffset))
+        }
+
         if (function.resultKind == "variable" || function.resultKind == "function") {
             val returnStart = Regex("\\breturn\\s+").find(function.body)?.range?.last?.plus(1)
                 ?: throw syntax("comptime function @${function.name} must return an entity", function.source, function.start)
@@ -587,7 +772,8 @@ private data class ComptimeInvocation(
     override val end: Int,
     val name: String,
     val arguments: List<String>,
-    val alias: String?
+    val alias: String?,
+    val typedef: Boolean
 ) : ComptimeItem
 
 private data class ComptimeReference(
@@ -654,6 +840,7 @@ private class ComptimeParser(private val source: SourceFile) {
             tail.startsWith("@{") || tail.startsWith("@ {") -> parseBlock(start, at)
             tail.startsWith("@type") && keywordBoundary(tail, 5) -> parseTypeGenerator(start, at)
             isStructDeclaration(start, at) -> parseStruct(start, at)
+            isComptimeInvocationStatement(start, at) -> parseInvocation(start, at)
             isComptimeDeclaration(start, at) -> parseFunctionOrValue(start, at)
             isStandaloneInvocation(start, at) -> parseInvocation(start, at)
             isStandaloneReference(start, at) -> parseReference(start, at)
@@ -735,6 +922,7 @@ private class ComptimeParser(private val source: SourceFile) {
             val resultKind = when (declaredResultKind) {
                 "@var" -> "variable"
                 "@fn" -> "function"
+                "@code" -> "code"
                 else -> declaredResultKind
             }
             return ComptimeFunction(
@@ -778,7 +966,15 @@ private class ComptimeParser(private val source: SourceFile) {
         val end = skipWhitespace(masked, aliasEnd)
         if (end >= masked.length || masked[end] != ';') return null
         val alias = source.text.substring(suffixStart, aliasEnd).trim().takeIf { it.isNotEmpty() }
-        return ComptimeInvocation(source, start, end + 1, source.text.substring(nameStart, nameEnd), splitArguments(source.text.substring(open + 1, close)), alias)
+        return ComptimeInvocation(
+            source,
+            start,
+            end + 1,
+            source.text.substring(nameStart, nameEnd),
+            splitArguments(source.text.substring(open + 1, close)),
+            alias,
+            source.text.substring(start, at).trim() == "typedef"
+        )
     }
 
     private fun parseReference(start: Int, at: Int): ComptimeReference? {
@@ -794,6 +990,13 @@ private class ComptimeParser(private val source: SourceFile) {
 
     private fun isComptimeDeclaration(start: Int, at: Int): Boolean =
         source.text.substring(start, at).trim().isNotEmpty()
+
+    /**
+     * File-scope type-generator invocations use C's typedef declaration form;
+     * the called comptime function determines the generated entity kind.
+     */
+    private fun isComptimeInvocationStatement(start: Int, at: Int): Boolean =
+        source.text.substring(start, at).trim() == "typedef"
 
     private fun isStandaloneInvocation(start: Int, at: Int): Boolean = source.text.substring(start, at).trim().isEmpty()
 
@@ -1203,6 +1406,11 @@ private fun CtValue.asBoolean(): Boolean = when (this) {
 
 private fun syntax(message: String, source: SourceFile, offset: Int): CPlusSyntaxException =
     CPlusSyntaxException(message, source.span(offset))
+
+private fun CPlusSyntaxException.isUnknownComptimeLookup(): Boolean =
+    message?.startsWith("unknown comptime function @") == true ||
+        message?.startsWith("unknown comptime value @") == true ||
+        message?.startsWith("unknown comptime name ") == true
 
 private fun Path.extension(): String = fileName.toString().substringAfterLast('.', "")
 

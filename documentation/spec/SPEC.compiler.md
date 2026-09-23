@@ -24,7 +24,11 @@ Compilation logs each pass to stderr. The current passes are:
 ```text
 read-source
 comptime-resolve
-comptime-parse-import-evaluate
+comptime-pass-1-parse
+comptime-pass-1-expand
+comptime-pass-2-parse
+comptime-pass-2-expand
+...
 comptime-materialize
 collect-struct-types
 lower-method-calls
@@ -34,7 +38,7 @@ tcc-compile
 run-executable
 ```
 
-`comptime-parse-import-evaluate` is phase 1 of the compiler-plugin model: it parses the supported `@` forms, resolves imports, evaluates values/functions, and collects reflection metadata. `comptime-materialize` validates and emits mapped runtime C-plus entities. Phase 2 begins only after comptime invocations have been resolved; unsupported forms fail before method lowering and are never passed to the C parser. Typed AST decorators and general in-source plugin execution remain proposed.
+`comptime-pass-N-parse` parses the active comptime declarations for that expansion pass. `comptime-pass-N-expand` evaluates them and emits mapped C-plus; generated comptime declarations are discovered on a later pass. `comptime-materialize` returns the fully resolved mapped source after the parser finds no remaining comptime forms. Phase 2 begins only then; unsupported or unresolved forms fail before method lowering and are never passed to the C parser. Typed AST decorators and general in-source plugin execution remain proposed.
 
 Generated C includes `#line` directives. TinyCC diagnostics are normalized and mapped to the original C-plus filename and line where possible, including imported files and generated entities. Comptime parser/evaluator errors carry the originating source span and the CLI prints `file:line:column`. Transcoding and compiler failures return a non-zero exit code; CLI argument or unexpected processing errors return `2`.
 

@@ -109,9 +109,9 @@ typedef struct named_value_t {
 }
 
 // Each invocation materializes a distinct C-plus type and method family.
-@dynamic_list(named_value_t) named_value_list_t;
-@dynamic_list(cstring_t) string_list_t;
-@dynamic_list(int) int_list_t;
+typedef @dynamic_list(named_value_t) named_value_list_t;
+typedef @dynamic_list(cstring_t) string_list_t;
+typedef @dynamic_list(int) int_list_t;
 
 // Map an input list<T> into an initialized output list<R>. The list aliases
 // are explicit because comptime materializes named typedefs for each list.
