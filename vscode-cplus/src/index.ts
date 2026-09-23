@@ -17,6 +17,15 @@ export interface CPlusIndex {
     fieldsByType: Map<string, CPlusSymbol[]>;
     methodsByType: Map<string, CPlusSymbol[]>;
     variableTypes: Map<string, string>;
+    pointerVariables: Set<string>;
+}
+
+export interface CPlusMemberContext {
+    receiver: string;
+    type: string;
+    operator: "." | "->";
+    isPointer: boolean;
+    isStatic: boolean;
 }
 
 function cleanName(name: string): string {
@@ -142,7 +151,8 @@ export function indexText(text: string): CPlusIndex {
         byName: new Map(),
         fieldsByType: new Map(),
         methodsByType: new Map(),
-        variableTypes: new Map()
+        variableTypes: new Map(),
+        pointerVariables: new Set()
     };
     const structRanges: Array<[number, number]> = [];
     const structPattern = /typedef\s+struct\s+(@?[A-Za-z_]\w*)?\s*\{/g;
@@ -238,15 +248,18 @@ export function indexText(text: string): CPlusIndex {
         });
     }
 
-    const variablePattern = /\b([A-Za-z_]\w*_t)\s+([A-Za-z_]\w*)\s*(?:[;=])/g;
+    const variablePattern = /\b([A-Za-z_]\w*_t)\s*(\*+)?\s*([A-Za-z_]\w*)\s*(?=[;=,)\[])/g;
     for (const match of text.matchAll(variablePattern)) {
-        index.variableTypes.set(match[2], match[1]);
+        const variable = match[3];
+        index.variableTypes.set(variable, match[1]);
+        if (match[2]) index.pointerVariables.add(variable);
+        else index.pointerVariables.delete(variable);
         add(index, {
-            name: match[2],
+            name: variable,
             kind: "variable",
-            detail: match[1] + " " + match[2],
-            start: (match.index ?? 0) + match[0].lastIndexOf(match[2]),
-            end: (match.index ?? 0) + match[0].lastIndexOf(match[2]) + match[2].length
+            detail: match[1] + (match[2] ?? "") + " " + variable,
+            start: (match.index ?? 0) + match[0].lastIndexOf(variable),
+            end: (match.index ?? 0) + match[0].lastIndexOf(variable) + variable.length
         });
     }
 
@@ -263,4 +276,22 @@ export function indexText(text: string): CPlusIndex {
         });
     }
     return index;
+}
+
+export function memberContext(index: CPlusIndex, linePrefix: string): CPlusMemberContext | undefined {
+    const match = /([A-Za-z_]\w*)\s*(\.|->)\s*[A-Za-z_]*$/.exec(linePrefix);
+    if (!match) return undefined;
+
+    const receiver = match[1];
+    const operator = match[2] as "." | "->";
+    const type = index.variableTypes.get(receiver);
+    if (type) {
+        const isPointer = index.pointerVariables.has(receiver);
+        if ((isPointer && operator !== "->") || (!isPointer && operator !== ".")) return undefined;
+        return { receiver, type, operator, isPointer, isStatic: false };
+    }
+    if (receiver.endsWith("_t") && operator === ".") {
+        return { receiver, type: receiver, operator, isPointer: false, isStatic: true };
+    }
+    return undefined;
 }

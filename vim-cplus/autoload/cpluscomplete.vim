@@ -16,7 +16,7 @@ function! cpluscomplete#Complete(findstart, base) abort
   let seen = {}
   let AddCandidate = {word, menu, kind -> s:Add(candidates, seen, word, menu, kind)}
 
-  if line =~# '\.\a\w*$'
+  if line =~# '\%(\.\|->\)\s*\w*$'
     for field in s:Fields()
       call AddCandidate(field, '[C-plus field]', 'f')
     endfor

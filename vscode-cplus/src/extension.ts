@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CPlusIndex, CPlusSymbol, indexText } from "./index";
+import { CPlusSymbol, indexText, memberContext } from "./index";
 
 const annotations = ["pub", "priv", "mut", "borrowed", "owned", "stat"];
 const comptimeKeywords = ["import", "if", "else", "for", "type", "var", "fn", "test"];
@@ -41,13 +41,6 @@ function rangeFor(document: vscode.TextDocument, start: number, end: number): vs
     return new vscode.Range(document.positionAt(start), document.positionAt(end));
 }
 
-function ownerFor(index: CPlusIndex, document: vscode.TextDocument, position: vscode.Position): string | undefined {
-    const line = document.lineAt(position.line).text.slice(0, position.character);
-    const receiver = /([A-Za-z_]\w*)\s*\.\s*[A-Za-z_]*$/.exec(line)?.[1];
-    if (!receiver) return undefined;
-    return index.variableTypes.get(receiver) ?? (receiver.endsWith("_t") ? receiver : undefined);
-}
-
 class CPlusCompletionProvider implements vscode.CompletionItemProvider {
     provideCompletionItems(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionList {
         const index = indexText(document.getText());
@@ -60,12 +53,15 @@ class CPlusCompletionProvider implements vscode.CompletionItemProvider {
             items.push(item);
         };
 
-        const owner = ownerFor(index, document, position);
-        if (owner) {
-            for (const field of index.fieldsByType.get(owner) ?? []) {
-                addItem(field.name, vscode.CompletionItemKind.Field, field.detail);
+        const context = memberContext(index, line);
+        if (context) {
+            if (!context.isStatic) {
+                for (const field of index.fieldsByType.get(context.type) ?? []) {
+                    addItem(field.name, vscode.CompletionItemKind.Field, field.detail);
+                }
             }
-            for (const method of index.methodsByType.get(owner) ?? []) {
+            for (const method of index.methodsByType.get(context.type) ?? []) {
+                if (method.isStatic !== context.isStatic) continue;
                 addItem(method.name, vscode.CompletionItemKind.Method, method.detail + (method.isStatic ? " (static)" : ""));
             }
             return new vscode.CompletionList(items, false);
@@ -271,7 +267,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const diagnostics = vscode.languages.createDiagnosticCollection("cplus");
     context.subscriptions.push(
         diagnostics,
-        vscode.languages.registerCompletionItemProvider("cplus", new CPlusCompletionProvider(), ".", "@"),
+        vscode.languages.registerCompletionItemProvider("cplus", new CPlusCompletionProvider(), ".", ">", "@"),
         vscode.languages.registerHoverProvider("cplus", new CPlusHoverProvider()),
         vscode.languages.registerDefinitionProvider("cplus", new CPlusDefinitionProvider()),
         vscode.languages.registerReferenceProvider("cplus", new CPlusReferenceProvider()),
