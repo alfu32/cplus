@@ -220,8 +220,10 @@ internal class ComptimeCompiler(
             (right == '"' || right == '\'') && (left.isLetterOrDigit() || left == '_')
     }
 
-    private fun firstComptimeToken(source: SourceFile): Int? =
-        SourceMasker.mask(source.text).indexOf('@').takeIf { it >= 0 }
+    private fun firstComptimeToken(source: SourceFile): Int? {
+        val masked = SourceMasker.mask(source.text)
+        return masked.indices.firstOrNull { masked[it] == '@' || isKeywordAt(masked, it, "comptime") }
+    }
 
     private fun loadImport(source: SourceFile, item: ComptimeImport): SourceFile {
         val sourceName = source.name
@@ -340,8 +342,17 @@ internal class ComptimeCompiler(
     }
 
     private fun evaluateInvocation(item: ComptimeInvocation, environment: ComptimeEnvironment, offset: Int): MappedText {
-        if (environment.functions[item.name] is ComptimeTypeGenerator && item.alias != null && !item.typedef) {
-            throw syntax("file-scope type-generator invocations must use typedef", item.source, offset)
+        val function = environment.functions[item.name]
+        val producesType = function is ComptimeTypeGenerator ||
+            function is ComptimeFunction && function.resultKind == "type"
+        if (producesType && (!item.typedef || item.alias == null)) {
+            throw syntax("type generators must use typedef, e.g. 'comptime typedef name(args) alias;'", item.source, offset)
+        }
+        if (function != null && !producesType && item.typedef) {
+            throw syntax("comptime typedef requires a type-producing comptime function", item.source, offset)
+        }
+        if (function != null && !item.typedef && item.alias != null) {
+            throw syntax("a comptime invocation alias requires the typedef form", item.source, offset)
         }
         val value = evaluateCall(item.name, item.arguments, environment, item.source, offset, item.alias)
         if (value !is CtEntity) throw syntax("comptime call @${item.name} did not return a runtime entity", item.source, offset)
@@ -361,12 +372,33 @@ internal class ComptimeCompiler(
         source: SourceFile,
         deferUnknown: Boolean
     ): MappedText {
-        if ('@' !in SourceMasker.mask(input.text)) return input
         val masked = SourceMasker.mask(input.text)
+        if ('@' !in masked && !masked.indices.any { isKeywordAt(masked, it, "comptime") }) return input
         val output = MappedTextBuilder()
         var cursor = 0
         var index = 0
         while (index < input.text.length) {
+            if (isKeywordAt(masked, index, "comptime")) {
+                val expressionStart = skipWhitespace(masked, index + "comptime".length)
+                val expressionEnd = inlineExpressionEnd(masked, expressionStart)
+                    ?: throw syntax("expected a scalar expression after comptime", source, offset + index)
+                val expression = input.text.substring(expressionStart, expressionEnd)
+                val value = try {
+                    evaluateExpression(expression, environment, source, offset + expressionStart)
+                } catch (error: CPlusSyntaxException) {
+                    if (!deferUnknown || !error.isUnknownComptimeLookup()) throw error
+                    index = expressionEnd
+                    continue
+                }
+                if (value !is CtScalar && value !is CtTypeValue) {
+                    throw syntax("inline comptime expression must produce a scalar value", source, offset + index)
+                }
+                output.append(input, cursor, index)
+                output.appendGenerated(value.render(), input.originAt(index))
+                cursor = expressionEnd
+                index = cursor
+                continue
+            }
             if (masked[index] != '@' || index + 1 >= input.text.length || !input.text[index + 1].isIdentifierStart()) {
                 index++
                 continue
@@ -408,6 +440,28 @@ internal class ComptimeCompiler(
         return output.build()
     }
 
+    private fun inlineExpressionEnd(masked: String, start: Int): Int? {
+        var expressionStart = start
+        if (expressionStart < masked.length && masked[expressionStart] == '@') expressionStart++
+        if (expressionStart >= masked.length || !masked[expressionStart].isIdentifierStart()) return null
+        var parentheses = 0
+        var brackets = 0
+        var cursor = start
+        var end = start
+        while (cursor < masked.length) {
+            when (masked[cursor]) {
+                '(' -> parentheses++
+                ')' -> if (parentheses == 0) return end else parentheses--
+                '[' -> brackets++
+                ']' -> if (brackets == 0) return end else brackets--
+                ',', ';', '}' -> if (parentheses == 0 && brackets == 0) return end
+            }
+            if (!masked[cursor].isWhitespace()) end = cursor + 1
+            cursor++
+        }
+        return end.takeIf { it > start }
+    }
+
     private fun evaluateCall(
         name: String,
         arguments: List<String>,
@@ -425,7 +479,14 @@ internal class ComptimeCompiler(
         val values = arguments.map { evaluateExpression(it, environment, source, offset) }
         val local = environment.withAll(function.parameters.map { it.name }.zip(values))
         return when (function) {
-            is ComptimeFunction -> evaluateFunction(function, local, values, source, offset)
+            is ComptimeFunction -> {
+                val result = evaluateFunction(function, local, values, source, offset)
+                if (function.resultKind == "type") {
+                    val alias = requestedAlias
+                        ?: throw syntax("type generator @${function.name} requires a typedef alias", source, offset)
+                    materializeCodeType(result, alias, source, offset)
+                } else result
+            }
             is ComptimeTypeGenerator -> instantiateType(function, local, values, source, offset, requestedAlias)
         }
     }
@@ -445,7 +506,12 @@ internal class ComptimeCompiler(
         }
         val local = environment.withAll(function.parameters.map { it.name }.zip(values))
         return when (function) {
-            is ComptimeFunction -> evaluateFunction(function, local, values, source, offset)
+            is ComptimeFunction -> {
+                if (function.resultKind == "type") {
+                    throw syntax("type comptime function @${function.name} must be invoked with a typedef alias", source, offset)
+                }
+                evaluateFunction(function, local, values, source, offset)
+            }
             is ComptimeTypeGenerator -> instantiateType(function, local, values, source, offset)
         }
     }
@@ -519,7 +585,7 @@ internal class ComptimeCompiler(
         callSource: SourceFile,
         callOffset: Int
     ): CtValue {
-        if (function.resultKind == "code") {
+        if (function.resultKind == "code" || function.resultKind == "type") {
             val masked = SourceMasker.mask(function.body)
             val returnStart = Regex("\\breturn\\s+").find(masked)?.range?.last?.plus(1)
                 ?: throw syntax("comptime function @${function.name} must return an @code fragment", function.source, function.start)
@@ -541,7 +607,19 @@ internal class ComptimeCompiler(
             val replacements = function.parameters.mapIndexed { index, parameter ->
                 parameter.name to values[index].render()
             }.toMap()
-            return CtEntity(substituteMapped(fragment, replacements, callSource, callOffset))
+            val substituted = substituteMapped(
+                fragment,
+                replacements,
+                callSource,
+                callOffset,
+                bareIdentifiers = function.parameters.filter { it.type == "type" }.map { it.name }.toSet()
+            )
+            val materialized = if (function.resultKind == "type") {
+                interpolateIdentifierCalls(substituted, environment, callSource, callOffset)
+            } else {
+                substituted
+            }
+            return CtEntity(materialized)
         }
 
         if (function.resultKind == "variable" || function.resultKind == "function") {
@@ -616,12 +694,100 @@ internal class ComptimeCompiler(
         return CtEntity(mapped.build())
     }
 
+    private fun materializeCodeType(
+        value: CtValue,
+        alias: String,
+        callSource: SourceFile,
+        callOffset: Int
+    ): CtEntity {
+        val entity = value as? CtEntity
+            ?: throw syntax("type comptime function must return an @code struct fragment", callSource, callOffset)
+        if (!alias.matches(Regex("[A-Za-z_]\\w*"))) {
+            throw syntax("generated type alias '$alias' is not a valid C identifier", callSource, callOffset)
+        }
+        val masked = SourceMasker.mask(entity.text.text)
+        val structStart = masked.indexOfFirst { !it.isWhitespace() }
+        if (structStart < 0 || !masked.startsWith("struct", structStart) ||
+            (structStart + 6 < masked.length && masked[structStart + 6].isIdentifierPart())
+        ) {
+            throw syntax("type comptime function must return one named struct in @code", callSource, callOffset)
+        }
+        val tagStart = skipWhitespace(masked, structStart + 6)
+        val tagEnd = identifierEnd(masked, tagStart)
+        if (tagEnd == tagStart) {
+            throw syntax("type comptime function's struct result must have a tag", callSource, callOffset)
+        }
+        val open = skipWhitespace(masked, tagEnd)
+        if (open >= masked.length || masked[open] != '{') {
+            throw syntax("type comptime function must return one named struct in @code", callSource, callOffset)
+        }
+        val close = Delimiters.match(masked, open, '{', '}')
+        if (close < 0) throw syntax("unclosed generated struct", callSource, callOffset)
+        val tail = masked.substring(close + 1).trim().removeSuffix(";").trim()
+        if (tail.isNotEmpty()) {
+            throw syntax("type comptime function must return exactly one struct definition", callSource, callOffset)
+        }
+
+        val output = MappedTextBuilder()
+        val origin = SourceOrigin(callSource, callOffset)
+        output.appendGenerated("typedef ", origin)
+        output.append(entity.text, structStart, close + 1)
+        output.appendGenerated(" $alias;\n", origin)
+        return CtEntity(output.build())
+    }
+
+    private fun interpolateIdentifierCalls(
+        source: MappedText,
+        environment: ComptimeEnvironment,
+        callSource: SourceFile,
+        callOffset: Int
+    ): MappedText {
+        val masked = SourceMasker.mask(source.text)
+        val output = MappedTextBuilder()
+        var cursor = 0
+        var index = 0
+        while (index < source.text.length) {
+            if (masked[index] != '@' || index + 1 >= masked.length || !masked[index + 1].isIdentifierStart()) {
+                index++
+                continue
+            }
+            val nameEnd = identifierEnd(masked, index + 1)
+            val open = skipWhitespace(masked, nameEnd)
+            if (open >= masked.length || masked[open] != '(') {
+                index = nameEnd
+                continue
+            }
+            val close = Delimiters.match(masked, open, '(', ')')
+            if (close < 0) throw syntax("unclosed comptime interpolation", callSource, callOffset)
+            val touchesIdentifier = index > 0 && masked[index - 1].isIdentifierPart() ||
+                close + 1 < masked.length && masked[close + 1].isIdentifierPart()
+            if (!touchesIdentifier) {
+                index = close + 1
+                continue
+            }
+            val expression = source.text.substring(index, close + 1)
+            val value = evaluateExpression(expression, environment, callSource, callOffset)
+            val text = (value as? CtString)?.value
+                ?: throw syntax("identifier interpolation must return a comptime string", callSource, callOffset)
+            if (!text.matches(Regex("[A-Za-z_]\\w*"))) {
+                throw syntax("identifier interpolation returned '$text', which is not a C identifier", callSource, callOffset)
+            }
+            output.append(source, cursor, index)
+            output.appendGenerated(text, SourceOrigin(callSource, callOffset))
+            cursor = close + 1
+            index = cursor
+        }
+        output.append(source, cursor, source.text.length)
+        return output.build()
+    }
+
     private fun substituteMapped(
         source: MappedText,
         replacements: Map<String, String>,
         callSource: SourceFile,
         callOffset: Int,
-        replaceBareIdentifiers: Boolean = false
+        replaceBareIdentifiers: Boolean = false,
+        bareIdentifiers: Set<String> = emptySet()
     ): MappedText {
         val masked = SourceMasker.mask(source.text)
         val output = MappedTextBuilder()
@@ -639,10 +805,10 @@ internal class ComptimeCompiler(
                     index = end
                     continue
                 }
-            } else if (replaceBareIdentifiers && masked[index].isIdentifierStart()) {
+            } else if (masked[index].isIdentifierStart()) {
                 val end = identifierEnd(masked, index)
                 val name = source.text.substring(index, end)
-                val replacement = replacements[name]
+                val replacement = replacements[name].takeIf { replaceBareIdentifiers || name in bareIdentifiers }
                 if (replacement != null) {
                     output.append(source, cursor, index)
                     output.appendGenerated(replacement, SourceOrigin(callSource, callOffset))
@@ -800,6 +966,21 @@ private class ComptimeParser(private val source: SourceFile) {
         var parens = 0
         var brackets = 0
         while (index < source.text.length) {
+            if (braces == 0 && parens == 0 && brackets == 0 && isKeywordAt(masked, index, "comptime")) {
+                val start = itemStart(boundary, index)
+                if (start == index) {
+                    val item = parseComptime(start, index)
+                    if (item != null) {
+                        if (items.lastOrNull()?.end ?: -1 > item.start) {
+                            throw syntax("overlapping comptime declarations", source, index)
+                        }
+                        items += item
+                        index = item.end
+                        boundary = index
+                        continue
+                    }
+                }
+            }
             if (braces == 0 && parens == 0 && brackets == 0 && masked[index] == '@') {
                 val start = itemStart(boundary, index)
                 val item = parseAt(start, index)
@@ -815,7 +996,10 @@ private class ComptimeParser(private val source: SourceFile) {
             }
             when (masked[index]) {
                 '{' -> braces++
-                '}' -> if (braces > 0) braces--
+                '}' -> if (braces > 0) {
+                    braces--
+                    if (braces == 0 && parens == 0 && brackets == 0) boundary = index + 1
+                }
                 '(' -> parens++
                 ')' -> if (parens > 0) parens--
                 '[' -> brackets++
@@ -825,6 +1009,64 @@ private class ComptimeParser(private val source: SourceFile) {
             index++
         }
         return ParsedModule(source, MappedText.identity(source), items)
+    }
+
+    private fun parseComptime(start: Int, at: Int): ComptimeItem? {
+        val afterKeyword = skipWhitespace(masked, at + "comptime".length)
+        if (afterKeyword >= masked.length) throw syntax("incomplete comptime construct", source, at)
+        if (masked[afterKeyword] == '{') return parseBlockAt(start, afterKeyword)
+        if (isKeywordAt(masked, afterKeyword, "import")) return parseComptimeImport(start, afterKeyword)
+
+        if (isKeywordAt(masked, afterKeyword, "typedef")) {
+            val nameStart = skipWhitespace(masked, afterKeyword + "typedef".length)
+            return parseInvocationAt(start, nameStart, typedef = true)
+                ?: throw syntax("malformed comptime typedef invocation", source, at)
+        }
+
+        val firstNameEnd = identifierEnd(masked, afterKeyword)
+        if (firstNameEnd == afterKeyword) throw syntax("expected comptime declaration or invocation", source, at)
+        val afterFirstName = skipWhitespace(masked, firstNameEnd)
+        if (afterFirstName < masked.length && masked[afterFirstName] == '(') {
+            return parseInvocationAt(start, afterKeyword, typedef = false)
+                ?: throw syntax("malformed comptime invocation", source, at)
+        }
+
+        val equals = masked.indexOf('=', afterKeyword).takeIf { it >= 0 }
+        val boundaryEnd = listOfNotNull(
+            equals,
+            masked.indexOf(';', afterKeyword).takeIf { it >= 0 },
+            masked.indexOf('{', afterKeyword).takeIf { it >= 0 }
+        ).minOrNull() ?: masked.length
+        val sigil = masked.indexOf('@', afterKeyword).takeIf { it in afterKeyword until boundaryEnd }
+        if (sigil != null) return parseFunctionOrValue(start, sigil)
+
+        return parseComptimeValue(start, afterKeyword)
+    }
+
+    private fun parseComptimeImport(start: Int, importAt: Int): ComptimeImport {
+        val end = masked.indexOf(';', importAt).takeIf { it >= 0 }?.plus(1)
+            ?: throw syntax("comptime import requires a semicolon", source, importAt)
+        val text = source.text.substring(importAt, end)
+        val match = Regex("import\\s+\"([^\"]+)\"\\s*;").matchEntire(text)
+            ?: throw syntax("malformed comptime import; expected comptime import \"file.cp\";", source, importAt)
+        return ComptimeImport(source, start, end, match.groupValues[1])
+    }
+
+    private fun parseComptimeValue(start: Int, declarationStart: Int): ComptimeValue {
+        val semicolon = masked.indexOf(';', declarationStart)
+        if (semicolon < 0) throw syntax("comptime value declaration requires a semicolon", source, declarationStart)
+        val equals = masked.indexOf('=', declarationStart).takeIf { it in declarationStart until semicolon }
+        val lhsEnd = equals ?: semicolon
+        val lhs = source.text.substring(declarationStart, lhsEnd).trim()
+        val match = Regex("(.+?)\\s+@?([A-Za-z_]\\w*)").matchEntire(lhs)
+            ?: throw syntax("expected 'comptime type name = expression;'", source, declarationStart)
+        val expression = if (equals == null) "0" else source.text.substring(equals + 1, semicolon).trim()
+        val expressionStart = if (equals == null) semicolon else {
+            var cursor = equals + 1
+            while (cursor < semicolon && masked[cursor].isWhitespace()) cursor++
+            cursor
+        }
+        return ComptimeValue(source, start, semicolon + 1, match.groupValues[2], expression, expressionStart)
     }
 
     private fun itemStart(boundary: Int, at: Int): Int {
@@ -859,8 +1101,12 @@ private class ComptimeParser(private val source: SourceFile) {
 
     private fun parseBlock(start: Int, at: Int): ComptimeBlock {
         val open = masked.indexOf('{', at)
+        return parseBlockAt(start, open)
+    }
+
+    private fun parseBlockAt(start: Int, open: Int): ComptimeBlock {
         val close = Delimiters.match(masked, open, '{', '}')
-        if (close < 0) throw syntax("unclosed comptime block", source, at)
+        if (close < 0) throw syntax("unclosed comptime block", source, open)
         return ComptimeBlock(source, start, close + 1, open + 1, close)
     }
 
@@ -954,11 +1200,20 @@ private class ComptimeParser(private val source: SourceFile) {
 
     private fun parseInvocation(start: Int, at: Int): ComptimeInvocation? {
         val nameStart = at + 1
+        return parseInvocationAt(
+            start,
+            nameStart,
+            typedef = source.text.substring(start, at).trim() == "typedef"
+        )
+    }
+
+    private fun parseInvocationAt(start: Int, rawNameStart: Int, typedef: Boolean): ComptimeInvocation? {
+        val nameStart = if (rawNameStart < masked.length && masked[rawNameStart] == '@') rawNameStart + 1 else rawNameStart
         val nameEnd = identifierEnd(masked, nameStart)
         val open = skipWhitespace(masked, nameEnd)
         if (nameEnd == nameStart || open >= masked.length || masked[open] != '(') return null
         val close = Delimiters.match(masked, open, '(', ')')
-        if (close < 0) throw syntax("unclosed comptime call", source, at)
+        if (close < 0) throw syntax("unclosed comptime call", source, nameStart)
         val suffixStart = skipWhitespace(masked, close + 1)
         val aliasEnd = if (suffixStart < masked.length && masked[suffixStart] != ';') {
             identifierEnd(masked, suffixStart)
@@ -973,7 +1228,7 @@ private class ComptimeParser(private val source: SourceFile) {
             source.text.substring(nameStart, nameEnd),
             splitArguments(source.text.substring(open + 1, close)),
             alias,
-            source.text.substring(start, at).trim() == "typedef"
+            typedef
         )
     }
 
@@ -1005,25 +1260,31 @@ private class ComptimeParser(private val source: SourceFile) {
     private fun parseParameters(text: String, offset: Int): List<ComptimeParameter> =
         splitArguments(text).filter { it.isNotBlank() }.map { parameter ->
             val trimmed = parameter.trim()
-            val typeParameter = Regex("@type\\s+([A-Za-z_]\\w*)\\s*").matchEntire(trimmed)
+            val typeParameter = Regex("(?:@type|type)\\s+([A-Za-z_]\\w*)\\s*").matchEntire(trimmed)
             if (typeParameter != null) {
                 ComptimeParameter(typeParameter.groupValues[1], "type")
             } else {
-                val match = Regex("(.+?)@([A-Za-z_]\\w*)\\s*$").matchEntire(trimmed)
-                    ?: throw syntax("comptime parameters must mark their name with @", source, offset)
-                ComptimeParameter(match.groupValues[2], match.groupValues[1].trim())
+                val sigiled = Regex("(.+?)@([A-Za-z_]\\w*)\\s*$").matchEntire(trimmed)
+                if (sigiled != null) {
+                    ComptimeParameter(sigiled.groupValues[2], sigiled.groupValues[1].trim())
+                } else {
+                    val ordinary = Regex("(.+?)\\s+([A-Za-z_]\\w*)\\s*$").matchEntire(trimmed)
+                        ?: throw syntax("comptime parameters must be typed names", source, offset)
+                    ComptimeParameter(ordinary.groupValues[2], ordinary.groupValues[1].trim())
+                }
             }
         }
 
     private fun parseTypeParameters(text: String, offset: Int): List<ComptimeParameter> =
         splitArguments(text).filter { it.isNotBlank() }.map { parameter ->
-            val match = Regex("@type\\s+([A-Za-z_]\\w*)\\s*").matchEntire(parameter.trim())
-                ?: throw syntax("type generator parameters must use @type T", source, offset)
+            val match = Regex("(?:@type|type)\\s+([A-Za-z_]\\w*)\\s*").matchEntire(parameter.trim())
+                ?: throw syntax("type generator parameters must use 'type T'", source, offset)
             ComptimeParameter(match.groupValues[1], "type")
         }
 
     private fun keywordBoundary(text: String, length: Int): Boolean =
         text.length == length || !text[length].isIdentifierPart()
+
 }
 
 private class ComptimeEnvironment(
@@ -1406,6 +1667,12 @@ private fun CtValue.asBoolean(): Boolean = when (this) {
 
 private fun syntax(message: String, source: SourceFile, offset: Int): CPlusSyntaxException =
     CPlusSyntaxException(message, source.span(offset))
+
+private fun isKeywordAt(text: String, offset: Int, keyword: String): Boolean =
+    offset >= 0 && offset + keyword.length <= text.length &&
+        text.startsWith(keyword, offset) &&
+        (offset == 0 || !text[offset - 1].isIdentifierPart()) &&
+        (offset + keyword.length == text.length || !text[offset + keyword.length].isIdentifierPart())
 
 private fun CPlusSyntaxException.isUnknownComptimeLookup(): Boolean =
     message?.startsWith("unknown comptime function @") == true ||

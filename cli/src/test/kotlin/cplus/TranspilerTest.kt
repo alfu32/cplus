@@ -7,6 +7,184 @@ import java.nio.file.Files
 
 class TranspilerTest {
     @Test
+    fun supportsKeywordLedComptimeDeclarationsAndInlineScalarEvaluation() {
+        val result = CPlusTranspiler().transpile(
+            """
+                int prior_function(void) { return 0; }
+                int answer = 5;
+                comptime int compile_answer = 21;
+                comptime int next_answer = compile_answer + 1;
+                comptime int @twice(int value) {
+                    return value * 2;
+                }
+                int ordinary_answer = answer;
+                int explicit_answer = comptime compile_answer;
+                int compile_time_initialized_answer = comptime next_answer;
+                int computed_answer = comptime twice(compile_answer) + 1;
+            """.trimIndent()
+        ).code
+
+        assertTrue("int ordinary_answer = answer;" in result, result)
+        assertTrue("int explicit_answer = 21;" in result, result)
+        assertTrue("int compile_time_initialized_answer = 22;" in result, result)
+        assertTrue("int computed_answer = 43;" in result, result)
+        assertTrue("comptime" !in result, result)
+    }
+
+    @Test
+    fun generatesNamedTypesWithValidatedIdentifierInterpolation() {
+        val source = """
+            comptime string @typename(type T) {
+                return T.name;
+            }
+            comptime type @list(type T) {
+                return @code {
+                    struct list_of_@typename(T) {
+                        T buffer[100];
+                        pub T first(borrowed *self) {
+                            return self->buffer[0];
+                        }
+                    };
+                };
+            }
+            comptime typedef list(int) int_list_t;
+            int main(void) {
+                int_list_t values = {.buffer = {17}};
+                return (&values).first() == 17 ? 0 : 1;
+            }
+        """.trimIndent()
+
+        val result = CPlusTranspiler().transpile(source, "keyword-type.cp").code
+        assertTrue("typedef struct int_list_t" in result, result)
+        assertTrue("} int_list_t;" in result, result)
+        assertTrue("int int_list__first(borrowed int_list_t *self)" in result, result)
+        assertTrue("int_list__first(&values)" in result, result)
+        assertTrue("@typename" !in result, result)
+
+        val directory = Files.createTempDirectory("cplus-keyword-type")
+        try {
+            val sourcePath = directory.resolve("list.cp")
+            val executable = directory.resolve("list")
+            Files.writeString(sourcePath, source)
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf("run", sourcePath.toString(), "-o", executable.toString())
+            )
+            assertTrue(status == 0, errors.toString())
+            assertTrue(Files.isExecutable(executable), "TinyCC did not produce the named-type executable")
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun rejectsInvalidIdentifierInterpolationAtTheGeneratorCall() {
+        val source = """
+            comptime string @bad_name(type T) {
+                return "not-a-name";
+            }
+            comptime type @box(type T) {
+                return @code {
+                    struct box_@bad_name(T) { T value; };
+                };
+            }
+            comptime typedef box(int) box_t;
+        """.trimIndent()
+
+        val error = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile(source, "bad-splice.cp")
+        }
+        assertTrue(error.message.orEmpty().contains("not a C identifier"), error.message)
+        assertTrue(error.sourceSpan?.file == "bad-splice.cp", error.sourceSpan.toString())
+        assertTrue(error.sourceSpan?.startLine == 9, error.sourceSpan.toString())
+    }
+
+    @Test
+    fun expandsKeywordLedCodeFragmentsOnLaterPasses() {
+        val result = CPlusTranspiler().transpile(
+            """
+                comptime string @typename(type T) {
+                    return T.name;
+                }
+                comptime code @emit_value() {
+                    return @code {
+                        comptime int late_value = 73;
+                        comptime code @emit_box(type T) {
+                            return @code {
+                                comptime type @late_box(type U) {
+                                    return @code {
+                                        struct late_box_@typename(U) { U item; };
+                                    };
+                                }
+                                comptime typedef late_box(T) late_box_t;
+                            };
+                        }
+                        comptime {
+                            emit_box(int);
+                        }
+                    };
+                }
+                comptime emit_value();
+                int generated_value = comptime late_value;
+                late_box_t generated_box = {.item = 9};
+                comptime variable @emit_block_value(int @value) {
+                    return int generated_from_block = @value;
+                }
+                comptime {
+                    emit_block_value(11);
+                }
+            """.trimIndent()
+        ).code
+
+        assertTrue("int generated_value = 73;" in result, result)
+        assertTrue("typedef struct late_box_int" in result, result)
+        assertTrue("late_box_t generated_box" in result, result)
+        assertTrue("int generated_from_block = 11;" in result, result)
+        assertTrue("late_value" !in result, result)
+        assertTrue("comptime" !in result, result)
+    }
+
+    @Test
+    fun mapsKeywordLedComptimeErrorsFromGeneratedFragments() {
+        val source = """
+            comptime code @emit_error() {
+                return @code {
+                    int generated = comptime missing_value;
+                };
+            }
+            comptime emit_error();
+        """.trimIndent()
+
+        val error = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile(source, "keyword-mapped-error.cp")
+        }
+
+        assertTrue(error.message.orEmpty().contains("unknown comptime name missing_value"), error.message)
+        assertTrue(error.sourceSpan?.file == "keyword-mapped-error.cp", error.sourceSpan.toString())
+        assertTrue(error.sourceSpan?.startLine == 3, error.sourceSpan.toString())
+    }
+
+    @Test
+    fun importsComptimeValuesWithKeywordLedSyntax() {
+        val directory = Files.createTempDirectory("cplus-keyword-import")
+        try {
+            val imported = directory.resolve("constants.cp")
+            Files.writeString(imported, "comptime int imported_value = 73;\nint imported_runtime = 1;\n")
+            val source = """
+                comptime import "constants.cp";
+                int result = comptime imported_value;
+            """.trimIndent()
+
+            val result = CPlusTranspiler().transpile(source, directory.resolve("main.cp").toString())
+            assertTrue("int result = 73;" in result.code, result.code)
+            assertTrue("imported_runtime = 1;" in result.code, result.code)
+            assertTrue("#line 1 \"${imported.toAbsolutePath()}\"" in result.code, result.code)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun lowersStructMethodsAndKeepsAnnotations() {
         val source = """
             typedef struct counter_t {
