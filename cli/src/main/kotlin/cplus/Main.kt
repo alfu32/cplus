@@ -46,6 +46,7 @@ class CPlusCli(
             "compile" -> compile(arguments.drop(1), runAfter = false)
             "run" -> compile(arguments.drop(1), runAfter = true)
             "test" -> test(arguments.drop(1))
+            "version" -> test(arguments.drop(1))
             else -> throw IllegalArgumentException("unknown command '$command'; use 'cplus help'")
         }
     }

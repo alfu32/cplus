@@ -72,9 +72,9 @@ Test blocks use a named C-plus annotation and are compiled only by the `test` co
 }
 ```
 
-Quoted names are recommended; unquoted names such as `@test print and init struct { ... }` are also accepted. Each body is emitted as a test function. `CPLUS_TEST_ASSERT(condition)` and `CPLUS_TEST_FAIL(message)` return a failure to the runner while allowing later tests to run. Test blocks are removed from ordinary `transcode`, `compile`, and `run` output.
+Quoted names are recommended; unquoted names such as `@test print and init struct { ... }` are also accepted. Each body is emitted as a test function. `@assert(condition)` and `CPLUS_TEST_ASSERT(condition)` fail the current test when false; `@assertEquals(expected, actual)` compares the captured values' byte representations. These are test-only statement forms; equality is not deep equality (for strings, compare contents with `strcmp`), and arrays are not supported operands. `CPLUS_TEST_FAIL(message)` also fails the current test. Test blocks are removed from ordinary `transcode`, `compile`, and `run` output.
 
-The runner accepts one or more `.cp`/`.c+` sources, followed by optional exact test names. The shell expands patterns such as `test/folder/*.cp`. Ordinary C files can remain unchanged and be included from a test source with a C preprocessor directive such as `#include "fixture.c"`; C files are not comptime imports. In test mode, a source-defined `main` is renamed so the generated test driver can own the executable entry point; the application `main` is not run.
+The runner accepts one or more `.cp`/`.c+` sources, followed by optional exact test names. The shell expands patterns such as `test/folder/*.cp`. Ordinary C files can remain unchanged and be included with `#include "fixture.c"` or `@import("fixture.c")`; the latter emits a normal C preprocessor include and does not evaluate the C file at comptime. In test mode, a source-defined `main` is renamed so the generated test driver can own the executable entry point; the application `main` is not run.
 
 ## Standard Library
 

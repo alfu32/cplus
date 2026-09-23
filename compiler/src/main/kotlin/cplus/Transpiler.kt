@@ -59,16 +59,24 @@ class CPlusTranspiler {
         output.appendGenerated(
             """
             #undef main
+            #include <stddef.h>
             #include <stdio.h>
             #include <string.h>
             #define CPLUS_TEST_ASSERT(condition) do { if (!(condition)) { fprintf(stderr, "assertion failed: %s (%s:%d)\n", #condition, __FILE__, __LINE__); return 1; } } while (0)
+            static int cplus_test_assert_equals_bytes(const void* expected, size_t expected_size, const void* other, size_t other_size) {
+                if (expected_size != other_size) return 0;
+                if (expected == other) return 1;
+                if (expected == NULL || other == NULL) return 0;
+                return memcmp(expected, other, expected_size) == 0;
+            }
+            #define CPLUS_TEST_ASSERT_EQUALS(expected, other) do { __typeof__(expected) cplus_expected_value = (expected); __typeof__(other) cplus_other_value = (other); if (!cplus_test_assert_equals_bytes(&cplus_expected_value, sizeof cplus_expected_value, &cplus_other_value, sizeof cplus_other_value)) { fprintf(stderr, "assertion failed: assertEquals(%s, %s) (%s:%d)\n", #expected, #other, __FILE__, __LINE__); return 1; } } while (0)
             #define CPLUS_TEST_FAIL(message) do { fprintf(stderr, "test failure: %s\n", (message)); return 1; } while (0)
             """.trimIndent() + "\n",
         )
 
         tests.forEachIndexed { index, test ->
             output.appendGenerated("static int cplus_test_$index(void) {\n")
-            output.append(test.body)
+            output.append(lowerTestAssertions(test.body))
             if (test.body.text.isNotEmpty() && !test.body.text.endsWith('\n')) output.appendGenerated("\n")
             output.appendGenerated("    return 0;\n}\n\n")
         }
@@ -115,6 +123,84 @@ class CPlusTranspiler {
             """.trimIndent() + "\n"
         )
         return output.build() to tests.map { it.name }
+    }
+
+    private fun lowerTestAssertions(body: MappedText): MappedText {
+        val masked = SourceMasker.mask(body.text)
+        val output = MappedTextBuilder()
+        var cursor = 0
+        var index = 0
+
+        while (index < body.text.length) {
+            if (masked[index] != '@' || body.text.getOrNull(index + 1)?.let { it == '_' || it.isLetter() } != true) {
+                index++
+                continue
+            }
+            var nameEnd = index + 2
+            while (nameEnd < masked.length && masked[nameEnd].isIdentifierPart()) nameEnd++
+            val name = body.text.substring(index + 1, nameEnd)
+            val macro = when (name) {
+                "assert" -> "CPLUS_TEST_ASSERT"
+                "assertEquals" -> "CPLUS_TEST_ASSERT_EQUALS"
+                else -> {
+                    index = nameEnd
+                    continue
+                }
+            }
+            val open = Delimiters.skipWhitespace(masked, nameEnd)
+            if (open >= masked.length || masked[open] != '(') {
+                index = nameEnd
+                continue
+            }
+            val close = Delimiters.match(masked, open, '(', ')')
+            if (close < 0) throw assertionSyntax("unclosed @$name assertion", body, index)
+            val arguments = splitAssertionArguments(body.text.substring(open + 1, close))
+            val expectedCount = if (name == "assert") 1 else 2
+            if (arguments.size != expectedCount || arguments.any(String::isBlank)) {
+                throw assertionSyntax("@$name expects $expectedCount argument${if (expectedCount == 1) "" else "s"}", body, index)
+            }
+
+            output.append(body, cursor, index)
+            output.appendGenerated("$macro(${arguments.joinToString(", ")})", body.originAt(index))
+            var semicolon = close + 1
+            while (semicolon < body.text.length && body.text[semicolon].isWhitespace()) semicolon++
+            if (semicolon < body.text.length && body.text[semicolon] == ';') {
+                output.append(body, close + 1, semicolon + 1)
+                cursor = semicolon + 1
+                index = cursor
+            } else {
+                output.appendGenerated(";", body.originAt(index))
+                cursor = close + 1
+                index = cursor
+            }
+        }
+        output.append(body, cursor, body.text.length)
+        return output.build()
+    }
+
+    private fun splitAssertionArguments(text: String): List<String> {
+        if (text.isBlank()) return emptyList()
+        val masked = SourceMasker.mask(text)
+        val arguments = mutableListOf<String>()
+        var start = 0
+        var depth = 0
+        masked.forEachIndexed { index, character ->
+            when (character) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> depth--
+                ',' -> if (depth == 0) {
+                    arguments += text.substring(start, index).trim()
+                    start = index + 1
+                }
+            }
+        }
+        arguments += text.substring(start).trim()
+        return arguments
+    }
+
+    private fun assertionSyntax(message: String, body: MappedText, offset: Int): CPlusSyntaxException {
+        val origin = body.originAt(offset)
+        return CPlusSyntaxException(message, origin?.file?.span(origin.offset))
     }
 
     private fun cString(value: String): String = buildString {

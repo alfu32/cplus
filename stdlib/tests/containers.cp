@@ -47,6 +47,14 @@ int rank_with_index(borrowed named_value_t* item, size_t index) {
     return (int)item->rank + (int)index;
 }
 
+comptime int expected_answer = 42;
+
+@test "runtime assertion expressions" {
+    int answer = 40 + 2;
+    @assert(answer == 42)
+    @assertEquals(comptime expected_answer, answer)
+}
+
 @test "dynamic list operations" {
     int_list_t values;
     int first = 17;

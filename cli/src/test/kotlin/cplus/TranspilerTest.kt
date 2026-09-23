@@ -34,6 +34,34 @@ class TranspilerTest {
     }
 
     @Test
+    fun cliTestImportsUnchangedCAndRunsRuntimeAssertions() {
+        val sourcePath = findRepositoryFile("stdlib/tests/c_import.cp")
+        val errors = StringBuilder()
+        val status = CPlusCli(output = StringBuilder(), errors = errors).run(listOf("test", sourcePath.toString()))
+
+        assertEquals(0, status, errors.toString())
+    }
+
+    @Test
+    fun runtimeTestAssertionSpellingsLowerIntoHarnessCalls() {
+        val generated = CPlusTranspiler().transpileTests(
+            """
+                @test "runtime values" {
+                    int answer = 42;
+                    @assert(answer == 42)
+                    @assertEquals(answer, 40 + 2)
+                }
+            """.trimIndent(),
+            "assertions.cp"
+        ).source.code
+
+        assertTrue("CPLUS_TEST_ASSERT(answer == 42);" in generated, generated)
+        assertTrue("CPLUS_TEST_ASSERT_EQUALS(answer, 40 + 2);" in generated, generated)
+        assertFalse("@assert" in generated, generated)
+        assertTrue("cplus_test_assert_equals_bytes" in generated, generated)
+    }
+
+    @Test
     fun cliTestFiltersExactNamesAcrossMultipleFiles() {
         val directory = Files.createTempDirectory("cplus-multiple-tests")
         try {

@@ -265,6 +265,22 @@ internal class ComptimeCompiler(
         }
     }
 
+    private fun materializeCImport(item: ComptimeCImport): MappedText {
+        val sourceName = item.source.name
+            ?: throw syntax("@import requires a named source file", item.source, item.start)
+        val base = Paths.get(sourceName).toAbsolutePath().normalize().parent
+            ?: throw syntax("cannot determine the directory of $sourceName", item.source, item.start)
+        val path = base.resolve(item.path).normalize().toAbsolutePath()
+        if (path.extension() != "c") {
+            throw syntax("C source imports must use a .c file: $path", item.source, item.start)
+        }
+        if (!Files.isRegularFile(path)) {
+            throw syntax("imported C source file does not exist: $path", item.source, item.start)
+        }
+        val includePath = path.toString().replace("\\", "\\\\").replace("\"", "\\\"")
+        return MappedText.generated("#include \"$includePath\"\n", SourceOrigin(item.source, item.start))
+    }
+
     private fun materializeModule(
         parsed: ParsedModule,
         environment: ComptimeEnvironment,
@@ -283,6 +299,7 @@ internal class ComptimeCompiler(
                     is ComptimeFunction,
                     is ComptimeTypeGenerator,
                     is ComptimeTest -> MappedText.generated("")
+                    is ComptimeCImport -> materializeCImport(item)
                     is ComptimeBlock -> evaluateBlock(item, environment)
                     is ComptimeInvocation -> evaluateInvocation(item, environment, item.start)
                     is ComptimeReference -> evaluateReference(item, environment, item.start)
@@ -432,6 +449,11 @@ internal class ComptimeCompiler(
             val callClose = if (isCall) Delimiters.match(masked, open, '(', ')') else -1
             if (isCall && callClose < 0) throw syntax("unclosed comptime call @$name", source, offset + index)
             val tokenEnd = if (isCall) callClose + 1 else nameEnd
+            if (isCall && name in setOf("assert", "assertEquals")) {
+                // Runtime test assertions are lowered after comptime resolution, where local C values exist.
+                index = nameEnd
+                continue
+            }
             val replacement = try {
                 if (isCall) {
                     val close = callClose
@@ -924,6 +946,13 @@ private data class ComptimeImport(
     val path: String
 ) : ComptimeItem
 
+private data class ComptimeCImport(
+    override val source: SourceFile,
+    override val start: Int,
+    override val end: Int,
+    val path: String
+) : ComptimeItem
+
 private data class ComptimeBlock(
     override val source: SourceFile,
     override val start: Int,
@@ -1128,14 +1157,8 @@ private class ComptimeParser(private val source: SourceFile) {
         return parseComptimeValue(start, afterKeyword)
     }
 
-    private fun parseComptimeImport(start: Int, importAt: Int): ComptimeImport {
-        val end = masked.indexOf(';', importAt).takeIf { it >= 0 }?.plus(1)
-            ?: throw syntax("comptime import requires a semicolon", source, importAt)
-        val text = source.text.substring(importAt, end)
-        val match = Regex("import\\s+\"([^\"]+)\"\\s*;").matchEntire(text)
-            ?: throw syntax("malformed comptime import; expected comptime import \"file.cp\";", source, importAt)
-        return ComptimeImport(source, start, end, match.groupValues[1])
-    }
+    private fun parseComptimeImport(start: Int, importAt: Int): ComptimeImport =
+        parseImportPath(start, importAt, "import", allowC = false) as ComptimeImport
 
     private fun parseComptimeValue(start: Int, declarationStart: Int): ComptimeValue {
         val semicolon = masked.indexOf(';', declarationStart)
@@ -1214,13 +1237,57 @@ private class ComptimeParser(private val source: SourceFile) {
         return decoded.toString()
     }
 
-    private fun parseImport(start: Int, at: Int): ComptimeImport {
-        val end = masked.indexOf(';', at).takeIf { it >= 0 }?.plus(1)
-            ?: throw syntax("@import requires a semicolon", source, at)
-        val text = source.text.substring(at, end)
-        val match = Regex("@import\\s+\"([^\"]+)\"\\s*;").matchEntire(text)
-            ?: throw syntax("malformed @import; expected @import \"file.cp\";", source, at)
-        return ComptimeImport(source, start, end, match.groupValues[1])
+    private fun parseImport(start: Int, at: Int): ComptimeItem =
+        parseImportPath(start, at, "@import", allowC = true)
+
+    private fun parseImportPath(
+        start: Int,
+        keywordAt: Int,
+        keyword: String,
+        allowC: Boolean
+    ): ComptimeItem {
+        var cursor = skipWhitespace(source.text, keywordAt + keyword.length)
+        val parenthesized = cursor < source.text.length && source.text[cursor] == '('
+        if (parenthesized) cursor = skipWhitespace(source.text, cursor + 1)
+        if (cursor >= source.text.length || source.text[cursor] != '"') {
+            throw syntax("malformed $keyword; expected $keyword \"file.cp\" or $keyword(\"file.c\")", source, keywordAt)
+        }
+
+        val pathStart = ++cursor
+        var escaped = false
+        while (cursor < source.text.length && (source.text[cursor] != '"' || escaped)) {
+            if (source.text[cursor] == '\\' && !escaped) escaped = true else escaped = false
+            cursor++
+        }
+        if (cursor >= source.text.length) throw syntax("unclosed import path", source, pathStart - 1)
+        val path = buildString {
+            var index = pathStart
+            while (index < cursor) {
+                val character = source.text[index++]
+                if (character == '\\' && index < cursor && source.text[index] in setOf('\\', '"')) {
+                    append(source.text[index++])
+                } else {
+                    append(character)
+                }
+            }
+        }
+        cursor = skipWhitespace(source.text, cursor + 1)
+        if (parenthesized) {
+            if (cursor >= source.text.length || source.text[cursor] != ')') {
+                throw syntax("expected ')' after import path", source, cursor.coerceAtMost(source.text.length))
+            }
+            cursor = skipWhitespace(source.text, cursor + 1)
+        }
+        if (cursor < source.text.length && source.text[cursor] == ';') cursor++
+
+        val extension = Paths.get(path).extension()
+        return when (extension) {
+            "cp", "c+" -> ComptimeImport(source, start, cursor, path)
+            "c" -> if (allowC) ComptimeCImport(source, start, cursor, path) else {
+                throw syntax("comptime import accepts only .cp or .c+ files; use @import or #include for C", source, keywordAt)
+            }
+            else -> throw syntax("unsupported import extension '$extension'", source, keywordAt)
+        }
     }
 
     private fun parseBlock(start: Int, at: Int): ComptimeBlock {

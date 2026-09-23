@@ -26,7 +26,7 @@ java -jar c-plus.jar test test/folder/some_file.cp "print and init struct"
 java -jar c-plus.jar test test/folder/*.cp "print and init struct" "list grows"
 ```
 
-Each source file gets a temporary test executable, and its temporary output is deleted after execution. The driver prints start/end banners for each selected test and a per-file summary. A failed assertion marks that test failed and continues to later tests; a nonzero test run returns `1`, an unknown requested name or CLI error returns `2`. `CPLUS_TEST_ASSERT` and `CPLUS_TEST_FAIL` are available in test bodies. C files remain ordinary C inputs via `#include`; their `main` definition is renamed in test builds so the generated driver can supply `main`.
+Each source file gets a temporary test executable, and its temporary output is deleted after execution. The driver prints start/end banners for each selected test and a per-file summary. A failed assertion marks that test failed and continues to later tests; a nonzero test run returns `1`, an unknown requested name or CLI error returns `2`. Test bodies support `@assert(condition)`, bytewise `@assertEquals(expected, actual)`, `CPLUS_TEST_ASSERT(condition)`, and `CPLUS_TEST_FAIL(message)`. Existing C files can be used with `#include "fixture.c"` or `@import("fixture.c")`; C imports become normal preprocessor includes. Their `main` definition is renamed in test builds so the generated driver can supply `main`.
 
 ## Diagnostics and Passes
 

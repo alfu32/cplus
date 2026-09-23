@@ -58,7 +58,7 @@ inline-value          := "comptime" comptime-expression
 code-fragment         := "@code" "{" cplus-top-level-item* "}"
 identifier-splice     := "@" identifier "(" argument* ")" ; inside identifiers in materialized type/function entities
 comptime-struct       := "typedef struct" "@" identifier "{" cplus-members "}" identifier ";"
-legacy-import         := "@import" string-literal ";"
+legacy-import         := "@import" string-literal [";"] | "@import" "(" string-literal ")" [";"]
 legacy-block          := "@" "{" comptime-statement* "}"
 legacy-call           := "@" identifier "(" argument* ")"
 legacy-type-generator := "@type" ["@"] identifier "(" ("@type" identifier)* ")" block
@@ -103,7 +103,9 @@ int count = comptime item_count;
 
 The recommended name is a quoted string literal; the parser also accepts unquoted text before the opening brace. The body is C-plus statement code and runs in a generated `int` test function after comptime types and functions have materialized. `CPLUS_TEST_ASSERT(condition)` reports failure and returns from the current test; `CPLUS_TEST_FAIL(message)` does the same with a message. A test body may also `return 1` to fail or `return 0` to pass. Tests share process globals but have independent local scopes. Ordinary `transcode`, `compile`, and `run` remove test blocks; `cplus test` extracts them and emits a temporary driver.
 
-The test command runs all test blocks by default. Exact names after the source paths select tests; source paths may be multiple `.cp`/`.c+` files, with shell-expanded globs supported. A `#include "fixture.c"` remains a normal C preprocessor include and lets tests exercise unchanged C declarations and functions. C files are not accepted by `comptime import`. During test compilation any source `main` is renamed and is not executed; the generated test driver owns the entry point. A failed assertion is isolated to its test function so later tests still run. The current harness is process-based and does not provide fixtures, setup/teardown hooks, parallel execution, or structured assertion values.
+Within test bodies, `@assert(condition)` is shorthand for `CPLUS_TEST_ASSERT(condition)`. `@assertEquals(expected, actual)` captures both runtime expressions once and compares their sizes and object bytes with `memcmp`; thus it is bytewise equality, not string-content or deep equality. Use `strcmp` for strings and avoid array operands or structs with indeterminate padding. These annotations are expanded after comptime resolution, when test-local runtime values are in scope; they are not general comptime functions.
+
+The test command runs all test blocks by default. Exact names after the source paths select tests; source paths may be multiple `.cp`/`.c+` files, with shell-expanded globs supported. A C file can be included unchanged with either `#include "fixture.c"` or `@import("fixture.c")`; `@import` emits a C preprocessor include, while `comptime import` remains reserved for `.cp` and `.c+` modules. During test compilation any source `main` is renamed and is not executed; the generated test driver owns the entry point. A failed assertion is isolated to its test function so later tests still run. The current harness is process-based and does not provide fixtures, setup/teardown hooks, parallel execution, or structured assertion values.
 
 `comptime type` functions return exactly one `@code` fragment containing one named `struct` definition. A `comptime typedef generator(args) alias;` invocation turns it into `typedef struct tag { ... } alias;`. Other comptime invocations materialize the runtime entity returned by the function. Previous `@type`, `@fn`, `@var`, and scalar sigil-led forms remain accepted.
 
@@ -156,6 +158,8 @@ comptime import "math.cp";
 ```
 
 The path is relative to the importing file, must resolve to a `.cp` or `.c+` file, and is canonicalized before loading. An imported file is evaluated once per compilation graph. Its comptime declarations become available to the importer; its materialized runtime declarations are emitted once in dependency order. Imports are not C `#include`s and do not reach the C preprocessor. The legacy `@import` spelling remains accepted.
+
+For unchanged C implementation files, `@import("fixture.c")` instead resolves the path and emits an absolute `#include` directive. The C file is processed by the C preprocessor/compiler rather than the comptime evaluator. `#include "fixture.c"` remains equally valid and is the direct C spelling.
 
 ### Types, generics, and reflection
 
