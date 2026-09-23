@@ -12,3 +12,4 @@ vscode-cplus/out/
 **/dist/
 intellij-cplus/.intellijPlatform/
 .idea
+/cli/src/main/kotlin/cplus/Version.kt
