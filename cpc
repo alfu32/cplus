@@ -1,3 +1,1 @@
-#!/usr/bin/env bash
-
-java -jar dist/c-plus.linux-x86_64.jar $*
+build/distributions/cplus-0.3.3-linux-x86_64/cpc.sh

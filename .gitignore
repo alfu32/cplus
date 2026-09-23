@@ -3,6 +3,7 @@
 *.class
 *.jar
 !lib/*.jar
+!gradle/wrapper/gradle-wrapper.jar
 
 .kode/
 **/build/
@@ -16,3 +17,4 @@ intellij-cplus/.intellijPlatform/
 .idea
 /cli/src/main/kotlin/cplus/Version.kt
 dist
+c-plus-bin
