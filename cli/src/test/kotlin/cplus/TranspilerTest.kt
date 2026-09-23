@@ -346,6 +346,53 @@ class TranspilerTest {
     }
 
     @Test
+    fun infersMethodReceiverAddressFromStructValueOrPointerSyntax() {
+        val source = """
+            typedef struct counter_t {
+                int value;
+                pub int set(borrowed mut *self, int value) {
+                    self->value = value;
+                    return 0;
+                }
+                pub int increment(borrowed mut *self) {
+                    self->value++;
+                    return 0;
+                }
+                pub int get(borrowed *self) {
+                    return self->value;
+                }
+            } counter_t;
+
+            int main(void) {
+                counter_t ob;
+                counter_t* obp = &ob;
+                ob.set(10);
+                obp->increment();
+                (&ob).set(11);
+                return obp->get() == 11 ? 0 : 1;
+            }
+        """.trimIndent()
+
+        val generated = CPlusTranspiler().transpile(source).code
+        assertTrue("counter__set(&ob, 10)" in generated, generated)
+        assertTrue("counter__increment(obp)" in generated, generated)
+        assertTrue("counter__set(&ob, 11)" in generated, generated)
+        assertTrue("counter__get(obp)" in generated, generated)
+
+        val directory = Files.createTempDirectory("cplus-method-receiver")
+        try {
+            val sourcePath = directory.resolve("receivers.cp")
+            Files.writeString(sourcePath, source)
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors)
+                .run(listOf("run", sourcePath.toString()))
+            assertEquals(0, status, errors.toString())
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun retainsAnnotationsOutsideStructs() {
         val result = CPlusTranspiler().transpile(
             "priv int read(owned char* output);\nborrowed int* value;\n"

@@ -457,7 +457,13 @@ private object MethodLowerer {
 
 private class MethodCallLowerer(private val structTypes: Set<String>) {
     private data class Scope(val start: Int, var end: Int)
-    private data class VariableType(val name: String, val type: String, val offset: Int, val scope: Int)
+    private data class VariableType(
+        val name: String,
+        val type: String,
+        val isPointer: Boolean,
+        val offset: Int,
+        val scope: Int
+    )
 
     private var scopes: List<Scope> = emptyList()
     private var variableTypes: List<VariableType> = emptyList()
@@ -483,12 +489,18 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
         }
         scopes = builtScopes
         val alternatives = structTypes.joinToString("|") { Regex.escape(it) }
-        val declaration = Regex("\\b($alternatives)\\s*\\**\\s*([A-Za-z_]\\w*)\\b")
+        val declaration = Regex("\\b($alternatives)\\s*(\\*+)?\\s*([A-Za-z_]\\w*)\\b")
         variableTypes = declaration.findAll(masked).map { match ->
             val scope = builtScopes.indices
                 .filter { match.range.first in builtScopes[it].start..builtScopes[it].end }
                 .maxByOrNull { builtScopes[it].start } ?: 0
-            VariableType(match.groupValues[2], match.groupValues[1], match.range.first, scope)
+            VariableType(
+                match.groupValues[3],
+                match.groupValues[1],
+                match.groupValues[2].isNotEmpty(),
+                match.range.first,
+                scope
+            )
         }.toList()
     }
 
@@ -499,11 +511,17 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
         var index = 0
 
         while (index < source.text.length) {
-            if (masked[index] != '.') {
+            val operatorStart = when {
+                masked[index] == '.' -> index
+                masked[index] == '>' && index > 0 && masked[index - 1] == '-' -> index - 1
+                else -> null
+            }
+            if (operatorStart == null) {
                 index++
                 continue
             }
 
+            val isPointerAccess = masked[operatorStart] == '-'
             val methodStart = Delimiters.skipWhitespace(masked, index + 1)
             val methodMatch = Regex("[A-Za-z_]\\w*").find(masked, methodStart)
             if (methodMatch == null || methodMatch.range.first != methodStart) {
@@ -518,12 +536,13 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
             val close = Delimiters.match(masked, open, '(', ')')
             if (close < 0) throw CPlusSyntaxException("unclosed method call ${methodMatch.value}")
 
-            val leftStart = receiverStart(masked, index) ?: run {
+            val leftStart = receiverStart(masked, operatorStart) ?: run {
                 index++
                 continue
             }
-            val left = source.text.substring(leftStart, index).trim()
-            val typeName = left.takeIf { it in structTypes } ?: receiverType(left, baseOffset + leftStart)
+            val left = source.text.substring(leftStart, operatorStart).trim()
+            val receiver = receiverType(left, baseOffset + leftStart)
+            val typeName = left.takeIf { !isPointerAccess && it in structTypes } ?: receiver?.type
             if (typeName == null) {
                 index++
                 continue
@@ -537,8 +556,15 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
             if (left in structTypes) {
                 replacement.append(args)
             } else {
-                val receiver = left.removeSurrounding("(", ")").trim()
-                replacement.appendGenerated(receiver, origin)
+                val receiverExpression = left.removeSurrounding("(", ")").trim()
+                val receiverArgument = when {
+                    isPointerAccess || receiverExpression.startsWith("&") -> receiverExpression
+                    receiver?.isPointer == true && receiverExpression.matches(Regex("[A-Za-z_]\\w*")) ->
+                        receiverExpression
+                    receiverExpression.matches(Regex("[A-Za-z_]\\w*")) -> "&$receiverExpression"
+                    else -> "&($receiverExpression)"
+                }
+                replacement.appendGenerated(receiverArgument, origin)
                 if (args.text.trim().isNotEmpty()) replacement.appendGenerated(", ", origin)
                 replacement.append(args)
             }
@@ -554,7 +580,7 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
         return output.build()
     }
 
-    private fun receiverType(left: String, offset: Int): String? {
+    private fun receiverType(left: String, offset: Int): VariableType? {
         val expression = left.removeSurrounding("(", ")").trim()
         val identifier = Regex("[A-Za-z_]\\w*").findAll(expression).lastOrNull()?.value ?: return null
         val activeScopes = scopes.indices
@@ -564,7 +590,7 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
             variableTypes.asSequence()
                 .filter { it.name == identifier && it.scope == scope && it.offset <= offset }
                 .maxByOrNull { it.offset }
-                ?.let { return it.type }
+                ?.let { return it }
         }
         return null
     }

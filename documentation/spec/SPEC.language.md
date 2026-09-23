@@ -41,12 +41,15 @@ typedef struct counter_t {
 
 An instance method uses `self` as its first parameter. It is emitted as `counter__add(counter_t *self, int amount)`. A static method is emitted with a C `static` qualifier and the same `counter__method` name.
 
-Calls use receiver syntax:
+Instance calls use receiver syntax. For a struct value, the compiler supplies its address; for a struct pointer, use C's `->` spelling and the pointer is passed directly. The older explicit-address form remains accepted. Static methods use the struct type as the receiver:
 
 ```c
 counter_t counter;
-(&counter).add(3);          // counter__add(&counter, 3)
-counter_t.alloc_init(0);    // counter__alloc_init(0)
+counter.add(3);             // counter__add(&counter, 3)
+counter_t* counter_ptr = &counter;
+counter_ptr->add(3);        // counter__add(counter_ptr, 3)
+(&counter).add(3);          // also accepted: counter__add(&counter, 3)
+counter_t.alloc_init(0);    // counter__alloc_init(0), no receiver argument
 ```
 
 ## Comptime and Generics
