@@ -6,26 +6,134 @@ class CPlusTranspiler {
         source: String,
         sourceName: String? = null,
         logger: CompilationLogger = SilentCompilationLogger
-    ): TranscodedSource {
+    ): TranscodedSource = transpileInternal(source, sourceName, logger, testMode = false).source
+
+    /** Transcodes a source file and its named `@test` blocks into a runnable test program. */
+    fun transpileTests(
+        source: String,
+        sourceName: String? = null,
+        logger: CompilationLogger = SilentCompilationLogger
+    ): TranscodedTestSource = transpileInternal(source, sourceName, logger, testMode = true)
+
+    private fun transpileInternal(
+        source: String,
+        sourceName: String?,
+        logger: CompilationLogger,
+        testMode: Boolean
+    ): TranscodedTestSource {
         val sourceFile = SourceFile(source, sourceName)
-        val input = logger.pass("comptime-resolve") {
-            ComptimeCompiler(sourceFile, logger).compile()
+        val comptime = logger.pass("comptime-resolve") {
+            ComptimeCompiler(sourceFile, logger).compile(resolveTestBodies = testMode)
+        }
+        val input = if (testMode) {
+            logger.pass("collect-tests") { testProgram(comptime.runtime, comptime.tests) }
+        } else {
+            comptime.runtime to emptyList()
         }
 
         val typeNames = logger.pass("collect-struct-types") {
-            StructTypeCollector().collect(input.text)
+            StructTypeCollector().collect(input.first.text)
         }
         val calls = logger.pass("lower-method-calls") {
-            MethodCallLowerer(typeNames).lower(input)
+            MethodCallLowerer(typeNames).lower(input.first)
         }
         val structs = logger.pass("lower-struct-methods") {
             StructLowerer().lower(calls)
         }
-        return logger.pass("emit-mapped-c") {
+        val emitted = logger.pass("emit-mapped-c") {
             MappedEmitter(sourceFile).emit(structs, CPlusPreamble.text)
         }
+        return TranscodedTestSource(emitted, input.second)
+    }
+
+    private fun testProgram(
+        runtime: MappedText,
+        tests: List<ComptimeTestBlock>
+    ): Pair<MappedText, List<String>> {
+        if (tests.isEmpty()) return runtime to emptyList()
+
+        val output = MappedTextBuilder()
+        output.appendGenerated("#define main cplus_test_original_main\n")
+        output.append(runtime)
+        if (runtime.text.isNotEmpty() && !runtime.text.endsWith('\n')) output.appendGenerated("\n")
+        output.appendGenerated(
+            """
+            #undef main
+            #include <stdio.h>
+            #include <string.h>
+            #define CPLUS_TEST_ASSERT(condition) do { if (!(condition)) { fprintf(stderr, "assertion failed: %s (%s:%d)\n", #condition, __FILE__, __LINE__); return 1; } } while (0)
+            #define CPLUS_TEST_FAIL(message) do { fprintf(stderr, "test failure: %s\n", (message)); return 1; } while (0)
+            """.trimIndent() + "\n",
+        )
+
+        tests.forEachIndexed { index, test ->
+            output.appendGenerated("static int cplus_test_$index(void) {\n")
+            output.append(test.body)
+            if (test.body.text.isNotEmpty() && !test.body.text.endsWith('\n')) output.appendGenerated("\n")
+            output.appendGenerated("    return 0;\n}\n\n")
+        }
+
+        output.appendGenerated(
+            """
+            static int cplus_test_requested(const char* name, int argc, char** argv) {
+                if (argc <= 1) return 1;
+                for (int i = 1; i < argc; i++) {
+                    if (strcmp(argv[i], name) == 0) return 1;
+                }
+                return 0;
+            }
+
+            int main(int argc, char** argv) {
+                int selected = 0;
+                int failed = 0;
+            """.trimIndent() + "\n"
+        )
+        tests.forEachIndexed { index, test ->
+            val literal = cString(test.name)
+            output.appendGenerated(
+                """
+                if (cplus_test_requested($literal, argc, argv)) {
+                    selected++;
+                    printf("========== BEGIN TEST: %s ==========\n", $literal);
+                    fflush(stdout);
+                    int result = cplus_test_$index();
+                    printf("========== END TEST: %s [%s] ==========\n", $literal, result == 0 ? "PASS" : "FAIL");
+                    if (result != 0) failed++;
+                }
+                """.trimIndent() + "\n"
+            )
+        }
+        output.appendGenerated(
+            """
+                if (selected == 0) {
+                    fprintf(stderr, "no tests matched the requested names\n");
+                    return 2;
+                }
+                printf("========== TEST SUMMARY: %d selected, %d failed ==========\n", selected, failed);
+                return failed == 0 ? 0 : 1;
+            }
+            """.trimIndent() + "\n"
+        )
+        return output.build() to tests.map { it.name }
+    }
+
+    private fun cString(value: String): String = buildString {
+        append('"')
+        value.forEach { character ->
+            when (character) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> append(character)
+            }
+        }
+        append('"')
     }
 }
+
+data class TranscodedTestSource(val source: TranscodedSource, val testNames: List<String>)
 
 class CPlusSyntaxException(
     message: String,
@@ -262,23 +370,43 @@ private object MethodLowerer {
 }
 
 private class MethodCallLowerer(private val structTypes: Set<String>) {
-    private val variableTypes = mutableMapOf<String, String>()
+    private data class Scope(val start: Int, var end: Int)
+    private data class VariableType(val name: String, val type: String, val offset: Int, val scope: Int)
+
+    private var scopes: List<Scope> = emptyList()
+    private var variableTypes: List<VariableType> = emptyList()
 
     fun lower(source: MappedText): MappedText {
         if (structTypes.isEmpty()) return source
         collectVariableTypes(source.text)
-        return lowerCalls(source)
+        return lowerCalls(source, 0)
     }
 
     private fun collectVariableTypes(source: String) {
+        val masked = SourceMasker.mask(source)
+        val builtScopes = mutableListOf(Scope(0, source.length))
+        val stack = mutableListOf(0)
+        masked.forEachIndexed { index, character ->
+            when (character) {
+                '{' -> {
+                    builtScopes += Scope(index + 1, source.length)
+                    stack += builtScopes.lastIndex
+                }
+                '}' -> if (stack.size > 1) builtScopes[stack.removeAt(stack.lastIndex)].end = index
+            }
+        }
+        scopes = builtScopes
         val alternatives = structTypes.joinToString("|") { Regex.escape(it) }
         val declaration = Regex("\\b($alternatives)\\s*\\**\\s*([A-Za-z_]\\w*)\\b")
-        declaration.findAll(source).forEach { match ->
-            variableTypes[match.groupValues[2]] = match.groupValues[1]
-        }
+        variableTypes = declaration.findAll(masked).map { match ->
+            val scope = builtScopes.indices
+                .filter { match.range.first in builtScopes[it].start..builtScopes[it].end }
+                .maxByOrNull { builtScopes[it].start } ?: 0
+            VariableType(match.groupValues[2], match.groupValues[1], match.range.first, scope)
+        }.toList()
     }
 
-    private fun lowerCalls(source: MappedText): MappedText {
+    private fun lowerCalls(source: MappedText, baseOffset: Int): MappedText {
         val masked = SourceMasker.mask(source.text)
         val output = MappedTextBuilder()
         var copyFrom = 0
@@ -309,13 +437,13 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
                 continue
             }
             val left = source.text.substring(leftStart, index).trim()
-            val typeName = left.takeIf { it in structTypes } ?: receiverType(left)
+            val typeName = left.takeIf { it in structTypes } ?: receiverType(left, baseOffset + leftStart)
             if (typeName == null) {
                 index++
                 continue
             }
 
-            val args = lowerCalls(source.slice(open + 1, close))
+            val args = lowerCalls(source.slice(open + 1, close), baseOffset + open + 1)
             val stem = if (typeName.endsWith("_t")) typeName.dropLast(2) else typeName
             val origin = source.originAt(leftStart)
             val replacement = MappedTextBuilder()
@@ -340,10 +468,19 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
         return output.build()
     }
 
-    private fun receiverType(left: String): String? {
+    private fun receiverType(left: String, offset: Int): String? {
         val expression = left.removeSurrounding("(", ")").trim()
         val identifier = Regex("[A-Za-z_]\\w*").findAll(expression).lastOrNull()?.value ?: return null
-        return variableTypes[identifier]
+        val activeScopes = scopes.indices
+            .filter { offset in scopes[it].start..scopes[it].end }
+            .sortedByDescending { scopes[it].start }
+        activeScopes.forEach { scope ->
+            variableTypes.asSequence()
+                .filter { it.name == identifier && it.scope == scope && it.offset <= offset }
+                .maxByOrNull { it.offset }
+                ?.let { return it.type }
+        }
+        return null
     }
 
     private fun receiverStart(masked: String, dot: Int): Int? {

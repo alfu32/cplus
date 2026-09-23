@@ -11,11 +11,22 @@ cplus help
 cplus transcode filename.cp [-o some_file_name.c]
 cplus compile filename.cp [-o executable] [passthrough tcc parameters]
 cplus run filename.cp [-o executable] [passthrough tcc parameters]
+cplus test filename.cp [filename2.cp ...] [exact test name ...]
 ```
 
 `transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. Additional arguments for `compile` and `run` are passed to the embedded TinyCC compiler; for example, `-DFLAG=1` or `-Iinclude`.
 
 `run` compiles first and then executes the generated executable, inheriting its standard input, output, and error streams.
+
+`test` compiles and runs all `@test` blocks in the input files. Source paths must come first; any following arguments are exact, case-sensitive test-name filters. The shell may expand file globs before invoking C-plus:
+
+```sh
+java -jar c-plus.jar test test/folder/some_file.cp
+java -jar c-plus.jar test test/folder/some_file.cp "print and init struct"
+java -jar c-plus.jar test test/folder/*.cp "print and init struct" "list grows"
+```
+
+Each source file gets a temporary test executable, and its temporary output is deleted after execution. The driver prints start/end banners for each selected test and a per-file summary. A failed assertion marks that test failed and continues to later tests; a nonzero test run returns `1`, an unknown requested name or CLI error returns `2`. `CPLUS_TEST_ASSERT` and `CPLUS_TEST_FAIL` are available in test bodies. C files remain ordinary C inputs via `#include`; their `main` definition is renamed in test builds so the generated driver can supply `main`.
 
 ## Diagnostics and Passes
 
@@ -30,12 +41,14 @@ comptime-pass-2-parse
 comptime-pass-2-expand
 ...
 comptime-materialize
+collect-tests (test command only)
 collect-struct-types
 lower-method-calls
 lower-struct-methods
 emit-mapped-c
 tcc-compile
-run-executable
+run-executable (run command)
+run-tests (test command)
 ```
 
 `comptime-pass-N-parse` parses the active comptime declarations for that expansion pass. `comptime-pass-N-expand` evaluates them and emits mapped C-plus; generated comptime declarations are discovered on a later pass. Materialization substitutes type parameters and evaluates validated identifier splices in generated type and function declarations. C preprocessor directives such as `#define` are passed through as ordinary source; the compiler does not define a comptime alias directive or interpret alias macros. `comptime-materialize` returns the fully resolved mapped source after the parser finds no remaining comptime forms. Phase 2 begins only then; unsupported or unresolved forms fail before method lowering and are never passed to the C parser. Typed AST decorators and general in-source plugin execution remain proposed.
@@ -46,6 +59,7 @@ Generated C includes `#line` directives. TinyCC diagnostics are normalized and m
 
 - `compiler/` contains the reusable Kotlin transcoder, mapped emitter, diagnostics, and TinyCC adapter.
 - `cli/` contains the command-line application and its tests.
+- `stdlib/` contains generic C-plus container sources, comptime generators, examples, and tests.
 - `documentation/spec/` contains the living language, comptime, and compiler specifications.
 - `vscode-cplus/`, `intellij-cplus/`, and `vim-cplus/` contain editor integrations.
 

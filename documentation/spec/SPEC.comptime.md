@@ -1,6 +1,6 @@
 # C-plus Comptime Specification
 
-Status: core implementation. Scalar values/functions, keyword-led comptime declarations and invocations, imports, comptime blocks, entity materialization, generic struct generation, identifier-safe code interpolation, basic reflection, iterative generated-declaration expansion, and mapped diagnostics are implemented. The limitations below are normative for the current implementation.
+Status: core implementation. Scalar values/functions, keyword-led comptime declarations and invocations, imports, comptime blocks, entity materialization, generic struct generation, identifier-safe code interpolation, basic reflection, iterative generated-declaration expansion, mapped diagnostics, and named runtime test blocks are implemented. The limitations below are normative for the current implementation.
 
 This is a living specification. Any change to comptime syntax, evaluation, imports, reflection, or materialization must update this file and its examples.
 
@@ -62,6 +62,7 @@ legacy-import         := "@import" string-literal ";"
 legacy-block          := "@" "{" comptime-statement* "}"
 legacy-call           := "@" identifier "(" argument* ")"
 legacy-type-generator := "@type" ["@"] identifier "(" ("@type" identifier)* ")" block
+test-block            := "@test" (string-literal | unquoted-name) block
 ```
 
 Preferred declarations and invocations look like this:
@@ -86,6 +87,23 @@ int count = comptime item_count;
 ```
 
 `comptime` declarations and invocations are active in module scope or an explicit comptime block. A comptime function name is declared with `@`; an invocation introduced by `comptime` uses the plain symbol name. In ordinary C-plus expressions, `@name` remains an explicit comptime reference, while `comptime expression` evaluates a scalar expression. Therefore `int answer = answer;` is runtime C-plus, `comptime int answer = 21;` declares a comptime-only value, and `int runtime_answer = comptime answer;` materializes it in runtime source. The marker applies through the surrounding C expression delimiter (such as `;`, `,`, `)`, or `]`).
+
+### Runtime test declarations
+
+`@test` is a test-runner annotation, not a comptime function and not runtime code:
+
+```c
+@test "construct and hash" {
+    some_struct value = (some_struct){1, 2, 3};
+    char hash[32];
+    some_struct__hash(&value, hash);
+    CPLUS_TEST_ASSERT(strcmp(hash, "1:2:3") == 0);
+}
+```
+
+The recommended name is a quoted string literal; the parser also accepts unquoted text before the opening brace. The body is C-plus statement code and runs in a generated `int` test function after comptime types and functions have materialized. `CPLUS_TEST_ASSERT(condition)` reports failure and returns from the current test; `CPLUS_TEST_FAIL(message)` does the same with a message. A test body may also `return 1` to fail or `return 0` to pass. Tests share process globals but have independent local scopes. Ordinary `transcode`, `compile`, and `run` remove test blocks; `cplus test` extracts them and emits a temporary driver.
+
+The test command runs all test blocks by default. Exact names after the source paths select tests; source paths may be multiple `.cp`/`.c+` files, with shell-expanded globs supported. A `#include "fixture.c"` remains a normal C preprocessor include and lets tests exercise unchanged C declarations and functions. C files are not accepted by `comptime import`. During test compilation any source `main` is renamed and is not executed; the generated test driver owns the entry point. A failed assertion is isolated to its test function so later tests still run. The current harness is process-based and does not provide fixtures, setup/teardown hooks, parallel execution, or structured assertion values.
 
 `comptime type` functions return exactly one `@code` fragment containing one named `struct` definition. A `comptime typedef generator(args) alias;` invocation turns it into `typedef struct tag { ... } alias;`. Other comptime invocations materialize the runtime entity returned by the function. Previous `@type`, `@fn`, `@var`, and scalar sigil-led forms remain accepted.
 

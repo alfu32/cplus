@@ -29,7 +29,11 @@ The bundled TinyCC JNI library is used for compilation, so `compile` and `run` d
 ./gradlew run --args='transcode examples/basic.cp -o build/basic.c'
 ./gradlew run --args='compile examples/basic.cp -o build/basic -DDEBUG=1'
 ./gradlew run --args='run examples/basic.cp -o build/basic-run -Iinclude'
+./gradlew run --args='test stdlib/tests/containers.cp'
+./gradlew run --args='test stdlib/tests/containers.cp "generic map insert update remove"'
 ```
+
+The test command also accepts multiple source paths before optional exact test names; shell globs expand normally, for example `java -jar c-plus.jar test test/folder/*.cp "some test"`.
 
 The installed application can also be launched from `cli/build/install/c-plus/bin/c-plus` after `./gradlew :cli:installDist`.
 
@@ -47,6 +51,7 @@ Compilation prints each pass to stderr. Generated C contains `#line` directives 
 
 - `compiler/`: reusable Kotlin transpiler and embedded TinyCC adapter.
 - `cli/`: command-line application and integration tests.
+- `stdlib/`: source-level generic containers, comptime mapper generators, examples, and `@test` suites.
 - `documentation/spec/`: living language, comptime, and compiler specifications.
 - `vscode-cplus/`: deployable VS Code extension with highlighting, completion, symbols, navigation, diagnostics, and CLI commands.
 - `intellij-cplus/`: deployable IntelliJ Platform plugin with a flat PSI parser, highlighting, completion, and declaration navigation.

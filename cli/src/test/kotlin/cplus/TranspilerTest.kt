@@ -1,11 +1,114 @@
 package cplus
 
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import java.nio.file.Files
 
 class TranspilerTest {
+    @Test
+    fun stripsTestBlocksFromOrdinaryCOutput() {
+        val generated = CPlusTranspiler().transpile(
+            """
+                int ordinary_value = 4;
+                @test "test-only declaration" {
+                    CPLUS_TEST_ASSERT(ordinary_value == 4);
+                }
+            """.trimIndent()
+        ).code
+
+        assertTrue("int ordinary_value = 4;" in generated, generated)
+        assertFalse("@test" in generated, generated)
+        assertFalse("CPLUS_TEST_ASSERT" in generated, generated)
+    }
+
+    @Test
+    fun cliTestRunsStandardLibraryAndIncludedCFixture() {
+        val sourcePath = findRepositoryFile("stdlib/tests/containers.cp")
+        val errors = StringBuilder()
+        val status = CPlusCli(output = StringBuilder(), errors = errors).run(listOf("test", sourcePath.toString()))
+
+        assertEquals(0, status, errors.toString())
+    }
+
+    @Test
+    fun cliTestFiltersExactNamesAcrossMultipleFiles() {
+        val directory = Files.createTempDirectory("cplus-multiple-tests")
+        try {
+            val cSource = directory.resolve("plain.c")
+            val first = directory.resolve("first.cp")
+            val second = directory.resolve("second.cp")
+            Files.writeString(
+                cSource,
+                """
+                    typedef struct plain_value { int value; } plain_value;
+                    int main(void) { return 0; }
+                """.trimIndent()
+            )
+            Files.writeString(
+                first,
+                """
+                    #include "plain.c"
+                    @test "plain C works" {
+                        plain_value value = (plain_value){42};
+                        CPLUS_TEST_ASSERT(value.value == 42);
+                    }
+                    @test "not selected" { CPLUS_TEST_FAIL("must not run"); }
+                """.trimIndent()
+            )
+            Files.writeString(
+                second,
+                """
+                    @test second file selected { CPLUS_TEST_ASSERT(3 * 7 == 21); }
+                """.trimIndent()
+            )
+
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf("test", first.toString(), second.toString(), "plain C works", "second file selected")
+            )
+
+            assertEquals(0, status, errors.toString())
+            val unknownStatus = CPlusCli(output = StringBuilder(), errors = StringBuilder()).run(
+                listOf("test", first.toString(), "missing test")
+            )
+            assertEquals(2, unknownStatus)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun cliTestMapsCCompilerErrorsInsideTestBodiesBackToCp() {
+        val directory = Files.createTempDirectory("cplus-test-diagnostic")
+        try {
+            val source = directory.resolve("diagnostic.cp")
+            Files.writeString(
+                source,
+                """
+                    @test "mapped failure" {
+                        missing_test_symbol();
+                    }
+                """.trimIndent()
+            )
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(listOf("test", source.toString()))
+
+            assertEquals(1, status, errors.toString())
+            assertTrue(errors.contains("${source.toAbsolutePath()}:2"), errors.toString())
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    private fun findRepositoryFile(relativePath: String): java.nio.file.Path =
+        sequenceOf(java.nio.file.Path.of(relativePath), java.nio.file.Path.of("..", relativePath))
+            .map { it.toAbsolutePath().normalize() }
+            .firstOrNull(Files::isRegularFile)
+            ?: error("cannot locate repository file $relativePath from ${System.getProperty("user.dir")}")
+
     @Test
     fun supportsKeywordLedComptimeDeclarationsAndInlineScalarEvaluation() {
         val result = CPlusTranspiler().transpile(

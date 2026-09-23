@@ -56,3 +56,26 @@ counter_t.alloc_init(0);    // counter__alloc_init(0)
 ## Source Mapping
 
 Generated C contains `#line` directives referencing the original C-plus file so compiler diagnostics point back to `.cp` source locations.
+
+## Tests
+
+Test blocks use a named C-plus annotation and are compiled only by the `test` command:
+
+```c
+#include <string.h>
+
+@test "print and initialize a struct" {
+    some_struct value = (some_struct){1, 2, 3};
+    char hash[32];
+    some_struct__hash(&value, hash);
+    CPLUS_TEST_ASSERT(strcmp(hash, "1:2:3") == 0);
+}
+```
+
+Quoted names are recommended; unquoted names such as `@test print and init struct { ... }` are also accepted. Each body is emitted as a test function. `CPLUS_TEST_ASSERT(condition)` and `CPLUS_TEST_FAIL(message)` return a failure to the runner while allowing later tests to run. Test blocks are removed from ordinary `transcode`, `compile`, and `run` output.
+
+The runner accepts one or more `.cp`/`.c+` sources, followed by optional exact test names. The shell expands patterns such as `test/folder/*.cp`. Ordinary C files can remain unchanged and be included from a test source with a C preprocessor directive such as `#include "fixture.c"`; C files are not comptime imports. In test mode, a source-defined `main` is renamed so the generated test driver can own the executable entry point; the application `main` is not run.
+
+## Standard Library
+
+The initial source library lives in [`../../stdlib/`](../../stdlib/README.md). `@dynamic_list(T)` is a resizable contiguous value container with callback iteration. `@dynamic_map(K, V)` is a resizable key/value table with caller-supplied equality and O(n) lookup/removal. `list_mapper(T, R, InputList, OutputList)` generates a typed callback-based list conversion function. Containers copy values and do not deep-own pointer members; call `destroy` to release container storage.

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { CPlusIndex, CPlusSymbol, indexText } from "./index";
 
 const annotations = ["pub", "priv", "mut", "borrowed", "owned", "stat"];
-const comptimeKeywords = ["import", "if", "else", "for", "type", "var", "fn"];
+const comptimeKeywords = ["import", "if", "else", "for", "type", "var", "fn", "test"];
 const comptimeResultKinds = ["type", "variable", "function", "code", "string", "int", "float", "void"];
 const cKeywords = ["typedef", "struct", "enum", "union", "const", "volatile", "restrict", "return", "if", "else", "for", "while", "switch", "case", "default", "break", "continue", "static", "comptime"];
 

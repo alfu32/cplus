@@ -35,13 +35,14 @@ internal class ComptimeCompiler(
     }
 
     private val modules = linkedMapOf<Path, ComptimeModuleResult>()
+    private val tests = mutableListOf<ComptimeTestBlock>()
     private var comptimeCalls = 0
 
-    fun compile(): MappedText {
+    fun compile(resolveTestBodies: Boolean = false): ComptimeCompilation {
         val result = logger.pass("comptime-parse-import-evaluate") {
             compileModule(root, ArrayDeque())
         }
-        return logger.pass("comptime-materialize") {
+        val runtime = logger.pass("comptime-materialize") {
             val output = MappedTextBuilder()
             result.emitInto(output, linkedSetOf())
             val materialized = output.build()
@@ -50,6 +51,18 @@ internal class ComptimeCompiler(
             }
             materialized
         }
+        val resolvedTests = tests.map { test ->
+            if (!resolveTestBodies) test else test.copy(
+                body = resolveRuntimeReferences(
+                    test.body,
+                    result.environment,
+                    test.bodyStart,
+                    test.source,
+                    deferUnknown = false
+                )
+            )
+        }
+        return ComptimeCompilation(runtime, resolvedTests)
     }
 
     private fun compileModule(source: SourceFile, stack: ArrayDeque<Path>): ComptimeModuleResult {
@@ -85,6 +98,14 @@ internal class ComptimeCompiler(
 
                 val parsed = logger.pass("comptime-pass-${passIndex + 1}-parse") {
                     ComptimeParser(passSource).parse()
+                }
+                parsed.items.filterIsInstance<ComptimeTest>().forEach { item ->
+                    tests += ComptimeTestBlock(
+                        item.name,
+                        parsed.mapped.slice(item.bodyStart, item.bodyEnd),
+                        item.source,
+                        item.bodyStart
+                    )
                 }
                 environment.registerRuntimeTypes(passSource)
                 parsed.items.filterIsInstance<ComptimeImport>().forEach { item ->
@@ -260,7 +281,8 @@ internal class ComptimeCompiler(
                     is ComptimeStruct,
                     is ComptimeValue,
                     is ComptimeFunction,
-                    is ComptimeTypeGenerator -> MappedText.generated("")
+                    is ComptimeTypeGenerator,
+                    is ComptimeTest -> MappedText.generated("")
                     is ComptimeBlock -> evaluateBlock(item, environment)
                     is ComptimeInvocation -> evaluateInvocation(item, environment, item.start)
                     is ComptimeReference -> evaluateReference(item, environment, item.start)
@@ -863,6 +885,18 @@ internal class ComptimeCompiler(
     }
 }
 
+internal data class ComptimeCompilation(
+    val runtime: MappedText,
+    val tests: List<ComptimeTestBlock>
+)
+
+internal data class ComptimeTestBlock(
+    val name: String,
+    val body: MappedText,
+    val source: SourceFile,
+    val bodyStart: Int
+)
+
 private data class ComptimeModuleResult(
     val environment: ComptimeEnvironment,
     val runtime: MappedText,
@@ -894,6 +928,15 @@ private data class ComptimeBlock(
     override val source: SourceFile,
     override val start: Int,
     override val end: Int,
+    val bodyStart: Int,
+    val bodyEnd: Int
+) : ComptimeItem
+
+private data class ComptimeTest(
+    override val source: SourceFile,
+    override val start: Int,
+    override val end: Int,
+    val name: String,
     val bodyStart: Int,
     val bodyEnd: Int
 ) : ComptimeItem
@@ -1121,6 +1164,7 @@ private class ComptimeParser(private val source: SourceFile) {
         val tail = masked.substring(at)
         return when {
             tail.startsWith("@import") && keywordBoundary(tail, 7) -> parseImport(start, at)
+            tail.startsWith("@test") && keywordBoundary(tail, 5) -> parseTest(start, at)
             tail.startsWith("@{") || tail.startsWith("@ {") -> parseBlock(start, at)
             tail.startsWith("@type") && keywordBoundary(tail, 5) -> parseTypeGenerator(start, at)
             isStructDeclaration(start, at) -> parseStruct(start, at)
@@ -1130,6 +1174,44 @@ private class ComptimeParser(private val source: SourceFile) {
             isStandaloneReference(start, at) -> parseReference(start, at)
             else -> null
         }
+    }
+
+    private fun parseTest(start: Int, at: Int): ComptimeTest {
+        val titleStart = skipWhitespace(source.text, at + "@test".length)
+        val open = masked.indexOf('{', titleStart)
+        if (open < 0) throw syntax("@test requires a braced test body", source, at)
+        val titleText = source.text.substring(titleStart, open).trim()
+            .removeSurrounding("(", ")")
+            .trim()
+        val name = if (titleText.length >= 2 && titleText.first() == '"' && titleText.last() == '"') {
+            decodeTestName(titleText.substring(1, titleText.length - 1))
+        } else {
+            titleText
+        }
+        if (name.isBlank()) throw syntax("@test requires a non-empty name", source, at)
+        val close = Delimiters.match(masked, open, '{', '}')
+        if (close < 0) throw syntax("unclosed @test body", source, open)
+        val semicolon = skipWhitespace(masked, close + 1).takeIf { it < masked.length && masked[it] == ';' }
+        return ComptimeTest(source, start, (semicolon ?: close) + 1, name, open + 1, close)
+    }
+
+    private fun decodeTestName(value: String): String {
+        val decoded = StringBuilder(value.length)
+        var index = 0
+        while (index < value.length) {
+            val character = value[index++]
+            if (character != '\\' || index >= value.length) {
+                decoded.append(character)
+                continue
+            }
+            when (val escaped = value[index++]) {
+                'n' -> decoded.append('\n')
+                'r' -> decoded.append('\r')
+                't' -> decoded.append('\t')
+                else -> decoded.append(escaped)
+            }
+        }
+        return decoded.toString()
     }
 
     private fun parseImport(start: Int, at: Int): ComptimeImport {

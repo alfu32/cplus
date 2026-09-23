@@ -33,7 +33,7 @@ class CPlusCompletionContributor : CompletionContributor() {
                 }
 
                 if (prefix.matches(Regex("(?s).*@[A-Za-z_]*$"))) {
-                    listOf("@import", "@if", "@else", "@for", "@type", "@var", "@fn").forEach {
+                    listOf("@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@test").forEach {
                         result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus comptime"))
                     }
                     Regex("@([A-Za-z_]\\w*)").findAll(text).map { it.groupValues[1] }.distinct().forEach {

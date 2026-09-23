@@ -45,6 +45,7 @@ class CPlusCli(
             "transcode" -> transcode(arguments.drop(1))
             "compile" -> compile(arguments.drop(1), runAfter = false)
             "run" -> compile(arguments.drop(1), runAfter = true)
+            "test" -> test(arguments.drop(1))
             else -> throw IllegalArgumentException("unknown command '$command'; use 'cplus help'")
         }
     }
@@ -67,6 +68,7 @@ class CPlusCli(
         val transcoded = transpiler.transpile(source, sourcePath.toString(), logger)
         val options = buildList {
             sourcePath.parent?.let { add("-I${it}") }
+            add("-I${Path("").toAbsolutePath().normalize()}")
             addAll(parsed.passthrough)
         }
 
@@ -82,6 +84,70 @@ class CPlusCli(
             process.waitFor()
         }
     }
+
+    private fun test(arguments: List<String>): Int {
+        val sourceCount = arguments.takeWhile(::isCPlusSource).size
+        if (sourceCount == 0) throw IllegalArgumentException("test requires one or more .cp or .c+ source files")
+        val sources = arguments.take(sourceCount).map(::Path).map { it.toAbsolutePath().normalize() }
+        val requestedNames = arguments.drop(sourceCount).distinct()
+        sources.forEach { path ->
+            if (!Files.isRegularFile(path)) throw IllegalArgumentException("test source does not exist: $path")
+        }
+
+        val compiledSources = sources.map { path ->
+            val source = logger.pass("read-source") { readSource(path) }
+            val testSource = transpiler.transpileTests(source, path.toString(), logger)
+            TestSource(path, testSource)
+        }
+        val allNames = compiledSources.flatMap { it.transcoded.testNames }.toSet()
+        if (allNames.isEmpty()) {
+            errors.append("cplus: no @test declarations found in the input sources\n")
+            return 2
+        }
+        val unmatched = requestedNames.filterNot { it in allNames }
+        if (unmatched.isNotEmpty()) {
+            errors.append("cplus: unknown test name(s): ").append(unmatched.joinToString(", ")).append('\n')
+            return 2
+        }
+
+        val temporaryDirectory = Files.createTempDirectory("cplus-tests-")
+        var failed = 0
+        try {
+            compiledSources.forEachIndexed { index, compiled ->
+                if (requestedNames.isNotEmpty() && compiled.transcoded.testNames.none { it in requestedNames }) {
+                    return@forEachIndexed
+                }
+                val executable = temporaryDirectory.resolve("test-$index")
+                val options = buildList {
+                    compiled.path.parent?.let { add("-I$it") }
+                    add("-I${Path("").toAbsolutePath().normalize()}")
+                }
+                val result = compiler.compileExecutable(compiled.transcoded.source, executable, options, logger)
+                result.diagnostics.forEach(::printDiagnostic)
+                if (result.exitCode != 0) {
+                    failed++
+                    return@forEachIndexed
+                }
+
+                val command = buildList {
+                    add(executable.toAbsolutePath().normalize().toString())
+                    addAll(requestedNames)
+                }
+                val exitCode = logger.pass("run-tests") {
+                    ProcessBuilder(command).inheritIO().start().waitFor()
+                }
+                if (exitCode != 0) failed++
+            }
+        } finally {
+            Files.walk(temporaryDirectory).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+        return if (failed == 0) 0 else 1
+    }
+
+    private fun isCPlusSource(argument: String): Boolean =
+        sourceExtensions.any(argument::endsWith)
 
     private fun parseFileCommand(arguments: List<String>, allowTccOptions: Boolean): ParsedCommand {
         val source = arguments.firstOrNull()?.let(::Path)
@@ -153,10 +219,12 @@ usage:
   cplus transcode filename.cp [-o some_file_name.c]
   cplus compile filename.cp [-o executable] [passthrough tcc parameters]
   cplus run filename.cp [-o executable] [passthrough tcc parameters]
+  cplus test filename.cp [filename2.cp ...] [test name ...]
 
 defaults:
   transcode: filename.cp -> filename.c
   compile/run: filename.cp -> filename
+  test: runs all @test blocks, or only the exact names supplied after the source files
 
 The access and ownership annotations are retained in generated C and defined as
 empty macros: pub, priv, mut, borrowed, owned, and stat.
@@ -170,4 +238,6 @@ empty macros: pub, priv, mut, borrowed, owned, and stat.
         val output: Path?,
         val passthrough: List<String>
     )
+
+    private data class TestSource(val path: Path, val transcoded: TranscodedTestSource)
 }

@@ -30,8 +30,15 @@ application {
     mainClass.set("cplus.MainKt")
 }
 
+tasks.named<JavaExec>("run") {
+    workingDir(rootProject.projectDir)
+}
+
 tasks.test {
     useJUnitPlatform()
+    inputs.files(rootProject.fileTree("stdlib") {
+        include("**/*.cp", "**/*.c")
+    })
 }
 
 tasks.jar {

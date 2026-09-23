@@ -6,7 +6,7 @@ syntax case match
 syntax keyword cplusAnnotation pub priv mut borrowed owned stat
 syntax keyword cplusKeyword typedef struct enum union static const volatile restrict return if else for while do switch case default break continue variable function
 syntax keyword cplusType void char short int long float double signed unsigned size_t
-syntax keyword cplusComptimeKeyword comptime import if else for type var fn variable function code
+syntax keyword cplusComptimeKeyword comptime import if else for type var fn variable function code test
 syntax match cplusPreprocessor /^\s*#.*$/
 syntax match cplusStructType /\<[A-Za-z_][A-Za-z0-9_]*_t\>/
 syntax match cplusComptime /@[A-Za-z_][A-Za-z0-9_]*/
