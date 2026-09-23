@@ -15,6 +15,7 @@ class CPlusSyntaxHighlighter : SyntaxHighlighterBase() {
     override fun getTokenHighlights(tokenType: IElementType): Array<TextAttributesKey> = when (tokenType) {
         CPlusTokenTypes.ANNOTATION -> pack(ANNOTATION)
         CPlusTokenTypes.COMMENT -> pack(DefaultLanguageHighlighterColors.LINE_COMMENT)
+        CPlusTokenTypes.PREPROCESSOR -> pack(DefaultLanguageHighlighterColors.METADATA)
         CPlusTokenTypes.KEYWORD -> pack(DefaultLanguageHighlighterColors.KEYWORD)
         CPlusTokenTypes.TYPE -> pack(DefaultLanguageHighlighterColors.CLASS_NAME)
         CPlusTokenTypes.NUMBER -> pack(DefaultLanguageHighlighterColors.NUMBER)

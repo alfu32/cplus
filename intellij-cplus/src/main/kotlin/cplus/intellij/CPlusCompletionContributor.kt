@@ -25,6 +25,13 @@ class CPlusCompletionContributor : CompletionContributor() {
                     return
                 }
 
+                if (prefix.matches(Regex("(?s).*\\bcomptime\\s+[A-Za-z_]*$"))) {
+                    listOf("type", "variable", "function", "code", "import", "string", "int", "float", "void").forEach {
+                        result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus comptime form"))
+                    }
+                    return
+                }
+
                 if (prefix.matches(Regex("(?s).*@[A-Za-z_]*$"))) {
                     listOf("@import", "@if", "@else", "@for", "@type", "@var", "@fn").forEach {
                         result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus comptime"))
@@ -40,6 +47,10 @@ class CPlusCompletionContributor : CompletionContributor() {
                     Regex("\\b(?:pub\\s+|priv\\s+|static\\s+)?[A-Za-z_]\\w*(?:\\s*\\*)?\\s+([A-Za-z_]\\w*)\\s*\\(")
                         .findAll(text).map { it.groupValues[1] }.distinct().forEach {
                             result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus function"))
+                        }
+                    Regex("(?m)^\\s*#\\s*define\\s+([A-Za-z_]\\w*)\\s+([A-Za-z_]\\w*)\\s*$")
+                        .findAll(text).map { it.groupValues[2] to it.groupValues[1] }.distinct().forEach { (alias, target) ->
+                            result.addElement(LookupElementBuilder.create(alias).withTypeText("C preprocessor alias for $target"))
                         }
                 }
             }

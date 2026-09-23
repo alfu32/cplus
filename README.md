@@ -64,4 +64,4 @@ Editor integrations provide local syntax and lightweight semantic support withou
 
 The receiver type is inferred from declarations such as `name_t value;` or `name_t *value;`. Unknown receivers are left unchanged so ordinary C remains valid.
 
-Comptime and generic declarations beginning with `@` are resolved before method lowering for the supported scalar, import, reflection, block, entity, and generic-struct forms. The syntax, materialization rules, and current limitations are documented in [`documentation/spec/SPEC.comptime.md`](documentation/spec/SPEC.comptime.md).
+Keyword-led and legacy comptime declarations are resolved before method lowering. Comptime string calls can splice validated type names into generated function identifiers; for a more source-visible public name, use an ordinary C `#define` alias before the comptime invocation. This is a coding convention handled by the C preprocessor, not a special C-plus alias feature. The syntax, materialization rules, and current limitations are documented in [`documentation/spec/SPEC.comptime.md`](documentation/spec/SPEC.comptime.md).

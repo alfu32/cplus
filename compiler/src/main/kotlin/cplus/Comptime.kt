@@ -981,6 +981,13 @@ private class ComptimeParser(private val source: SourceFile) {
         var parens = 0
         var brackets = 0
         while (index < source.text.length) {
+            if (braces == 0 && parens == 0 && brackets == 0 &&
+                masked[index] == '#' && isPreprocessorDirectiveStart(index)
+            ) {
+                index = preprocessorDirectiveEnd(index)
+                boundary = index
+                continue
+            }
             if (braces == 0 && parens == 0 && brackets == 0 && isKeywordAt(masked, index, "comptime")) {
                 val start = itemStart(boundary, index)
                 if (start == index) {
@@ -1024,6 +1031,26 @@ private class ComptimeParser(private val source: SourceFile) {
             index++
         }
         return ParsedModule(source, MappedText.identity(source), items)
+    }
+
+    private fun isPreprocessorDirectiveStart(offset: Int): Boolean {
+        val lineStart = masked.lastIndexOf('\n', offset - 1) + 1
+        return (lineStart until offset).all { masked[it].isWhitespace() }
+    }
+
+    private fun preprocessorDirectiveEnd(offset: Int): Int {
+        var lineStart = offset
+        while (lineStart < masked.length) {
+            val newline = masked.indexOf('\n', lineStart)
+            if (newline < 0) return masked.length
+            val continued = newline > lineStart && (
+                masked[newline - 1] == '\\' ||
+                    masked[newline - 1] == '\r' && newline - 1 > lineStart && masked[newline - 2] == '\\'
+                )
+            lineStart = newline + 1
+            if (!continued) return lineStart
+        }
+        return lineStart
     }
 
     private fun parseComptime(start: Int, at: Int): ComptimeItem? {

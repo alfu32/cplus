@@ -33,7 +33,9 @@
     },
     "comptime": {
       "patterns": [
+        {"name": "keyword.control.comptime.cplus", "match": "\\b(comptime|type)\\b"},
         {"name": "keyword.control.comptime.cplus", "match": "@(import|if|else|for|type|var|fn)\\b"},
+        {"name": "entity.name.function.comptime.splice.cplus", "match": "@[A-Za-z_]\\w*(?=\\s*\\([^()]*\\)(?:[A-Za-z_]|\\())"},
         {"name": "entity.name.function.comptime.cplus", "match": "@[A-Za-z_]\\w*"},
         {"name": "variable.other.comptime.cplus", "match": "\\b[A-Za-z_]\\w*(?=\\.(name|size|align|fields)\\b)"}
       ]

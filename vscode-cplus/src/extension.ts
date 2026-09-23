@@ -7,7 +7,8 @@ import { CPlusIndex, CPlusSymbol, indexText } from "./index";
 
 const annotations = ["pub", "priv", "mut", "borrowed", "owned", "stat"];
 const comptimeKeywords = ["import", "if", "else", "for", "type", "var", "fn"];
-const cKeywords = ["typedef", "struct", "enum", "union", "const", "volatile", "restrict", "return", "if", "else", "for", "while", "switch", "case", "default", "break", "continue", "static"];
+const comptimeResultKinds = ["type", "variable", "function", "code", "string", "int", "float", "void"];
+const cKeywords = ["typedef", "struct", "enum", "union", "const", "volatile", "restrict", "return", "if", "else", "for", "while", "switch", "case", "default", "break", "continue", "static", "comptime"];
 
 function symbolKind(kind: CPlusSymbol["kind"]): vscode.SymbolKind {
     switch (kind) {
@@ -66,6 +67,13 @@ class CPlusCompletionProvider implements vscode.CompletionItemProvider {
             }
             for (const method of index.methodsByType.get(owner) ?? []) {
                 addItem(method.name, vscode.CompletionItemKind.Method, method.detail + (method.isStatic ? " (static)" : ""));
+            }
+            return new vscode.CompletionList(items, false);
+        }
+
+        if (/\bcomptime\s+[A-Za-z_]*$/.test(line)) {
+            for (const kind of comptimeResultKinds) {
+                addItem(kind, vscode.CompletionItemKind.Keyword, "C-plus comptime result kind");
             }
             return new vscode.CompletionList(items, false);
         }

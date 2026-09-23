@@ -356,6 +356,7 @@ class TranspilerTest {
                     comptime string @name(type T) {
                         return T.name;
                     }
+                    #define mapper__int__to__float mapper_int_to_float
                     comptime function @generic_mapper(type T, type R) {
                         return R mapper__@name(T)__to__@name(R)(R (*mapper_callback)(T, int), T item, int index) {
                             return mapper_callback(item, index);
@@ -366,13 +367,14 @@ class TranspilerTest {
                         return (float)(item + index);
                     }
                     int main(void) {
-                        return mapper__int__to__float(add_index, 40, 2) == 42.0f ? 0 : 1;
+                        return mapper_int_to_float(add_index, 40, 2) == 42.0f ? 0 : 1;
                     }
                 """.trimIndent()
             )
 
             val generatedC = CPlusTranspiler().transpile(Files.readString(source), source.toString()).code
             assertTrue("float mapper__int__to__float(float (*mapper_callback)(int, int), int item, int index)" in generatedC, generatedC)
+            assertTrue("#define mapper__int__to__float mapper_int_to_float" in generatedC, generatedC)
             assertTrue("@name" !in generatedC, generatedC)
             val errors = StringBuilder()
             val status = CPlusCli(output = StringBuilder(), errors = errors).run(

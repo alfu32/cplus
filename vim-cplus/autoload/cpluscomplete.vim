@@ -26,6 +26,13 @@ function! cpluscomplete#Complete(findstart, base) abort
     return s:Filter(candidates, a:base)
   endif
 
+  if line =~# '\<comptime\s\+[A-Za-z_]*$'
+    for kind in ['type', 'variable', 'function', 'code', 'import', 'string', 'int', 'float', 'void']
+      call AddCandidate(kind, '[C-plus comptime result/form]', 'k')
+    endfor
+    return s:Filter(candidates, a:base)
+  endif
+
   if line =~# '@\a\w*$'
     for keyword in ['@import', '@if', '@else', '@for', '@type', '@var', '@fn']
       call AddCandidate(keyword, '[C-plus comptime]', 'k')
@@ -80,6 +87,10 @@ function! s:Functions() abort
     let value = substitute(value, '\s*($', '', '')
     if !empty(value) && index(['if', 'for', 'while', 'switch'], value) < 0
       call add(result, value)
+    endif
+    let alias = matchlist(line, '^\s*#\s*define\s\+[A-Za-z_][A-Za-z0-9_]*\s\+\([A-Za-z_][A-Za-z0-9_]*\)\s*$')
+    if !empty(alias)
+      call add(result, alias[1])
     endif
   endfor
   return uniq(sort(result))

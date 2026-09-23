@@ -239,6 +239,15 @@ comptime generic_mapper(int, float);
 
 This materializes `float mapper__int__to__float(float (*mapper_callback)(int, int), int item, int index)`. Each splice is validated as a single C identifier before insertion.
 
+The exact specialized name is determined during expansion, so source navigation and external C tools may benefit from an explicit public spelling. A contributor may use an ordinary C preprocessor alias before the comptime invocation:
+
+```c
+#define mapper__int__to__float mapper_int_to_float
+comptime generic_mapper(int, float);
+```
+
+Runtime code can call the visible public spelling, `mapper_int_to_float(...)`. This is a coding convention using standard `#define`, not a C-plus alias feature: the C preprocessor rewrites the generated declaration's identifier, and the compiler does not interpret or validate the alias. Keep the directive before the materialized declaration, and remember that object-like macros have translation-unit-wide replacement effects. C-plus does not add special syntax such as `as` or a comptime-aware `#define` form.
+
 The C output keeps the normal C-plus lowering preamble and contains the same runtime declarations:
 
 ```c

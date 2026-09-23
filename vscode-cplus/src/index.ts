@@ -223,6 +223,21 @@ export function indexText(text: string): CPlusIndex {
         });
     }
 
+    const macroAliasPattern = /^[ \t]*#\s*define\s+([A-Za-z_]\w*)[ \t]+([A-Za-z_]\w*)[ \t]*$/gm;
+    for (const match of text.matchAll(macroAliasPattern)) {
+        const generatedName = match[1];
+        const publicName = match[2];
+        if (index.byName.has(publicName)) continue;
+        const start = (match.index ?? 0) + match[0].lastIndexOf(publicName);
+        add(index, {
+            name: publicName,
+            kind: "function",
+            detail: "C preprocessor alias for " + generatedName,
+            start,
+            end: start + publicName.length
+        });
+    }
+
     const variablePattern = /\b([A-Za-z_]\w*_t)\s+([A-Za-z_]\w*)\s*(?:[;=])/g;
     for (const match of text.matchAll(variablePattern)) {
         index.variableTypes.set(match[2], match[1]);

@@ -48,6 +48,10 @@ class CPlusLexer : LexerBase() {
                     ?.plus(2) ?: bufferEnd
                 CPlusTokenTypes.COMMENT
             }
+            first == '#' && isPreprocessorStart(position) -> {
+                consume { it != '\n' }
+                CPlusTokenTypes.PREPROCESSOR
+            }
             first == '"' || first == '\'' -> {
                 val quote = first
                 tokenEnd = position + 1
@@ -92,6 +96,12 @@ class CPlusLexer : LexerBase() {
         while (tokenEnd < bufferEnd && predicate(buffer[tokenEnd])) tokenEnd++
     }
 
+    private fun isPreprocessorStart(offset: Int): Boolean {
+        var lineStart = offset - 1
+        while (lineStart >= 0 && buffer[lineStart] != '\n') lineStart--
+        return (lineStart + 1 until offset).all { buffer[it].isWhitespace() }
+    }
+
     private fun isIdentifierPart(character: Char): Boolean = character.isLetterOrDigit() || character == '_'
 
     companion object {
@@ -99,7 +109,7 @@ class CPlusLexer : LexerBase() {
             "typedef", "struct", "enum", "union", "const", "void", "char", "short", "int",
             "long", "float", "double", "signed", "unsigned", "return", "if", "else", "for",
             "while", "do", "switch", "case", "default", "break", "continue", "static",
-            "variable", "function", "size_t"
+            "variable", "function", "comptime", "type", "import", "code", "string", "size_t"
         )
         private val annotations = setOf("pub", "priv", "mut", "borrowed", "owned", "stat")
     }
