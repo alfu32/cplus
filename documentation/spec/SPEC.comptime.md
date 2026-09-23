@@ -192,23 +192,21 @@ typedef struct point_t {
 
 ### Entity-returning comptime functions
 
-Comptime functions may return runtime C-plus entities. Preferred result kinds are `type` for generated types, `variable` for generated variables, and `function` for generated functions. The sigiled result kinds `@type`, `@var`, and `@fn` remain accepted for compatibility. The returned body is a C-plus declaration fragment:
+Comptime functions may return runtime C-plus entities. The result kind is itself the entity kind: `type` returns a type, `variable` returns a variable declaration, and `function` returns a C function definition. In particular, `function` is not repeated as a marker before the generated declaration. A `type T` parameter is substituted as a C type name within the returned declaration. The sigiled result kinds `@type`, `@var`, and `@fn` remain accepted for compatibility; the older `return function ...` and `return @fn ...` spellings also remain accepted.
 
 ```c
 comptime variable @make_limit(int @value) {
     return int generated_limit = @value;
 }
 
-comptime function @make_checker(int @limit) {
-    return function int generated_checker(int value) {
-        return value < @limit;
-    };
+comptime function @comptime_proto_decl_name(type T) {
+    return T some_gen_name(T param) {
+        return param + 2;
+    }
 }
 
-comptime {
-    make_limit(10);
-    make_checker(10);
-}
+comptime make_limit(10);
+comptime comptime_proto_decl_name(int);
 ```
 
 The corresponding intermediate C-plus is:
@@ -216,10 +214,12 @@ The corresponding intermediate C-plus is:
 ```c
 int generated_limit = 10;
 
-int generated_checker(int value) {
-    return value < 10;
+int some_gen_name(int param) {
+    return param + 2;
 }
 ```
+
+The generated function is ordinary C-plus after expansion and can be called from runtime code, for example `some_gen_name(40)`. The result kind selects what the generator returns; the generated C declaration supplies its own name and signature.
 
 The C output keeps the normal C-plus lowering preamble and contains the same runtime declarations:
 
@@ -232,7 +232,7 @@ The C output keeps the normal C-plus lowering preamble and contains the same run
 #define stat
 
 int generated_limit = 10;
-int generated_checker(int value) { return value < 10; }
+int some_gen_name(int param) { return param + 2; }
 ```
 
 Entity results are mapped C-plus fragments. The compiler does not expose a user-facing typed AST, and ordinary strings are never evaluated as source. `@code` is the explicit source-fragment form.

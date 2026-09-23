@@ -13,7 +13,7 @@ Each module is processed through repeated structured top-level parses:
 3. Parse the output again so declarations emitted by the previous step become active.
 4. Stop when no active comptime syntax remains, then hand the result to the existing C-plus lowering passes.
 
-The preferred syntax has `comptime` mark declarations, invocations, imports, and blocks. A declaration uses `comptime <result-kind> @name(...)`; `type T` marks a type-valued parameter and `comptime type` marks a type generator. `comptime` at a runtime expression evaluates a scalar expression, while `@name` remains an explicit comptime reference. Existing `@`-prefixed grammar continues to work.
+The preferred syntax has `comptime` mark declarations, invocations, imports, and blocks. A declaration uses `comptime <result-kind> @name(...)`; `type T` marks a type-valued parameter and `comptime type` marks a type generator. The `function` result kind directly returns a runtime C function definition (for example, `return T generated(T value) { ... }`); it is not a second marker on that definition. `comptime` at a runtime expression evaluates a scalar expression, while `@name` remains an explicit comptime reference. Existing `@`-prefixed grammar continues to work.
 
 Generator bodies remain templates during parsing. A returned `@code { ... }` fragment is inserted as source and becomes eligible for parsing on the next pass. In a named struct type result, embedded `@function(...)` calls may splice only identifier-safe strings into the generated identifier. Other comptime declarations remain inert until the fragment is emitted, then are resolved on a later pass. The comptime environment and imports persist between passes; source origins pass through every mapped-text splice.
 
@@ -26,6 +26,7 @@ Bound expansion to 128 passes, 10,000 comptime calls, 8 MiB of generated source,
 - A generated `@code` fragment can declare another comptime generator, invoke it in a comptime block, and materialize its generated type on a later pass.
 - Keyword-led declarations, imports, blocks, invocations, and inline scalar expressions parse and materialize without changing legacy syntax behavior.
 - A `comptime type` generator can return one named struct in `@code`, splice a reflected type name into its tag, and typedef it under the requested alias.
+- A `comptime function` generator can directly return a C function definition, substitute a `type T` parameter in its signature, and produce a function that compiles and runs.
 - Identifier splices insert valid string tokens without quotes and reject invalid C identifiers; ordinary scalar strings remain quoted in runtime expressions.
 - Generated imports register compile-time values and contribute mapped runtime declarations to the module output.
 - Existing generic struct and function generation, scalar evaluation, imports, and source mappings continue to work.

@@ -623,15 +623,18 @@ internal class ComptimeCompiler(
         }
 
         if (function.resultKind == "variable" || function.resultKind == "function") {
-            val returnStart = Regex("\\breturn\\s+").find(function.body)?.range?.last?.plus(1)
+            val masked = SourceMasker.mask(function.body)
+            val returnStart = Regex("\\breturn\\s+").find(masked)?.range?.last?.plus(1)
                 ?: throw syntax("comptime function @${function.name} must return an entity", function.source, function.start)
             val fragmentStart: Int
             val fragmentEnd: Int
             if (function.resultKind == "function") {
-                val functionKeyword = Regex("(?:function|@fn)\\s+").find(function.body, returnStart)
-                    ?: throw syntax("function entity @${function.name} must return function ...", function.source, function.start)
-                fragmentStart = functionKeyword.range.last + 1
-                val masked = SourceMasker.mask(function.body)
+                // `function` describes the comptime generator's result kind. The returned
+                // runtime entity is already a C function definition, so no extra marker is
+                // required. Keep the previous marker spellings accepted for compatibility.
+                val legacyMarker = Regex("(?:function|@fn)\\s+").find(masked, returnStart)
+                    ?.takeIf { it.range.first == returnStart }
+                fragmentStart = legacyMarker?.range?.last?.plus(1) ?: returnStart
                 val open = masked.indexOf('{', fragmentStart)
                 val close = Delimiters.match(masked, open, '{', '}')
                 if (open < 0 || close < 0) throw syntax("unclosed generated function from @${function.name}", function.source, function.start)
@@ -647,7 +650,15 @@ internal class ComptimeCompiler(
                 function.bodyStart + fragmentEnd
             )
             val replacements = function.parameters.mapIndexed { index, parameter -> parameter.name to values[index].render() }.toMap()
-            return CtEntity(substituteMapped(fragment, replacements, callSource, callOffset))
+            return CtEntity(
+                substituteMapped(
+                    fragment,
+                    replacements,
+                    callSource,
+                    callOffset,
+                    bareIdentifiers = function.parameters.filter { it.type == "type" }.map { it.name }.toSet()
+                )
+            )
         }
         val match = Regex("return\\s+([\\s\\S]*?);(?:\\s*})?\\s*$").find(function.body.trim())
             ?: throw syntax("comptime function @${function.name} must return a value", function.source, function.start)

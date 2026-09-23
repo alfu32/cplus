@@ -310,6 +310,41 @@ class TranspilerTest {
     }
 
     @Test
+    fun generatesAndRunsGenericFunctionFromFunctionResultKind() {
+        val directory = Files.createTempDirectory("cplus-comptime-function-result")
+        try {
+            val source = directory.resolve("generated.cp")
+            val executable = directory.resolve("generated")
+            Files.writeString(
+                source,
+                """
+                    comptime function @comptime_proto_decl_name(type T) {
+                        return T some_gen_name(T param) {
+                            return param + 2;
+                        }
+                    }
+                    comptime comptime_proto_decl_name(int);
+                    int main(void) {
+                        return some_gen_name(40) == 42 ? 0 : 1;
+                    }
+                """.trimIndent()
+            )
+
+            val generatedC = try {
+                CPlusTranspiler().transpile(Files.readString(source), source.toString()).code
+            } catch (error: CPlusSyntaxException) {
+                throw AssertionError("${error.message} at ${error.sourceSpan}", error)
+            }
+            assertTrue("int some_gen_name(int param)" in generatedC, generatedC)
+            assertTrue("return param + 2;" in generatedC, generatedC)
+            assertTrue(CPlusCli().run(listOf("run", source.toString(), "-o", executable.toString())) == 0)
+            assertTrue(Files.isExecutable(executable), "TCC did not produce a generated-function executable")
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun acceptsSigiledTypeGeneratorNames() {
         val result = CPlusTranspiler().transpile(
             """
