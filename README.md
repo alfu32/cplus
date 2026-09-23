@@ -37,7 +37,7 @@ The bundled TinyCC JNI library is used for compilation, so `compile` and `run` d
 
 The test command also accepts multiple source paths before optional exact test names; shell globs expand normally, for example `java -jar c-plus.jar test test/folder/*.cp "some test"`.
 
-Inside `@test` bodies, use `@assert(condition)` or bytewise `@assertEquals(expected, actual)`; use `strcmp` when checking string contents. Existing C sources can be included with `#include "fixture.c"` or `@import("fixture.c")`; both use the C preprocessor/compiler without rewriting the C file.
+Inside `@test` bodies, use `@assert(condition)` or bytewise `@assertEquals(expected, actual)`. Failed assertions report expected and obtained values (common scalar values are formatted; other objects are shown as bytes), and test headings are numbered and highlighted in yellow. Use `strcmp` when checking string contents. Existing C sources can be included with `#include "fixture.c"` or `@import("fixture.c")`; both use the C preprocessor/compiler without rewriting the C file.
 
 The installed application can also be launched from `cli/build/install/c-plus/bin/c-plus` after `./gradlew :cli:installDist`.
 
@@ -55,7 +55,7 @@ Compilation prints each pass to stderr. Generated C contains `#line` directives 
 
 - `compiler/`: reusable Kotlin transpiler and embedded TinyCC adapter.
 - `cli/`: command-line application and integration tests.
-- `stdlib/`: source-level generic containers, comptime mapper generators, examples, and `@test` suites.
+- `stdlib/`: source-level OS-mapped allocation arenas, generic containers, comptime mapper generators, examples, and `@test` suites.
 - `documentation/spec/`: living language, comptime, and compiler specifications.
 - `vscode-cplus/`: deployable VS Code extension with highlighting, completion, symbols, navigation, diagnostics, and CLI commands.
 - `intellij-cplus/`: deployable IntelliJ Platform plugin with a flat PSI parser, highlighting, completion, and declaration navigation.

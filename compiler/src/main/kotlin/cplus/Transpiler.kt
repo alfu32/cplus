@@ -40,8 +40,11 @@ class CPlusTranspiler {
         val structs = logger.pass("lower-struct-methods") {
             StructLowerer().lower(calls)
         }
+        val allocationAnalysis = logger.pass("allocation-intent-analysis") {
+            AllocationIntentAnalyzer().analyze(structs)
+        }
         val emitted = logger.pass("emit-mapped-c") {
-            MappedEmitter(sourceFile).emit(structs, CPlusPreamble.text)
+            MappedEmitter(sourceFile).emit(structs, CPlusPreamble.text, allocationAnalysis)
         }
         return TranscodedTestSource(emitted, input.second)
     }
@@ -62,14 +65,82 @@ class CPlusTranspiler {
             #include <stddef.h>
             #include <stdio.h>
             #include <string.h>
-            #define CPLUS_TEST_ASSERT(condition) do { if (!(condition)) { fprintf(stderr, "assertion failed: %s (%s:%d)\n", #condition, __FILE__, __LINE__); return 1; } } while (0)
+            enum {
+                CPLUS_TEST_VALUE_BYTES,
+                CPLUS_TEST_VALUE_BOOL,
+                CPLUS_TEST_VALUE_CHAR,
+                CPLUS_TEST_VALUE_SIGNED_CHAR,
+                CPLUS_TEST_VALUE_SHORT,
+                CPLUS_TEST_VALUE_INT,
+                CPLUS_TEST_VALUE_LONG,
+                CPLUS_TEST_VALUE_LONG_LONG,
+                CPLUS_TEST_VALUE_UNSIGNED_CHAR,
+                CPLUS_TEST_VALUE_UNSIGNED_SHORT,
+                CPLUS_TEST_VALUE_UNSIGNED_INT,
+                CPLUS_TEST_VALUE_UNSIGNED_LONG,
+                CPLUS_TEST_VALUE_UNSIGNED_LONG_LONG,
+                CPLUS_TEST_VALUE_FLOAT,
+                CPLUS_TEST_VALUE_DOUBLE,
+                CPLUS_TEST_VALUE_LONG_DOUBLE,
+                CPLUS_TEST_VALUE_STRING
+            };
+            #define CPLUS_TEST_VALUE_KIND(value) _Generic((value), \
+                _Bool: CPLUS_TEST_VALUE_BOOL, \
+                char: CPLUS_TEST_VALUE_CHAR, \
+                signed char: CPLUS_TEST_VALUE_SIGNED_CHAR, \
+                short: CPLUS_TEST_VALUE_SHORT, \
+                int: CPLUS_TEST_VALUE_INT, \
+                long: CPLUS_TEST_VALUE_LONG, \
+                long long: CPLUS_TEST_VALUE_LONG_LONG, \
+                unsigned char: CPLUS_TEST_VALUE_UNSIGNED_CHAR, \
+                unsigned short: CPLUS_TEST_VALUE_UNSIGNED_SHORT, \
+                unsigned int: CPLUS_TEST_VALUE_UNSIGNED_INT, \
+                unsigned long: CPLUS_TEST_VALUE_UNSIGNED_LONG, \
+                unsigned long long: CPLUS_TEST_VALUE_UNSIGNED_LONG_LONG, \
+                float: CPLUS_TEST_VALUE_FLOAT, \
+                double: CPLUS_TEST_VALUE_DOUBLE, \
+                long double: CPLUS_TEST_VALUE_LONG_DOUBLE, \
+                char*: CPLUS_TEST_VALUE_STRING, \
+                const char*: CPLUS_TEST_VALUE_STRING, \
+                default: CPLUS_TEST_VALUE_BYTES)
+            static void cplus_test_print_bytes(FILE* stream, const void* value, size_t size) {
+                fprintf(stream, "bytes[%zu]=0x", size);
+                for (size_t index = 0; index < size; index++) fprintf(stream, "%02x", ((const unsigned char*)value)[index]);
+            }
+            static void cplus_test_print_value(FILE* stream, const void* value, size_t size, int kind) {
+                switch (kind) {
+                    case CPLUS_TEST_VALUE_BOOL: fprintf(stream, "%s", *(const _Bool*)value ? "true" : "false"); return;
+                    case CPLUS_TEST_VALUE_CHAR: fprintf(stream, "%d", (int)*(const char*)value); return;
+                    case CPLUS_TEST_VALUE_SIGNED_CHAR: fprintf(stream, "%d", (int)*(const signed char*)value); return;
+                    case CPLUS_TEST_VALUE_SHORT: fprintf(stream, "%d", (int)*(const short*)value); return;
+                    case CPLUS_TEST_VALUE_INT: fprintf(stream, "%d", *(const int*)value); return;
+                    case CPLUS_TEST_VALUE_LONG: fprintf(stream, "%ld", *(const long*)value); return;
+                    case CPLUS_TEST_VALUE_LONG_LONG: fprintf(stream, "%lld", *(const long long*)value); return;
+                    case CPLUS_TEST_VALUE_UNSIGNED_CHAR: fprintf(stream, "%u", (unsigned int)*(const unsigned char*)value); return;
+                    case CPLUS_TEST_VALUE_UNSIGNED_SHORT: fprintf(stream, "%u", (unsigned int)*(const unsigned short*)value); return;
+                    case CPLUS_TEST_VALUE_UNSIGNED_INT: fprintf(stream, "%u", *(const unsigned int*)value); return;
+                    case CPLUS_TEST_VALUE_UNSIGNED_LONG: fprintf(stream, "%lu", *(const unsigned long*)value); return;
+                    case CPLUS_TEST_VALUE_UNSIGNED_LONG_LONG: fprintf(stream, "%llu", *(const unsigned long long*)value); return;
+                    case CPLUS_TEST_VALUE_FLOAT: fprintf(stream, "%g", (double)*(const float*)value); return;
+                    case CPLUS_TEST_VALUE_DOUBLE: fprintf(stream, "%g", *(const double*)value); return;
+                    case CPLUS_TEST_VALUE_LONG_DOUBLE: fprintf(stream, "%Lg", *(const long double*)value); return;
+                    case CPLUS_TEST_VALUE_STRING: {
+                        const char* string_value = *(const char* const*)value;
+                        if (string_value == NULL) fputs("NULL", stream);
+                        else fprintf(stream, "\"%s\"", string_value);
+                        return;
+                    }
+                    default: cplus_test_print_bytes(stream, value, size); return;
+                }
+            }
+            #define CPLUS_TEST_ASSERT(condition) do { int cplus_assert_obtained = !!(condition); if (!cplus_assert_obtained) { fprintf(stderr, "assertion failed: %s (%s:%d)\n  expected: true\n  obtained: false\n", #condition, __FILE__, __LINE__); return 1; } } while (0)
             static int cplus_test_assert_equals_bytes(const void* expected, size_t expected_size, const void* other, size_t other_size) {
                 if (expected_size != other_size) return 0;
                 if (expected == other) return 1;
                 if (expected == NULL || other == NULL) return 0;
                 return memcmp(expected, other, expected_size) == 0;
             }
-            #define CPLUS_TEST_ASSERT_EQUALS(expected, other) do { __typeof__(expected) cplus_expected_value = (expected); __typeof__(other) cplus_other_value = (other); if (!cplus_test_assert_equals_bytes(&cplus_expected_value, sizeof cplus_expected_value, &cplus_other_value, sizeof cplus_other_value)) { fprintf(stderr, "assertion failed: assertEquals(%s, %s) (%s:%d)\n", #expected, #other, __FILE__, __LINE__); return 1; } } while (0)
+            #define CPLUS_TEST_ASSERT_EQUALS(expected, other) do { __typeof__(expected) cplus_expected_value = (expected); __typeof__(other) cplus_other_value = (other); if (!cplus_test_assert_equals_bytes(&cplus_expected_value, sizeof cplus_expected_value, &cplus_other_value, sizeof cplus_other_value)) { fprintf(stderr, "assertion failed: assertEquals(%s, %s) (%s:%d)\n  expected: ", #expected, #other, __FILE__, __LINE__); cplus_test_print_value(stderr, &cplus_expected_value, sizeof cplus_expected_value, CPLUS_TEST_VALUE_KIND(cplus_expected_value)); fprintf(stderr, "\n  obtained: "); cplus_test_print_value(stderr, &cplus_other_value, sizeof cplus_other_value, CPLUS_TEST_VALUE_KIND(cplus_other_value)); fputc('\n', stderr); return 1; } } while (0)
             #define CPLUS_TEST_FAIL(message) do { fprintf(stderr, "test failure: %s\n", (message)); return 1; } while (0)
             """.trimIndent() + "\n",
         )
@@ -102,10 +173,10 @@ class CPlusTranspiler {
                 """
                 if (cplus_test_requested($literal, argc, argv)) {
                     selected++;
-                    printf("========== BEGIN TEST: %s ==========\n", $literal);
+                    printf("\n\033[1;33m========== BEGIN TEST ${index + 1}/${tests.size}: %s ==========\033[0m\n", $literal);
                     fflush(stdout);
                     int result = cplus_test_$index();
-                    printf("========== END TEST: %s [%s] ==========\n", $literal, result == 0 ? "PASS" : "FAIL");
+                    printf("========== END TEST ${index + 1}/${tests.size}: %s [%s] ==========\n", $literal, result == 0 ? "PASS" : "FAIL");
                     if (result != 0) failed++;
                 }
                 """.trimIndent() + "\n"
@@ -237,6 +308,10 @@ private object CPlusPreamble {
         #define borrowed
         #define owned
         #define stat
+        #define scratch
+        #define hot
+        #define warm
+        #define cold
         #endif
 
     """.trimIndent() + "\n\n"

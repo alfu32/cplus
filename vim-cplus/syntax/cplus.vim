@@ -3,7 +3,7 @@ if exists("b:current_syntax")
 endif
 
 syntax case match
-syntax keyword cplusAnnotation pub priv mut borrowed owned stat
+syntax keyword cplusAnnotation pub priv mut borrowed owned stat scratch hot warm cold
 syntax keyword cplusSelf self
 syntax keyword cplusKeyword typedef struct enum union static const volatile restrict return if else for while do switch case default break continue variable function
 syntax keyword cplusType void char short int long float double signed unsigned size_t

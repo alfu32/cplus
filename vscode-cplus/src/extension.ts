@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CPlusSymbol, indexText, memberContext } from "./index";
 
-const annotations = ["pub", "priv", "mut", "borrowed", "owned", "stat"];
+const annotations = ["pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"];
 const comptimeKeywords = ["import", "if", "else", "for", "type", "var", "fn", "test"];
 const comptimeResultKinds = ["type", "variable", "function", "code", "string", "int", "float", "void"];
 const cKeywords = ["typedef", "struct", "enum", "union", "const", "volatile", "restrict", "return", "if", "else", "for", "while", "switch", "case", "default", "break", "continue", "static", "comptime"];
@@ -102,6 +102,18 @@ class CPlusHoverProvider implements vscode.HoverProvider {
     provideHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
         const word = wordAt(document, position);
         if (!word) return undefined;
+        if (word === "scratch") {
+            return new vscode.Hover("scratch: short-lived memory invalidated by reset_scratch()");
+        }
+        if (word === "hot") {
+            return new vscode.Hover("hot: frequently accessed working-set memory; use alloc_hot() or alloc_hot_aligned()");
+        }
+        if (word === "warm") {
+            return new vscode.Hover("warm: general-purpose dynamic memory; use alloc_warm(), realloc_warm(), and free_warm()");
+        }
+        if (word === "cold") {
+            return new vscode.Hover("cold: infrequently accessed or large memory; use alloc_cold() and free_cold()");
+        }
         if (annotations.includes(word)) {
             return new vscode.Hover(word + ": optional C-plus source annotation; retained as an empty C macro");
         }

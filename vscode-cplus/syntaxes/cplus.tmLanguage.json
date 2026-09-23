@@ -48,7 +48,7 @@
     },
     "annotations": {
       "patterns": [
-        {"name": "storage.modifier.annotation.cplus", "match": "\\b(pub|priv|mut|borrowed|owned|stat|static)\\b"}
+        {"name": "storage.modifier.annotation.cplus", "match": "\\b(pub|priv|mut|borrowed|owned|stat|static|scratch|hot|warm|cold)\\b"}
       ]
     },
     "keywords": {

@@ -146,6 +146,45 @@ data class SourceMapEntry(
     val source: SourceSpan
 )
 
+enum class AllocationIntent {
+    NONE,
+    SCRATCH,
+    HOT,
+    WARM,
+    COLD
+}
+
+enum class AllocationOwnership {
+    NONE,
+    BORROWED,
+    OWNED
+}
+
+enum class AllocationSymbolKind {
+    VARIABLE,
+    PARAMETER,
+    FUNCTION_RETURN
+}
+
+data class AllocationSymbol(
+    val name: String,
+    val kind: AllocationSymbolKind,
+    val intent: AllocationIntent,
+    val ownership: AllocationOwnership,
+    val knownProvenance: AllocationIntent,
+    val sourceSpan: SourceSpan
+)
+
+data class CPlusDiagnostic(
+    val message: String,
+    val sourceSpan: SourceSpan
+)
+
+data class AllocationAnalysisResult(
+    val symbols: List<AllocationSymbol> = emptyList(),
+    val diagnostics: List<CPlusDiagnostic> = emptyList()
+)
+
 class SourceMap internal constructor(
     val entries: List<SourceMapEntry>
 ) {
@@ -157,12 +196,17 @@ class SourceMap internal constructor(
 data class TranscodedSource(
     val code: String,
     val sourceFile: SourceFile,
-    val sourceMap: SourceMap
+    val sourceMap: SourceMap,
+    val allocationAnalysis: AllocationAnalysisResult = AllocationAnalysisResult()
 )
 
 /** Emits C-plus text and inserts compiler-visible source locations at mapped line boundaries. */
 class MappedEmitter(private val sourceFile: SourceFile) {
-    fun emit(mapped: MappedText, prelude: String): TranscodedSource {
+    fun emit(
+        mapped: MappedText,
+        prelude: String,
+        allocationAnalysis: AllocationAnalysisResult = AllocationAnalysisResult()
+    ): TranscodedSource {
         val output = StringBuilder(prelude)
         val entries = mutableListOf<SourceMapEntry>()
         var physicalLine = prelude.count { it == '\n' } + 1
@@ -203,7 +247,7 @@ class MappedEmitter(private val sourceFile: SourceFile) {
             cursor = end
         }
 
-        return TranscodedSource(output.toString(), sourceFile, SourceMap(entries))
+        return TranscodedSource(output.toString(), sourceFile, SourceMap(entries), allocationAnalysis)
     }
 
     private fun escapeFile(file: String): String = file

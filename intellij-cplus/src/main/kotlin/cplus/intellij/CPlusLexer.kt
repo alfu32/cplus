@@ -116,6 +116,8 @@ class CPlusLexer : LexerBase() {
             "while", "do", "switch", "case", "default", "break", "continue", "static",
             "string", "size_t"
         )
-        private val annotations = setOf("pub", "priv", "mut", "borrowed", "owned", "stat")
+        private val annotations = setOf(
+            "pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"
+        )
     }
 }

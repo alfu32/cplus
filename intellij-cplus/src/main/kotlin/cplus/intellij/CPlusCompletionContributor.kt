@@ -110,7 +110,9 @@ class CPlusCompletionContributor : CompletionContributor() {
             .find(text)?.groupValues?.get(1)
 
     companion object {
-        private val annotations = listOf("pub", "priv", "mut", "borrowed", "owned", "stat")
+        private val annotations = listOf(
+            "pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"
+        )
         private val controlKeywords = setOf("if", "for", "while", "switch")
     }
 }

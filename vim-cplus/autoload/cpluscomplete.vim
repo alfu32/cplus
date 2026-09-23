@@ -41,7 +41,7 @@ function! cpluscomplete#Complete(findstart, base) abort
       call AddCandidate(symbol, '[C-plus comptime]', 'v')
     endfor
   else
-    for annotation in ['pub', 'priv', 'mut', 'borrowed', 'owned', 'stat']
+    for annotation in ['pub', 'priv', 'mut', 'borrowed', 'owned', 'stat', 'scratch', 'hot', 'warm', 'cold']
       call AddCandidate(annotation, '[C-plus annotation]', 'k')
     endfor
     for type_name in s:Types()

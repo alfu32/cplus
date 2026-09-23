@@ -60,6 +60,7 @@ class CPlusCli(
         val sourcePath = parsed.source.toAbsolutePath().normalize()
         val source = logger.pass("read-source") { readSource(sourcePath) }
         val transcoded = transpiler.transpile(source, sourcePath.toString(), logger)
+        printAllocationDiagnostics(transcoded)
         logger.pass("write-c") { writeText(destination, transcoded.code) }
         return 0
     }
@@ -70,6 +71,7 @@ class CPlusCli(
         val sourcePath = parsed.source.toAbsolutePath().normalize()
         val source = logger.pass("read-source") { readSource(sourcePath) }
         val transcoded = transpiler.transpile(source, sourcePath.toString(), logger)
+        printAllocationDiagnostics(transcoded)
         val options = buildList {
             sourcePath.parent?.let { add("-I${it}") }
             add("-I${Path("").toAbsolutePath().normalize()}")
@@ -101,6 +103,7 @@ class CPlusCli(
         val compiledSources = sources.map { path ->
             val source = logger.pass("read-source") { readSource(path) }
             val testSource = transpiler.transpileTests(source, path.toString(), logger)
+            printAllocationDiagnostics(testSource.source)
             TestSource(path, testSource)
         }
         val allNames = compiledSources.flatMap { it.transcoded.testNames }.toSet()
@@ -199,6 +202,14 @@ class CPlusCli(
             .append(": ")
             .append(diagnostic.message)
             .append('\n')
+    }
+
+    private fun printAllocationDiagnostics(source: TranscodedSource) {
+        source.allocationAnalysis.diagnostics.forEach { diagnostic ->
+            val span = diagnostic.sourceSpan
+            val location = span.file?.let { "$it:${span.startLine}:${span.startColumn}" } ?: "<c-plus-input>"
+            errors.append(location).append(": warning: ").append(diagnostic.message).append('\n')
+        }
     }
 
     private fun defaultTranscodedPath(source: Path): Path {

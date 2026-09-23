@@ -59,6 +59,13 @@ class TranspilerTest {
         assertTrue("CPLUS_TEST_ASSERT_EQUALS(answer, 40 + 2);" in generated, generated)
         assertFalse("@assert" in generated, generated)
         assertTrue("cplus_test_assert_equals_bytes" in generated, generated)
+        assertTrue("expected: true\\n  obtained: false" in generated, generated)
+        assertTrue("cplus_test_print_value(stderr" in generated, generated)
+        assertTrue("expected: \", #expected" in generated, generated)
+        assertTrue("obtained: \");" in generated, generated)
+        assertTrue("BEGIN TEST 1/1: %s" in generated, generated)
+        assertTrue("\\033[1;33m========== BEGIN TEST" in generated, generated)
+        assertTrue("printf(\"\\n\\033[1;33m" in generated, generated)
     }
 
     @Test
@@ -339,10 +346,176 @@ class TranspilerTest {
 
         val result = CPlusTranspiler().transpile(source).code
         assertTrue("#define borrowed" in result, result)
+        assertTrue("#define scratch" in result, result)
+        assertTrue("#define hot" in result, result)
+        assertTrue("#define warm" in result, result)
+        assertTrue("#define cold" in result, result)
         assertTrue("pub int counter__add(borrowed mut counter_t *self, int amount)" in result, result)
         assertTrue("static pub counter_t* counter__alloc_init(int initial)" in result, result)
         assertTrue("counter__add(&counter, 3)" in result, result)
         assertTrue("counter__alloc_init(0)" in result, result)
+    }
+
+    @Test
+    fun retainsAllocationIntentAnnotationsAsEmptyMacros() {
+        val generated = CPlusTranspiler().transpile(
+            """
+                scratch char* temporary;
+                hot node_t* active;
+                warm char* text;
+                cold unsigned char* snapshot;
+            """.trimIndent()
+        ).code
+
+        assertTrue("#define scratch" in generated, generated)
+        assertTrue("#define hot" in generated, generated)
+        assertTrue("#define warm" in generated, generated)
+        assertTrue("#define cold" in generated, generated)
+        assertTrue("scratch char* temporary;" in generated, generated)
+        assertTrue("hot node_t* active;" in generated, generated)
+        assertTrue("warm char* text;" in generated, generated)
+        assertTrue("cold unsigned char* snapshot;" in generated, generated)
+    }
+
+    @Test
+    fun compilesAllocationIntentAnnotationsWithoutTheAllocatorModule() {
+        val directory = Files.createTempDirectory("cplus-allocation-intents")
+        try {
+            val source = directory.resolve("intents.cp")
+            val executable = directory.resolve("intents")
+            Files.writeString(
+                source,
+                """
+                    #include <stddef.h>
+                    scratch char* temporary = NULL;
+                    hot int* active = NULL;
+                    warm char* text = NULL;
+                    cold unsigned char* snapshot = NULL;
+                    int main(void) {
+                        return temporary != NULL || active != NULL || text != NULL || snapshot != NULL;
+                    }
+                """.trimIndent()
+            )
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf("run", source.toString(), "-o", executable.toString())
+            )
+            assertEquals(0, status, errors.toString())
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun diagnosesDirectAllocationIntentMismatchesAndRetainsIntentMetadata() {
+        val result = CPlusTranspiler().transpile(
+            """
+                int main(void) {
+                    hot char* value = alloc_cold(64);
+                    return 0;
+                }
+            """.trimIndent(),
+            "intent.cp"
+        )
+
+        assertEquals(1, result.allocationAnalysis.diagnostics.size)
+        val diagnostic = result.allocationAnalysis.diagnostics.single()
+        assertTrue(diagnostic.message.contains("'value' is declared hot but receives memory from alloc_cold()"))
+        assertEquals("intent.cp", diagnostic.sourceSpan.file)
+        assertEquals(2, diagnostic.sourceSpan.startLine)
+        val variable = result.allocationAnalysis.symbols.single { it.name == "value" }
+        assertEquals(AllocationSymbolKind.VARIABLE, variable.kind)
+        assertEquals(AllocationIntent.HOT, variable.intent)
+        assertEquals(AllocationIntent.COLD, variable.knownProvenance)
+    }
+
+    @Test
+    fun propagatesAllocationProvenanceThroughSimpleAssignments() {
+        val result = CPlusTranspiler().transpile(
+            """
+                int main(void) {
+                    scratch char* temporary = alloc_scratch(32);
+                    char* alias = temporary;
+                    warm char* retained = alias;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+
+        assertEquals(1, result.allocationAnalysis.diagnostics.size)
+        assertTrue(result.allocationAnalysis.diagnostics.single().message.contains("'retained' is declared warm"), result.allocationAnalysis.diagnostics.toString())
+        assertEquals(AllocationIntent.SCRATCH, result.allocationAnalysis.symbols.single { it.name == "alias" }.knownProvenance)
+    }
+
+    @Test
+    fun checksAnnotatedFunctionReturnsAndAllocationIntentParameters() {
+        val result = CPlusTranspiler().transpile(
+            """
+                pub owned warm char* make_name(void) {
+                    return alloc_cold(24);
+                }
+                pub void consume(borrowed warm char* value) {}
+                pub int fill(owned warm char** out) {
+                    *out = alloc_cold(8);
+                    return 0;
+                }
+                int main(void) {
+                    scratch char* temporary = alloc_scratch(24);
+                    consume(temporary);
+                    warm char* name = make_name();
+                    return 0;
+                }
+            """.trimIndent(),
+            "contracts.cp"
+        )
+
+        assertEquals(3, result.allocationAnalysis.diagnostics.size)
+        assertTrue(result.allocationAnalysis.diagnostics.any { it.message.contains("function 'make_name' is annotated warm but returns alloc_cold()") })
+        assertTrue(result.allocationAnalysis.diagnostics.any { it.message.contains("argument for 'consume.value' is scratch") })
+        assertTrue(result.allocationAnalysis.diagnostics.any { it.message.contains("'out' is declared warm but receives memory from alloc_cold()") })
+        val returned = result.allocationAnalysis.symbols.single { it.kind == AllocationSymbolKind.FUNCTION_RETURN && it.name == "make_name" }
+        assertEquals(AllocationIntent.WARM, returned.intent)
+        assertEquals(AllocationOwnership.OWNED, returned.ownership)
+        val parameter = result.allocationAnalysis.symbols.single { it.kind == AllocationSymbolKind.PARAMETER && it.name == "value" }
+        assertEquals(AllocationIntent.WARM, parameter.intent)
+        assertEquals(AllocationOwnership.BORROWED, parameter.ownership)
+        val output = result.allocationAnalysis.symbols.single { it.kind == AllocationSymbolKind.PARAMETER && it.name == "out" }
+        assertEquals(AllocationIntent.WARM, output.intent)
+        assertEquals(AllocationOwnership.OWNED, output.ownership)
+    }
+
+    @Test
+    fun cliPrintsMappedAllocationIntentWarningsWithoutFailingTranscode() {
+        val directory = Files.createTempDirectory("cplus-allocation-warning")
+        try {
+            val source = directory.resolve("warning.cp")
+            val imported = directory.resolve("allocator.cp")
+            val generated = directory.resolve("warning.c")
+            Files.writeString(imported,
+                """
+                    void imported_function(void) {
+                        hot char* value = alloc_cold(16);
+                    }
+                """.trimIndent()
+            )
+            Files.writeString(
+                source,
+                """
+                    comptime import "allocator.cp";
+                    int main(void) { return 0; }
+                """.trimIndent()
+            )
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf("transcode", source.toString(), "-o", generated.toString())
+            )
+
+            assertEquals(0, status)
+            assertTrue(errors.contains("allocator.cp:2:15: warning: allocation intent mismatch: 'value' is declared hot"), errors.toString())
+            assertTrue(Files.isRegularFile(generated))
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
     }
 
     @Test

@@ -17,8 +17,14 @@ The following annotations are optional, empty C macros retained in generated cod
 | `borrowed` | The pointer is borrowed and is not initialized by the callee |
 | `owned` | The callee may initialize the pointer but does not free it |
 | `stat` | Marks a static method in C-plus source |
+| `scratch` | Short-lived memory invalidated by a scratch reset |
+| `hot` | Frequently accessed working-set memory |
+| `warm` | General-purpose dynamic memory |
+| `cold` | Infrequently accessed or large memory |
 
-The generated C preamble defines these names as empty macros. They are documentation and tooling hints, not statically enforced contracts.
+The generated C preamble defines these names as empty macros. They are documentation and tooling hints, not statically enforced contracts. The four allocation-intent annotations do not allocate by themselves; use the matching allocator API described in [`stdlib/README.md`](../../stdlib/README.md#memory-and-allocation-intent).
+
+The compiler retains allocation intent and ownership tags as source-mapped metadata and emits advisory warnings for supported, directly visible mismatches. The initial analysis follows simple pointer assignments and checks annotated allocator returns/parameters. It is not a complete C AST or ownership checker; see the standard-library guide for supported cases and limitations.
 
 ## Struct Methods
 
@@ -75,7 +81,7 @@ Test blocks use a named C-plus annotation and are compiled only by the `test` co
 }
 ```
 
-Quoted names are recommended; unquoted names such as `@test print and init struct { ... }` are also accepted. Each body is emitted as a test function. `@assert(condition)` and `CPLUS_TEST_ASSERT(condition)` fail the current test when false; `@assertEquals(expected, actual)` compares the captured values' byte representations. These are test-only statement forms; equality is not deep equality (for strings, compare contents with `strcmp`), and arrays are not supported operands. `CPLUS_TEST_FAIL(message)` also fails the current test. Test blocks are removed from ordinary `transcode`, `compile`, and `run` output.
+Quoted names are recommended; unquoted names such as `@test print and init struct { ... }` are also accepted. Each body is emitted as a test function. `@assert(condition)` and `CPLUS_TEST_ASSERT(condition)` fail the current test when false and report expected `true` versus obtained `false`; `@assertEquals(expected, actual)` reports both captured values on mismatch. Common scalar values are formatted as values; unsupported aggregate types are shown as bytes. Equality remains bytewise, not deep equality (for strings, compare contents with `strcmp`), and arrays are not supported operands. `CPLUS_TEST_FAIL(message)` also fails the current test. The runner separates test headings from preceding output with a blank line and displays each test's source-order number out of the total in yellow. Test blocks are removed from ordinary `transcode`, `compile`, and `run` output.
 
 The runner accepts one or more `.cp`/`.c+` sources, followed by optional exact test names. The shell expands patterns such as `test/folder/*.cp`. Ordinary C files can remain unchanged and be included with `#include "fixture.c"` or `@import("fixture.c")`; the latter emits a normal C preprocessor include and does not evaluate the C file at comptime. In test mode, a source-defined `main` is renamed so the generated test driver can own the executable entry point; the application `main` is not run.
 

@@ -1,10 +1,12 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+comptime import "../memory/xmem.cp";
+
 // Value-semantic resizable storage. Pointer members are never deep-freed.
 @type @dynamic_list(@type T) {
     return struct {
-        T* items;
+        warm T* items;
         size_t length;
         size_t capacity;
 
@@ -19,7 +21,7 @@
             if (requested < self->length) return 1;
             if (requested <= self->capacity) return 0;
             if (requested > ((size_t)-1) / sizeof(T)) return 1;
-            T* resized = realloc(self->items, requested * sizeof(T));
+            T* resized = realloc_warm(self->items, requested * sizeof(T));
             if (resized == NULL) return 1;
             self->items = resized;
             self->capacity = requested;
@@ -32,7 +34,7 @@
                 if (self->capacity > ((size_t)-1) / 2) return 1;
                 size_t next_capacity = self->capacity == 0 ? 4 : self->capacity * 2;
                 if (next_capacity > ((size_t)-1) / sizeof(T)) return 1;
-                T* resized = realloc(self->items, next_capacity * sizeof(T));
+                T* resized = realloc_warm(self->items, next_capacity * sizeof(T));
                 if (resized == NULL) return 1;
                 self->items = resized;
                 self->capacity = next_capacity;
@@ -88,7 +90,7 @@
         }
 
         pub void destroy(borrowed mut *self) {
-            free(self->items);
+            free_warm(self->items);
             self->items = NULL;
             self->length = 0;
             self->capacity = 0;

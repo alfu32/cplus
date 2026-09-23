@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+comptime import "../memory/xmem.cp";
+
 comptime string @name(type T) {
     return T.name;
 }
@@ -20,7 +22,7 @@ comptime function @list_mapper(type T, type R, type InputList, type OutputList) 
                 if (output->capacity > ((size_t)-1) / 2) return 1;
                 size_t next_capacity = output->capacity == 0 ? 4 : output->capacity * 2;
                 if (next_capacity > ((size_t)-1) / sizeof(R)) return 1;
-                R* resized = realloc(output->items, next_capacity * sizeof(R));
+                R* resized = realloc_warm(output->items, next_capacity * sizeof(R));
                 if (resized == NULL) return 1;
                 output->items = resized;
                 output->capacity = next_capacity;

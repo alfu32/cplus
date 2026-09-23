@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+comptime import "../memory/xmem.cp";
+
 // Generic contiguous key/value storage. Equality is supplied by the caller;
 // entries and pointer-valued members are copied, never deep-owned.
 @type @dynamic_map(@type K, @type V) {
@@ -9,7 +11,7 @@
         struct {
             K key;
             V value;
-        } *entries;
+        } warm *entries;
         size_t length;
         size_t capacity;
         int (*keys_equal)(const K* left, const K* right);
@@ -27,7 +29,7 @@
             if (requested < self->length) return 1;
             if (requested <= self->capacity) return 0;
             if (requested > ((size_t)-1) / sizeof(*self->entries)) return 1;
-            void* resized = realloc(self->entries, requested * sizeof(*self->entries));
+            void* resized = realloc_warm(self->entries, requested * sizeof(*self->entries));
             if (resized == NULL) return 1;
             self->entries = resized;
             self->capacity = requested;
@@ -46,7 +48,7 @@
                 if (self->capacity > ((size_t)-1) / 2) return 1;
                 size_t next_capacity = self->capacity == 0 ? 4 : self->capacity * 2;
                 if (next_capacity > ((size_t)-1) / sizeof(*self->entries)) return 1;
-                void* resized = realloc(self->entries, next_capacity * sizeof(*self->entries));
+                void* resized = realloc_warm(self->entries, next_capacity * sizeof(*self->entries));
                 if (resized == NULL) return 1;
                 self->entries = resized;
                 self->capacity = next_capacity;
@@ -105,7 +107,7 @@
         }
 
         pub void destroy(borrowed mut *self) {
-            free(self->entries);
+            free_warm(self->entries);
             self->entries = NULL;
             self->length = 0;
             self->capacity = 0;

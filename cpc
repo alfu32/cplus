@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 
-java -jar cli/build/libs/c-plus.jar $*
+java -jar dist/c-plus.linux-x86_64.jar $*

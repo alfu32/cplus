@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+comptime import "../memory/xmem.cp";
+
 #ifndef CPLUS_ERROR_T_DEFINED
 #define CPLUS_ERROR_T_DEFINED
 typedef int error_t;
@@ -18,7 +20,7 @@ enum {
 };
 
 typedef struct string {
-    char* data;
+    warm char* data;
     size_t length;
     size_t capacity;
 
@@ -36,7 +38,7 @@ typedef struct string {
         if (requested_capacity == (size_t)-1) return STRING_ERROR_RANGE;
 
         size_t bytes = requested_capacity + 1;
-        char* resized = (char*)realloc(self->data, bytes);
+        char* resized = (char*)realloc_warm(self->data, bytes);
         if (resized == NULL) return STRING_ERROR_ALLOCATION;
 
         self->data = resized;
@@ -164,7 +166,7 @@ typedef struct string {
 
     pub void destroy(borrowed mut *self) {
         if (self == NULL) return;
-        free(self->data);
+        free_warm(self->data);
         self->data = NULL;
         self->length = 0;
         self->capacity = 0;
@@ -315,7 +317,7 @@ typedef struct string {
             for (size_t i = 0; i <= self->length; i++) {
                 if (source == self->data + i) {
                     size_t source_length = strlen(source);
-                    temporary_source = (char*)malloc(source_length + 1);
+                    temporary_source = (char*)alloc_warm(source_length + 1);
                     if (temporary_source == NULL) return STRING_ERROR_ALLOCATION;
                     memcpy(temporary_source, source, source_length + 1);
                     source = temporary_source;
@@ -325,9 +327,9 @@ typedef struct string {
         }
         size_t required = strxfrm(NULL, source, 0);
         error_t error = string__reserve(self, required);
-        if (error != STRING_OK) { free(temporary_source); return error; }
+        if (error != STRING_OK) { free_warm(temporary_source); return error; }
         size_t transformed = strxfrm(self->data, source, required + 1);
-        free(temporary_source);
+        free_warm(temporary_source);
         if (transformed > required) return STRING_ERROR_RANGE;
         self->length = transformed;
         return STRING_OK;
