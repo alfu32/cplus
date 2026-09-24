@@ -4,7 +4,7 @@ C-plus is C with struct-scoped methods and a staged compile-time language. It ac
 
 ## Cross-compilation
 
-The cross-build CLI bundle includes TinyCC payloads for all six supported host combinations. The bundled JVM facade accepts the six target triples below, while end-to-end support depends on the target runtime and sysroot:
+The cross-build CLI JAR includes TinyCC host drivers for all six supported host combinations, but no bundled libc sysroots. Cross-compilation therefore also requires compatible target headers and libraries supplied by the host environment or explicitly selected through TinyCC options:
 
 | Host bundle | Linux x86-64 | Linux ARM64 | macOS x86-64 | macOS ARM64 | Windows x86-64 | Windows ARM64 |
 | --- |:---:|:---:|:---:|:---:|:---:|:---:|
@@ -12,15 +12,15 @@ The cross-build CLI bundle includes TinyCC payloads for all six supported host c
 | macOS (x86-64 / ARM64) | ✓ | ✓ | — | — | △ | △ |
 | Windows (x86-64 / ARM64) | ✓ | ✓ | — | — | △ | △ |
 
-Legend: `✓` executable output verified; `△` minimal executable output works, but the bundled sysroot is incomplete; `—` the current C-plus/TinyCC bridge does not produce a usable target binary. The Windows sysroots currently lack `mm_malloc.h`, required through `<stdlib.h>`, so typical programs using the standard library may fail to compile. The macOS target currently fails to link `libc`; even `-c` has produced an ELF object rather than Mach-O, and C-plus now reports a target-format mismatch instead of treating that as success.
+Legend: `✓` executable output verified; `△` minimal executable output works, but host-provided target headers/libraries are required; `—` the current C-plus/TinyCC bridge does not produce a usable target binary. This table records compiler/driver capability, not a promise that a target SDK is bundled.
 
-The matrix applies to the `-Ptarget=crossbuild` bundle. A host-only package contains just its matching TinyCC host payload and sysroot (Linux/Windows); it is intended for native builds, not cross-compilation. TinyCC does not bundle a macOS SDK. Select a program output target with TinyCC's `--target` option; C-plus forwards it through the bundled API (ARM64 is named `aarch64`):
+The matrix applies to the `-Ptarget=cross` bundle, which carries the six TinyCC host drivers and no sysroots. Select a program output target with TinyCC's `--target` option; C-plus forwards it through the bundled API (ARM64 is named `aarch64`):
 
 ```sh
 cpc compile src/main.cp --target=linux-aarch64 -o build/app
 ```
 
-The package's `-Ptarget` selects which TinyCC host payloads and sysroots are embedded; `--target` independently selects the program's output platform. Use `-Ptarget=crossbuild` for embedded cross-compilation; `run` also attempts to execute the output, so use it only when the target can run on the current host. Pass `--sysroot path` or `--sysroot=path` to override an embedded sysroot. An external `tcc` installation is governed by that compiler's own targets.
+The package's `-Ptarget` selects which TinyCC host drivers are embedded; `--target` independently selects the program's output platform. Use `-Ptarget=cross` for the all-host driver JAR. Native builds fall back to system `tcc` when the embedded host payload has no sysroot; foreign-target builds use the embedded driver and require a compatible sysroot and libraries supplied separately. `run` also attempts to execute the output, so use it only when the target can run on the current host. An external `tcc` installation is governed by that compiler's own targets.
 
 The JARs also contain additional TinyCC command-line backends such as `i386`, `arm`, and `riscv64`. Their unsuffixed upstream defaults are Linux ABI targets; `c67` is a TMS320C67 DSP backend that emits COFF, not a general-purpose host executable. These extra backend binaries are not among the six target triples currently exposed through C-plus `--target`. See the [TinyCC target notes](https://github.com/Tiny-C-Compiler/tinycc-mirror-repository/blob/mob/tcc-doc.texi) and [upstream target defaults](https://github.com/mirror/tinycc/blob/mob/Makefile).
 
@@ -82,7 +82,7 @@ Deployable editor bundles are attached to [GitHub releases](https://github.com/c
 
 ## Releases and building from source
 
-Most users can download a CLI bundle or editor plugin from [Releases](https://github.com/c-plus/c-plus/releases). The manual GitHub Actions workflow builds the selected branch or tag; branch runs publish workflow artifacts, while a successful tag run creates or updates a GitHub Release with the CLI and editor bundles. It does not run automatically on push.
+Most users can download a CLI JAR or editor plugin from [Releases](https://github.com/c-plus/c-plus/releases). The manual GitHub Actions workflow builds the selected branch or tag; branch runs publish workflow artifacts, while a successful tag run creates or updates a GitHub Release with the bare CLI JAR, the cross-host CLI JAR, and editor bundles. It does not run automatically on push. C-plus platform ZIPs are not built or published by CI; they may be consolidated into a single ZIP later. The CLI JARs do not embed `stdlib/` sources: use `--stdlib path/to/stdlib` when no installed library root is discoverable.
 
 For local development, install a Java 21 JDK and use the Gradle wrapper:
 
@@ -90,12 +90,11 @@ For local development, install a Java 21 JDK and use the Gradle wrapper:
 ./gradlew build test
 ./gradlew run --args='help'
 ./gradlew -Prelease=0.3.4 fatJar
-./gradlew -Prelease=0.3.4 -Ptarget=linux-x86_64 bundleDist
-./gradlew -Prelease=0.3.4 -Ptarget=crossbuild bundleDist
-./gradlew bundleJars
+./gradlew -Prelease=0.3.4 -Ptarget=none bundleJar
+./gradlew -Prelease=0.3.4 -Ptarget=cross bundleJar
 ./gradlew -Prelease=0.3.4 editorArtifacts
 ```
 
-The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. `bundleDist` writes both `dist/cplus-VERSION-TARGET.zip` and a directly executable `dist/cplus-VERSION-TARGET.jar`; `bundleJars` extracts matching JARs from ZIPs already present for that version. With `-Ptarget` absent, the CLI JAR and distribution omit TinyCC binaries and sysroots; `compile`, `run`, and `test` use `tcc` from `PATH` (or `TCC`). Use one host payload name (`linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, or `windows-aarch64`) for a native-only bundle. Use `-Ptarget=all` or `-Ptarget=crossbuild` to include all six host payloads and the available Linux/Windows libc sysroots. The older `-Pos` and `-Parch` properties are no longer supported.
+The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. The default `-Ptarget=none` (also the default when omitted) creates a bare C-plus JAR with no native TinyCC payload; `compile`, `run`, and `test` use `tcc` from `PATH` (or `TCC`). `-Ptarget=cross` embeds TinyCC host drivers for all six supported host combinations, without sysroots; target headers and libraries must be provided separately. `-Ptarget=all` and `-Ptarget=crossbuild` remain aliases for `cross`. `bundleDist` still creates an optional local platform ZIP and its JAR, while `bundleJar` creates only the selected JAR. The older `-Pos` and `-Parch` properties are no longer supported.
 
-TinyCC JARs are not stored in Git. CI resolves the latest published [TinyCC release](https://github.com/alfu32/tinycc/releases/latest), downloads the base CLI plus only the host payloads each job needs, and shares them as short-lived workflow artifacts. For local tests or embedded-target bundles, download the same assets with `bash .github/scripts/download-tinycc.sh latest tinycc-cli-cross.jar tinycc-cli-linux-x86_64.jar` (requires `curl` and `jq`; replace/add the target JAR as needed); these files are ignored by Git.
+TinyCC JARs are not stored in Git. CI downloads the latest `tinycc-cli.jar` and `tinycc-cross-cli-no-sysroots.jar` before building and shares them as short-lived workflow artifacts. To refresh them locally, run `bash .github/scripts/download-tinycc.sh latest tinycc-cross-cli-no-sysroots.jar` (requires `curl` and `jq`); these files are ignored by Git.

@@ -68,139 +68,139 @@ typedef struct pong_app_t {
     int serve_direction;
     float point_timer;
 
-static pub float clamp(float value, float minimum, float maximum) {
-    if (value < minimum) return minimum;
-    if (value > maximum) return maximum;
-    return value;
-}
+    static pub float clamp(float value, float minimum, float maximum) {
+        if (value < minimum) return minimum;
+        if (value > maximum) return maximum;
+        return value;
+    }
 
-pub void reset_ball(borrowed mut *self) {
-    self->ball.position = (Vector2){PONG_SCREEN_WIDTH * 0.5f, PONG_SCREEN_HEIGHT * 0.5f};
-    self->ball.velocity = (Vector2){0.0f, 0.0f};
-    self->ball.radius = PONG_BALL_RADIUS;
-}
+    pub void reset_ball(borrowed mut *self) {
+        self->ball.position = (Vector2){PONG_SCREEN_WIDTH * 0.5f, PONG_SCREEN_HEIGHT * 0.5f};
+        self->ball.velocity = (Vector2){0.0f, 0.0f};
+        self->ball.radius = PONG_BALL_RADIUS;
+    }
 
-pub void init(borrowed mut *self) {
-    memset(self, 0, sizeof(*self));
-    self->state = PONG_READY;
-    self->left.position = (Vector2){48.0f, PONG_SCREEN_HEIGHT * 0.5f};
-    self->right.position = (Vector2){PONG_SCREEN_WIDTH - 48.0f, PONG_SCREEN_HEIGHT * 0.5f};
-    self->left.speed = self->right.speed = 420.0f;
-    self->winning_score = PONG_WINNING_SCORE;
-    self->serve_direction = 1;
-    pong_app_t.reset_ball(self);
-}
-
-pub void serve(borrowed mut *self) {
-    self->state = PONG_PLAYING;
-    self->ball.position = (Vector2){PONG_SCREEN_WIDTH * 0.5f, PONG_SCREEN_HEIGHT * 0.5f};
-    self->ball.velocity = (Vector2){self->serve_direction * 360.0f, 145.0f};
-}
-pub void score(borrowed mut *self, bool left_player_scored) {
-    if (left_player_scored) {
-        self->left_score++;
-        self->serve_direction = -1;
-    } else {
-        self->right_score++;
+    pub void init(borrowed mut *self) {
+        memset(self, 0, sizeof(*self));
+        self->state = PONG_READY;
+        self->left.position = (Vector2){48.0f, PONG_SCREEN_HEIGHT * 0.5f};
+        self->right.position = (Vector2){PONG_SCREEN_WIDTH - 48.0f, PONG_SCREEN_HEIGHT * 0.5f};
+        self->left.speed = self->right.speed = 420.0f;
+        self->winning_score = PONG_WINNING_SCORE;
         self->serve_direction = 1;
-    }
-    pong_app_t.reset_ball(self);
-    if (self->left_score >= self->winning_score || self->right_score >= self->winning_score) {
-        self->state = PONG_GAME_OVER;
-    } else {
-        self->state = PONG_POINT_SCORED;
-        self->point_timer = 0.8f;
-    }
-}
-
-static pub bool ball_overlaps_paddle(const pong_ball_t* ball, const pong_paddle_t* paddle) {
-    return ball->position.y + ball->radius >= paddle->position.y - PONG_PADDLE_HEIGHT * 0.5f &&
-        ball->position.y - ball->radius <= paddle->position.y + PONG_PADDLE_HEIGHT * 0.5f;
-}
-
-pub void clock(borrowed mut *self, const pong_event_t* event) {
-    float dt = pong_app_t.clamp(event->delta_seconds, 0.0f, 0.05f);
-    self->left.position.y += event->left_axis * self->left.speed * dt;
-    self->right.position.y += event->right_axis * self->right.speed * dt;
-    self->left.position.y = pong_app_t.clamp(self->left.position.y, PONG_PADDLE_HEIGHT * 0.5f,
-                                      PONG_SCREEN_HEIGHT - PONG_PADDLE_HEIGHT * 0.5f);
-    self->right.position.y = pong_app_t.clamp(self->right.position.y, PONG_PADDLE_HEIGHT * 0.5f,
-                                       PONG_SCREEN_HEIGHT - PONG_PADDLE_HEIGHT * 0.5f);
-
-    if (self->state == PONG_POINT_SCORED) {
-        self->point_timer -= dt;
-        if (self->point_timer <= 0.0f) self->state = PONG_READY;
-        return;
-    }
-    if (self->state != PONG_PLAYING) return;
-
-    self->ball.position.x += self->ball.velocity.x * dt;
-    self->ball.position.y += self->ball.velocity.y * dt;
-    if (self->ball.position.y - self->ball.radius < 0.0f) {
-        self->ball.position.y = self->ball.radius;
-        self->ball.velocity.y = (float)fabs(self->ball.velocity.y);
-    } else if (self->ball.position.y + self->ball.radius > PONG_SCREEN_HEIGHT) {
-        self->ball.position.y = PONG_SCREEN_HEIGHT - self->ball.radius;
-        self->ball.velocity.y = -(float)fabs(self->ball.velocity.y);
+        pong_app_t.reset_ball(self);
     }
 
-    float left_face = self->left.position.x + PONG_PADDLE_WIDTH * 0.5f;
-    if (self->ball.velocity.x < 0.0f && self->ball.position.x - self->ball.radius <= left_face &&
-        self->ball.position.x > self->left.position.x && pong_app_t.ball_overlaps_paddle(&self->ball, &self->left)) {
-        float offset = (self->ball.position.y - self->left.position.y) / (PONG_PADDLE_HEIGHT * 0.5f);
-        self->ball.position.x = left_face + self->ball.radius;
-        self->ball.velocity.x = (float)fabs(self->ball.velocity.x) * 1.035f;
-        self->ball.velocity.y += offset * 105.0f;
+    pub void serve(borrowed mut *self) {
+        self->state = PONG_PLAYING;
+        self->ball.position = (Vector2){PONG_SCREEN_WIDTH * 0.5f, PONG_SCREEN_HEIGHT * 0.5f};
+        self->ball.velocity = (Vector2){self->serve_direction * 360.0f, 145.0f};
     }
-    float right_face = self->right.position.x - PONG_PADDLE_WIDTH * 0.5f;
-    if (self->ball.velocity.x > 0.0f && self->ball.position.x + self->ball.radius >= right_face &&
-        self->ball.position.x < self->right.position.x && pong_app_t.ball_overlaps_paddle(&self->ball, &self->right)) {
-        float offset = (self->ball.position.y - self->right.position.y) / (PONG_PADDLE_HEIGHT * 0.5f);
-        self->ball.position.x = right_face - self->ball.radius;
-        self->ball.velocity.x = -(float)fabs(self->ball.velocity.x) * 1.035f;
-        self->ball.velocity.y += offset * 105.0f;
-    }
-
-    if (self->ball.position.x + self->ball.radius < 0.0f) pong_app_t.score(self, false);
-    else if (self->ball.position.x - self->ball.radius > PONG_SCREEN_WIDTH) pong_app_t.score(self, true);
-}
-
-pub void event(borrowed mut *self, const pong_event_t* event) {
-    if (event->type == PONG_EVENT_KEYBOARD) {
-        if (event->key == KEY_R) {
-            pong_app_t.init(self);
-        } else if (event->key == KEY_SPACE && (self->state == PONG_READY || self->state == PONG_GAME_OVER)) {
-            if (self->state == PONG_GAME_OVER) pong_app_t.init(self);
-            pong_app_t.serve(self);
+    pub void score(borrowed mut *self, bool left_player_scored) {
+        if (left_player_scored) {
+            self->left_score++;
+            self->serve_direction = -1;
+        } else {
+            self->right_score++;
+            self->serve_direction = 1;
         }
-    } else if (event->type == PONG_EVENT_MOUSE && event->mouse_control) {
-        self->right.position.y = event->mouse_y;
-    } else if (event->type == PONG_EVENT_CLOCK) {
-        pong_app_t.clock(self, event);
+        pong_app_t.reset_ball(self);
+        if (self->left_score >= self->winning_score || self->right_score >= self->winning_score) {
+            self->state = PONG_GAME_OVER;
+        } else {
+            self->state = PONG_POINT_SCORED;
+            self->point_timer = 0.8f;
+        }
     }
-}
 
-pub void render(borrowed const *self) {
-    ClearBackground((Color){14, 20, 32, 255});
-    for (int y = 12; y < PONG_SCREEN_HEIGHT; y += 30) DrawRectangle(PONG_SCREEN_WIDTH / 2 - 2, y, 4, 14, (Color){76, 87, 108, 255});
-    DrawText(TextFormat("%d", self->left_score), PONG_SCREEN_WIDTH / 2 - 90, 34, 48, RAYWHITE);
-    DrawText(TextFormat("%d", self->right_score), PONG_SCREEN_WIDTH / 2 + 48, 34, 48, RAYWHITE);
-    DrawRectangle((int)(self->left.position.x - PONG_PADDLE_WIDTH * 0.5f),
-                  (int)(self->left.position.y - PONG_PADDLE_HEIGHT * 0.5f),
-                  (int)PONG_PADDLE_WIDTH, (int)PONG_PADDLE_HEIGHT, SKYBLUE);
-    DrawRectangle((int)(self->right.position.x - PONG_PADDLE_WIDTH * 0.5f),
-                  (int)(self->right.position.y - PONG_PADDLE_HEIGHT * 0.5f),
-                  (int)PONG_PADDLE_WIDTH, (int)PONG_PADDLE_HEIGHT, ORANGE);
-    DrawCircleV(self->ball.position, (int)self->ball.radius, RAYWHITE);
-    if (self->state == PONG_READY) DrawText("SPACE TO SERVE", PONG_SCREEN_WIDTH / 2 - 98, PONG_SCREEN_HEIGHT - 55, 20, RAYWHITE);
-    if (self->state == PONG_GAME_OVER) {
-        const char* winner = self->left_score > self->right_score ? "LEFT PLAYER WINS" : "RIGHT PLAYER WINS";
-        DrawRectangle(250, 244, 460, 102, (Color){0, 0, 0, 210});
-        DrawText(winner, 320, 258, 30, GOLD);
-        DrawText("SPACE: PLAY AGAIN   R: RESET", 302, 302, 18, RAYWHITE);
+    static pub bool ball_overlaps_paddle(const pong_ball_t* ball, const pong_paddle_t* paddle) {
+        return ball->position.y + ball->radius >= paddle->position.y - PONG_PADDLE_HEIGHT * 0.5f &&
+            ball->position.y - ball->radius <= paddle->position.y + PONG_PADDLE_HEIGHT * 0.5f;
     }
-    DrawText("W/S    UP/DOWN    MOUSE: HOLD LEFT BUTTON    R: RESET", 210, PONG_SCREEN_HEIGHT - 25, 15, LIGHTGRAY);
-}
+
+    pub void clock(borrowed mut *self, const pong_event_t* event) {
+        float dt = pong_app_t.clamp(event->delta_seconds, 0.0f, 0.05f);
+        self->left.position.y += event->left_axis * self->left.speed * dt;
+        self->right.position.y += event->right_axis * self->right.speed * dt;
+        self->left.position.y = pong_app_t.clamp(self->left.position.y, PONG_PADDLE_HEIGHT * 0.5f,
+                                        PONG_SCREEN_HEIGHT - PONG_PADDLE_HEIGHT * 0.5f);
+        self->right.position.y = pong_app_t.clamp(self->right.position.y, PONG_PADDLE_HEIGHT * 0.5f,
+                                        PONG_SCREEN_HEIGHT - PONG_PADDLE_HEIGHT * 0.5f);
+
+        if (self->state == PONG_POINT_SCORED) {
+            self->point_timer -= dt;
+            if (self->point_timer <= 0.0f) self->state = PONG_READY;
+            return;
+        }
+        if (self->state != PONG_PLAYING) return;
+
+        self->ball.position.x += self->ball.velocity.x * dt;
+        self->ball.position.y += self->ball.velocity.y * dt;
+        if (self->ball.position.y - self->ball.radius < 0.0f) {
+            self->ball.position.y = self->ball.radius;
+            self->ball.velocity.y = (float)fabs(self->ball.velocity.y);
+        } else if (self->ball.position.y + self->ball.radius > PONG_SCREEN_HEIGHT) {
+            self->ball.position.y = PONG_SCREEN_HEIGHT - self->ball.radius;
+            self->ball.velocity.y = -(float)fabs(self->ball.velocity.y);
+        }
+
+        float left_face = self->left.position.x + PONG_PADDLE_WIDTH * 0.5f;
+        if (self->ball.velocity.x < 0.0f && self->ball.position.x - self->ball.radius <= left_face &&
+            self->ball.position.x > self->left.position.x && pong_app_t.ball_overlaps_paddle(&self->ball, &self->left)) {
+            float offset = (self->ball.position.y - self->left.position.y) / (PONG_PADDLE_HEIGHT * 0.5f);
+            self->ball.position.x = left_face + self->ball.radius;
+            self->ball.velocity.x = (float)fabs(self->ball.velocity.x) * 1.035f;
+            self->ball.velocity.y += offset * 105.0f;
+        }
+        float right_face = self->right.position.x - PONG_PADDLE_WIDTH * 0.5f;
+        if (self->ball.velocity.x > 0.0f && self->ball.position.x + self->ball.radius >= right_face &&
+            self->ball.position.x < self->right.position.x && pong_app_t.ball_overlaps_paddle(&self->ball, &self->right)) {
+            float offset = (self->ball.position.y - self->right.position.y) / (PONG_PADDLE_HEIGHT * 0.5f);
+            self->ball.position.x = right_face - self->ball.radius;
+            self->ball.velocity.x = -(float)fabs(self->ball.velocity.x) * 1.035f;
+            self->ball.velocity.y += offset * 105.0f;
+        }
+
+        if (self->ball.position.x + self->ball.radius < 0.0f) pong_app_t.score(self, false);
+        else if (self->ball.position.x - self->ball.radius > PONG_SCREEN_WIDTH) pong_app_t.score(self, true);
+    }
+
+    pub void event(borrowed mut *self, const pong_event_t* event) {
+        if (event->type == PONG_EVENT_KEYBOARD) {
+            if (event->key == KEY_R) {
+                pong_app_t.init(self);
+            } else if (event->key == KEY_SPACE && (self->state == PONG_READY || self->state == PONG_GAME_OVER)) {
+                if (self->state == PONG_GAME_OVER) pong_app_t.init(self);
+                pong_app_t.serve(self);
+            }
+        } else if (event->type == PONG_EVENT_MOUSE && event->mouse_control) {
+            self->right.position.y = event->mouse_y;
+        } else if (event->type == PONG_EVENT_CLOCK) {
+            pong_app_t.clock(self, event);
+        }
+    }
+
+    pub void render(borrowed const *self) {
+        ClearBackground((Color){14, 20, 32, 255});
+        for (int y = 12; y < PONG_SCREEN_HEIGHT; y += 30) DrawRectangle(PONG_SCREEN_WIDTH / 2 - 2, y, 4, 14, (Color){76, 87, 108, 255});
+        DrawText(TextFormat("%d", self->left_score), PONG_SCREEN_WIDTH / 2 - 90, 34, 48, RAYWHITE);
+        DrawText(TextFormat("%d", self->right_score), PONG_SCREEN_WIDTH / 2 + 48, 34, 48, RAYWHITE);
+        DrawRectangle((int)(self->left.position.x - PONG_PADDLE_WIDTH * 0.5f),
+                    (int)(self->left.position.y - PONG_PADDLE_HEIGHT * 0.5f),
+                    (int)PONG_PADDLE_WIDTH, (int)PONG_PADDLE_HEIGHT, SKYBLUE);
+        DrawRectangle((int)(self->right.position.x - PONG_PADDLE_WIDTH * 0.5f),
+                    (int)(self->right.position.y - PONG_PADDLE_HEIGHT * 0.5f),
+                    (int)PONG_PADDLE_WIDTH, (int)PONG_PADDLE_HEIGHT, ORANGE);
+        DrawCircleV(self->ball.position, (int)self->ball.radius, RAYWHITE);
+        if (self->state == PONG_READY) DrawText("SPACE TO SERVE", PONG_SCREEN_WIDTH / 2 - 98, PONG_SCREEN_HEIGHT - 55, 20, RAYWHITE);
+        if (self->state == PONG_GAME_OVER) {
+            const char* winner = self->left_score > self->right_score ? "LEFT PLAYER WINS" : "RIGHT PLAYER WINS";
+            DrawRectangle(250, 244, 460, 102, (Color){0, 0, 0, 210});
+            DrawText(winner, 320, 258, 30, GOLD);
+            DrawText("SPACE: PLAY AGAIN   R: RESET", 302, 302, 18, RAYWHITE);
+        }
+        DrawText("W/S    UP/DOWN    MOUSE: HOLD LEFT BUTTON    R: RESET", 210, PONG_SCREEN_HEIGHT - 25, 15, LIGHTGRAY);
+    }
 } pong_app_t;
 
 @test "pong model and render" {

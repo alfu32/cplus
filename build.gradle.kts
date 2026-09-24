@@ -151,25 +151,15 @@ val allTccTargets = setOf(
 )
 val bundleTargetOption = providers.gradleProperty("target").orElse("none").get().trim().lowercase().ifEmpty { "none" }
 val bundledTccTargets = when (bundleTargetOption) {
-    "none" -> emptySet()
-    "all", "crossbuild" -> allTccTargets
-    in allTccTargets -> setOf(bundleTargetOption)
+    "none", "bare" -> emptySet()
+    "cross", "all", "crossbuild" -> allTccTargets
     else -> throw GradleException(
-        "Invalid -Ptarget='$bundleTargetOption'; expected one of ${allTccTargets.sorted().joinToString(", ")}, all, crossbuild, or none."
+        "Invalid -Ptarget='$bundleTargetOption'; expected none/bare or cross (all, crossbuild are aliases)."
     )
 }
-val artifactTargetNames = mapOf(
-    "linux-x86_64" to "linux-x86_64",
-    "linux-aarch64" to "linux-arm64",
-    "macos-x86_64" to "mac-x86_64",
-    "macos-aarch64" to "mac-arm64",
-    "windows-x86_64" to "win-x86_64",
-    "windows-aarch64" to "win-arm64"
-)
 val bundleNameSuffix = when {
-    bundledTccTargets.isEmpty() -> "none-none"
-    bundledTccTargets.size == allTccTargets.size -> "all-all"
-    else -> artifactTargetNames.getValue(bundledTccTargets.single())
+    bundledTccTargets.isEmpty() -> "bare"
+    else -> "cross-no-sysroots"
 }
 val bundleName = "cplus-$resolvedVersion-$bundleNameSuffix"
 val bundleStageDirectory = layout.buildDirectory.dir("distributions/$bundleName")

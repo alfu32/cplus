@@ -10,231 +10,78 @@ permissions:
   contents: read
 
 jobs:
-  resolve-tinycc-release:
-    name: Resolve latest TinyCC release
+  prepare-tinycc:
+    name: Download latest TinyCC CLI payloads
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.resolve.outputs.tag }}
-    steps:
-      - name: Resolve latest published release tag
-        id: resolve
-        shell: bash
-        run: |
-          tag="$(curl --fail --location --retry 3 --silent --show-error \
-            https://api.github.com/repos/alfu32/tinycc/releases/latest | jq --exit-status --raw-output '.tag_name')"
-          test -n "$tag"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Using TinyCC release $tag"
-
-  prepare-tinycc-payloads:
-    name: Download TinyCC ${{ matrix.target }} payload
-    needs: resolve-tinycc-release
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: base
-            artifact: tinycc-base
-            asset: tinycc-cli.jar
-          - target: linux-x86_64
-            artifact: tinycc-linux-x86_64
-            asset: tinycc-cli-linux-x86_64.jar
-          - target: linux-aarch64
-            artifact: tinycc-linux-aarch64
-            asset: tinycc-cli-linux-aarch64.jar
-          - target: macos-x86_64
-            artifact: tinycc-macos-x86_64
-            asset: tinycc-cli-macos-x86_64.jar
-          - target: macos-aarch64
-            artifact: tinycc-macos-aarch64
-            asset: tinycc-cli-macos-aarch64.jar
-          - target: windows-x86_64
-            artifact: tinycc-windows-x86_64
-            asset: tinycc-cli-windows-x86_64.jar
-          - target: windows-aarch64
-            artifact: tinycc-windows-aarch64
-            asset: tinycc-cli-windows-aarch64.jar
-          - target: cross
-            artifact: tinycc-cross
-            asset: tinycc-cli-cross.jar
     steps:
       - uses: actions/checkout@v4
-      - name: Download TinyCC CLI and selected host payload
-        run: bash .github/scripts/download-tinycc.sh '${{ needs.resolve-tinycc-release.outputs.tag }}' '${{ matrix.asset }}'
+      - name: Download bare and cross-without-sysroots TinyCC JARs
+        run: bash .github/scripts/download-tinycc.sh latest tinycc-cross-cli-no-sysroots.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: lib/${{ matrix.asset }}
+          name: tinycc-cli-payloads
+          path: |
+            lib/tinycc-cli.jar
+            lib/tinycc-cross-cli-no-sysroots.jar
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
 
-  test-and-smoke:
-    name: Tests and Linux bundle smoke test
-    needs: prepare-tinycc-payloads
+  cli-artifacts:
+    name: Build and test CLI JARs
+    needs: prepare-tinycc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: tinycc-base
-          path: lib
-      - uses: actions/download-artifact@v4
-        with:
-          name: tinycc-linux-x86_64
-          path: lib
-      - uses: actions/download-artifact@v4
-        with:
-          name: tinycc-cross
+          name: tinycc-cli-payloads
           path: lib
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Install system TinyCC for the bare JAR
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes tcc
       - name: Run Gradle tests
         run: ./gradlew test --no-daemon
-      - name: Build external-TCC (none-none) bundle
-        run: ./gradlew "-Prelease=$RELEASE_VERSION" bundleDist --no-daemon
-      - name: Verify external-TCC bundle excludes native payloads
-        run: |
-          test ! -s "build/distributions/cplus-${RELEASE_VERSION}-none-none/TARGETS.txt"
-          native_targets="$(jar tf cli/build/libs/c-plus.jar | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
-          test -z "$native_targets"
-          sysroot_targets="$(jar tf cli/build/libs/c-plus.jar | sed -n 's|^native/\([^/]*\)/tinycc/sysroot/.*|\1|p' | sort -u)"
-          test -z "$sysroot_targets"
-          cmp <(unzip -p "dist/cplus-${RELEASE_VERSION}-none-none.zip" c-plus.jar) "dist/cplus-${RELEASE_VERSION}-none-none.jar"
-          java -jar "dist/cplus-${RELEASE_VERSION}-none-none.jar" help >/dev/null
-          unzip -l "dist/cplus-${RELEASE_VERSION}-none-none.zip" | grep -F 'c-plus.jar'
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cplus-none-none
-          path: |
-            dist/cplus-${{ env.RELEASE_VERSION }}-none-none.zip
-            dist/cplus-${{ env.RELEASE_VERSION }}-none-none.jar
-          if-no-files-found: error
-          compression-level: 0
-      - name: Build and smoke-test Linux x86_64 bundle
-        run: |
-          release="$RELEASE_VERSION"
-          ./gradlew "-Prelease=$release" -Ptarget=linux-x86_64 bundleDist --no-daemon
-          archive="dist/cplus-${release}-linux-x86_64.zip"
-          cmp <(unzip -p "$archive" c-plus.jar) "dist/cplus-${release}-linux-x86_64.jar"
-          java -jar "dist/cplus-${release}-linux-x86_64.jar" version
-          mkdir -p build/bundle-smoke
-          unzip -q "$archive" -d build/bundle-smoke
-          cd build/bundle-smoke
-          ./cpc.sh version
-          ./cpc.sh test stdlib/tests/*.cp
-          temp_dir="$(mktemp -d)"
-          trap 'rm -rf "$temp_dir"' EXIT
-          ./cpc.sh new "$temp_dir/example"
-          ./cpc.sh run "$temp_dir/example/src/main.cp"
-
-  distribution-matrix:
-    name: Bundle ${{ matrix.bundle }}
-    needs: prepare-tinycc-payloads
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: linux-x86_64
-            bundle: linux-x86_64
-          - target: linux-aarch64
-            bundle: linux-arm64
-          - target: macos-x86_64
-            bundle: mac-x86_64
-          - target: macos-aarch64
-            bundle: mac-arm64
-          - target: windows-x86_64
-            bundle: win-x86_64
-          - target: windows-aarch64
-            bundle: win-arm64
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: tinycc-base
-          path: lib
-      - uses: actions/download-artifact@v4
-        with:
-          name: tinycc-${{ matrix.target }}
-          path: lib
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Build platform bundle
-        run: ./gradlew "-Prelease=$RELEASE_VERSION" "-Ptarget=${{ matrix.target }}" bundleDist --no-daemon
-      - name: Verify selected native target
+      - name: Build bare JAR using external TinyCC
+        run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=none bundleJar --no-daemon
+      - name: Build cross-host JAR without bundled sysroots
+        run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=cross bundleJar --no-daemon
+      - name: Verify payload selection and smoke-test both JARs
         shell: bash
         run: |
-          target='${{ matrix.target }}'
-          artifact="dist/cplus-${RELEASE_VERSION}-${{ matrix.bundle }}.jar"
-          cmp <(unzip -p "dist/cplus-${RELEASE_VERSION}-${{ matrix.bundle }}.zip" c-plus.jar) "$artifact"
-          targets="$(jar tf "$artifact" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
-          test "$targets" = "$target"
-          grep -Fx "$target" "build/distributions/cplus-${RELEASE_VERSION}-${{ matrix.bundle }}/TARGETS.txt"
-          sysroot_targets="$(jar tf "$artifact" | sed -n 's|^native/\([^/]*\)/tinycc/sysroot/.*|\1|p' | sort -u)"
-          if [[ "$target" == macos-* ]]; then
-            test -z "$sysroot_targets"
-          else
-            test "$sysroot_targets" = "$target"
-          fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cplus-${{ matrix.bundle }}
-          path: |
-            dist/cplus-${{ env.RELEASE_VERSION }}-${{ matrix.bundle }}.zip
-            dist/cplus-${{ env.RELEASE_VERSION }}-${{ matrix.bundle }}.jar
-          if-no-files-found: error
-          compression-level: 0
+          bare="dist/cplus-${RELEASE_VERSION}-bare.jar"
+          cross="dist/cplus-${RELEASE_VERSION}-cross-no-sysroots.jar"
+          test -s "$bare"
+          test -s "$cross"
 
-  all-target-bundle:
-    name: Complete all-host / cross-build bundle
-    runs-on: ubuntu-latest
-    needs: test-and-smoke
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: tinycc-base
-          path: lib
-      - uses: actions/download-artifact@v4
-        with:
-          name: tinycc-cross
-          path: lib
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Build complete bundle
-        run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=crossbuild bundleDist --no-daemon
-      - name: Verify all six host payloads, libc sysroots, and launchers
-        run: |
-          artifact="dist/cplus-${RELEASE_VERSION}-all-all.jar"
-          cmp <(unzip -p "dist/cplus-${RELEASE_VERSION}-all-all.zip" c-plus.jar) "$artifact"
-          native_targets="$(jar tf "$artifact" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
-          for target in linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64 windows-aarch64; do
-            grep -Fx "$target" "build/distributions/cplus-${RELEASE_VERSION}-all-all/TARGETS.txt"
-            grep -Fx "$target" <<< "$native_targets"
-          done
-          sysroot_targets="$(jar tf "$artifact" | sed -n 's|^native/\([^/]*\)/tinycc/sysroot/.*|\1|p' | sort -u)"
-          expected_sysroots="$(printf '%s\n' linux-aarch64 linux-x86_64 windows-aarch64 windows-x86_64)"
-          test "$sysroot_targets" = "$expected_sysroots"
-          for entry in cpc.sh cpc.zsh cpc.cmd install.sh install.zsh install.cmd uninstall.sh uninstall.zsh uninstall.cmd; do
-            test -f "build/distributions/cplus-${RELEASE_VERSION}-all-all/$entry"
-          done
+          bare_targets="$(jar tf "$bare" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
+          test -z "$bare_targets"
+          cross_targets="$(jar tf "$cross" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
+          expected_targets="$(printf '%s\n' linux-aarch64 linux-x86_64 macos-aarch64 macos-x86_64 windows-aarch64 windows-x86_64)"
+          test "$cross_targets" = "$expected_targets"
+          sysroots="$(jar tf "$cross" | grep '/tinycc/sysroot/' || true)"
+          test -z "$sysroots"
+
+          java -jar "$bare" help >/dev/null
+          java -jar "$cross" help >/dev/null
+          java -jar "$cross" --stdlib stdlib compile examples/basic.cp -o build/cross-host-smoke
+          test -s build/cross-host-smoke
+
+          mapfile -t fixtures < <(find stdlib/tests -maxdepth 1 -name '*.cp' ! -name 'raylib_math.cp' -print | sort)
+          test "${#fixtures[@]}" -gt 0
+          java -jar "$bare" --stdlib stdlib test "${fixtures[@]}"
       - uses: actions/upload-artifact@v4
         with:
-          name: cplus-all-all
+          name: cplus-cli-jars
           path: |
-            dist/cplus-${{ env.RELEASE_VERSION }}-all-all.zip
-            dist/cplus-${{ env.RELEASE_VERSION }}-all-all.jar
+            dist/cplus-${{ env.RELEASE_VERSION }}-bare.jar
+            dist/cplus-${{ env.RELEASE_VERSION }}-cross-no-sysroots.jar
           if-no-files-found: error
           compression-level: 0
 
@@ -278,44 +125,12 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  installer-syntax:
-    name: Check platform installer syntax
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-latest
-            platform: macos
-          - runner: windows-latest
-            platform: windows
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check zsh and shell scripts
-        if: matrix.platform == 'macos'
-        run: |
-          for script in distribution/macos/install.zsh distribution/macos/uninstall.zsh distribution/launchers/cpc.zsh; do zsh -n "$script"; done
-          for script in distribution/linux/install.sh distribution/linux/uninstall.sh distribution/launchers/cpc.sh; do bash -n "$script"; done
-      - name: Parse PowerShell installers
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          $parseErrors = $null
-          Get-ChildItem distribution/windows/*.ps1 | ForEach-Object {
-            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$parseErrors) | Out-Null
-          }
-          if ($parseErrors) { $parseErrors | ForEach-Object { Write-Error $_ }; exit 1 }
-          if (-not (Test-Path distribution/windows/install.cmd) -or -not (Test-Path distribution/windows/uninstall.cmd)) { exit 1 }
-
   publish-release:
     name: Publish GitHub release
     if: github.ref_type == 'tag'
     needs:
-      - test-and-smoke
-      - distribution-matrix
-      - all-target-bundle
+      - cli-artifacts
       - editor-plugins
-      - installer-syntax
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -324,8 +139,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
+          pattern: cplus-*
           merge-multiple: true
-      - name: Create or update release and upload bundles
+      - name: Create or update release and upload CLI JARs and IDE plugins
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}

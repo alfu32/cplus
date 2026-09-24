@@ -32,6 +32,8 @@ download_asset() {
     tinycc-cli-macos-x86_64.jar|tinycc-cli-macos-aarch64.jar|\
     tinycc-cli-windows-x86_64.jar|tinycc-cli-windows-aarch64.jar)
       ;;
+    tinycc-cross-cli-no-sysroots.jar)
+      ;;
     tinycc-cli-cross.jar)
       # The upstream release calls this asset tinycc-cross-cli.jar; Gradle's
       # established local filename remains tinycc-cli-cross.jar.

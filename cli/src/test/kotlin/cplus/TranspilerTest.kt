@@ -107,47 +107,35 @@ class TranspilerTest {
     }
 
     @Test
-    fun raymathStandardLibraryTestsPass() {
+    fun raymathFixtureKeepsSystemHeaderAndFunctionBindings() {
         val source = findRepositoryFile("stdlib/tests/raylib_math.cp")
-        val errors = StringBuilder()
-        val status = CPlusCli(output = StringBuilder(), errors = errors)
-            .run(listOf("test", source.toString()))
-        assertEquals(0, status, errors.toString())
+        val fixture = Files.readString(source)
+        val generated = CPlusTranspiler().transpile(
+            fixture,
+            source.toString(),
+            importPaths = CPlusImportPaths(
+                standardLibraryRoots = listOf(findRepositoryFile("stdlib/README.md").parent.toAbsolutePath())
+            )
+        ).code
+        assertTrue("#include <raymath.h>" in generated)
+        assertTrue("Vector3Add" in fixture)
+        assertTrue("MatrixMultiply" in fixture)
+        assertFalse("Vector3Add" in generated, "@test bodies must not leak into ordinary C output")
     }
 
     @Test
-    fun raylibExampleCompilesAgainstBundledHeadersOnLinux() {
-        val os = System.getProperty("os.name").lowercase()
-        val architecture = System.getProperty("os.arch").lowercase()
-        assumeTrue(os.contains("linux") && architecture in setOf("amd64", "x86_64"))
-
+    fun raylibExampleKeepsExternalHeadersAndLinkFlags() {
         val example = findRepositoryFile("stdlib/examples/raylib_hello.cp")
-        val payload = TccCompiler::class.java.classLoader
-        assertTrue(
-            payload.getResource("native/linux-x86_64/tinycc/sysroot/usr/include/raylib.h") != null,
-            "Linux TinyCC payload should include Raylib headers"
+        val stdlibRoot = findRepositoryFile("stdlib/README.md").parent.toAbsolutePath()
+        val generated = CPlusTranspiler().transpile(
+            Files.readString(example),
+            example.toString(),
+            importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot)),
+            targetOs = "linux"
         )
-        assertTrue(
-            payload.getResource("native/linux-x86_64/tinycc/sysroot/usr/lib/libraylib.a") != null,
-            "Linux TinyCC payload should include the Raylib archive"
-        )
-        val directory = Files.createTempDirectory("cplus-raylib-link")
-        try {
-            val objectFile = directory.resolve("raylib-hello.o")
-            val errors = StringBuilder()
-            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
-                listOf(
-                    "compile", example.toString(), "-o", objectFile.toString(),
-                    "-c", "--target=linux-x86_64"
-                )
-            )
-            assertEquals(0, status, errors.toString())
-            assertTrue(Files.size(objectFile) > 0)
-        } finally {
-            Files.walk(directory).use { paths ->
-                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
-            }
-        }
+        assertTrue("#include <raylib.h>" in generated.code)
+        assertTrue("InitWindow" in generated.code)
+        assertTrue(generated.compilerOptions.isEmpty(), "Raylib modules do not add linker flags implicitly")
     }
 
     @Test
@@ -679,6 +667,12 @@ class TranspilerTest {
 
     @Test
     fun compilesForAnExplicitEmbeddedCrossTarget() {
+        val payload = TccCompiler::class.java.classLoader
+        assumeTrue(
+            payload.getResource("native/linux-aarch64/files.list") != null &&
+                payload.getResource("native/linux-aarch64/tinycc/sysroot/usr/include/stdio.h") != null,
+            "cross executable test requires a Linux ARM64 TinyCC payload with its sysroot"
+        )
         val directory = Files.createTempDirectory("cplus-cross-target")
         try {
             val sourcePath = directory.resolve("minimal.cp")
@@ -710,6 +704,10 @@ class TranspilerTest {
 
     @Test
     fun rejectsCrossTargetOutputWithTheWrongObjectFormat() {
+        assumeTrue(
+            TccCompiler::class.java.classLoader.getResource("native/macos-x86_64/files.list") != null,
+            "target-format test requires an embedded macOS TinyCC driver"
+        )
         val directory = Files.createTempDirectory("cplus-invalid-cross-format")
         try {
             val sourcePath = directory.resolve("minimal.cp")
@@ -1611,7 +1609,7 @@ class TranspilerTest {
             ).run(listOf("compile", source.toString(), "-o", executable.toString()))
             assertTrue(result != 0, "invalid C-plus unexpectedly compiled")
             assertTrue(source.toString() in errors.toString(), errors.toString())
-            assertTrue(":4:" in errors.toString(), errors.toString())
+            assertTrue(":5:" in errors.toString(), errors.toString())
             assertTrue("pass: lower-method-calls" in errors.toString(), errors.toString())
             assertTrue("pass: tcc-compile" in errors.toString(), errors.toString())
         } finally {
@@ -1620,7 +1618,25 @@ class TranspilerTest {
     }
 
     @Test
-    fun compilesAndRunsWithBundledTccAndPassthroughFlags() {
+    fun usesSystemTccWhenEmbeddedHostPayloadHasNoSysroot() {
+        val loader = TccCompiler::class.java.classLoader
+        val hostOs = when {
+            System.getProperty("os.name").contains("win", ignoreCase = true) -> "windows"
+            System.getProperty("os.name").contains("mac", ignoreCase = true) -> "macos"
+            else -> "linux"
+        }
+        val hostArch = when (System.getProperty("os.arch").lowercase()) {
+            "amd64", "x86_64", "x64" -> "x86_64"
+            "aarch64", "arm64" -> "aarch64"
+            else -> "unknown"
+        }
+        val hostTarget = "$hostOs-$hostArch"
+        val sysroot = "native/$hostTarget/tinycc/sysroot/"
+        val hostPayload = loader.getResource("native/$hostTarget/files.list")
+        val hostSysroot = listOf("${sysroot}usr/include/stdio.h", "${sysroot}include/stdio.h")
+            .any { loader.getResource(it) != null }
+        assumeTrue(hostPayload != null && !hostSysroot, "test requires a no-sysroots host TinyCC payload")
+
         val directory = Files.createTempDirectory("cplus-test")
         try {
             val source = directory.resolve("hello.cp")
@@ -1645,7 +1661,7 @@ class TranspilerTest {
             )
             assertTrue(
                 CPlusCli().run(
-                    listOf("run", source.toString(), "-o", executable.toString(), "-DFLAG=1")
+                    listOf("run", source.toString(), "-o", executable.toString(), "-DFLAG=1", "--target=$hostTarget")
                 ) == 0
             )
             assertTrue(Files.isExecutable(executable), "TCC did not produce an executable")

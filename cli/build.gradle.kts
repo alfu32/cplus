@@ -14,7 +14,7 @@ dependencies {
     implementation(project(":compiler"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
-    testRuntimeOnly(files(rootProject.file("lib/tinycc-cli-cross.jar")))
+    testRuntimeOnly(files(rootProject.file("lib/tinycc-cross-cli-no-sysroots.jar")))
 }
 
 kotlin {
@@ -55,21 +55,16 @@ val allTccTargets = setOf(
 )
 val tccTargetOption = providers.gradleProperty("target").orElse("none").get().trim().lowercase().ifEmpty { "none" }
 val selectedTccTargets = when (tccTargetOption) {
-    "none" -> emptySet()
-    "all", "crossbuild" -> allTccTargets
-    in allTccTargets -> setOf(tccTargetOption)
+    "none", "bare" -> emptySet()
+    "cross", "all", "crossbuild" -> allTccTargets
     else -> throw GradleException(
-        "Invalid -Ptarget='$tccTargetOption'; expected one of ${allTccTargets.sorted().joinToString(", ")}, all, crossbuild, or none."
+        "Invalid -Ptarget='$tccTargetOption'; expected none/bare or cross (all, crossbuild are aliases)."
     )
 }
 val tinyccCliJar = rootProject.file("lib/tinycc-cli.jar").canonicalFile
 val tinyccPayloadJars = when {
     selectedTccTargets.isEmpty() -> emptyList()
-    selectedTccTargets.size == allTccTargets.size ->
-        listOf(rootProject.file("lib/tinycc-cli-cross.jar").canonicalFile)
-    else -> selectedTccTargets.sorted().map { target ->
-        rootProject.file("lib/tinycc-cli-$target.jar").canonicalFile
-    }
+    else -> listOf(rootProject.file("lib/tinycc-cross-cli-no-sysroots.jar").canonicalFile)
 }
 val missingTinyccPayloads = tinyccPayloadJars.filterNot { it.isFile }
 if (missingTinyccPayloads.isNotEmpty()) {
@@ -101,6 +96,7 @@ tasks.register<Jar>("fatJar") {
     }
     from(tinyccPayloadJars.map { zipTree(it) }) {
         include("native/**")
+        exclude("native/**/tinycc/sysroot/**")
         exclude { details ->
             val path = details.path
             val target = path
@@ -126,6 +122,6 @@ tasks.register<Jar>("fatJar") {
 
         sourceJar.copyTo(targetJar, overwrite = true)
         logger.lifecycle("Bundled TinyCC host payloads: ${selectedTccTargets.sorted().joinToString(", ").ifEmpty { "none" }}")
-        logger.lifecycle("Bundled TinyCC sysroot payloads: ${selectedTccTargets.sorted().filterNot { it.startsWith("macos-") }.joinToString(", ").ifEmpty { "none" }}")
+        logger.lifecycle("Bundled TinyCC sysroot payloads: none (uses system headers and libraries)")
     }
 }

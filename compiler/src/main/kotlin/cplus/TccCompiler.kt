@@ -28,7 +28,7 @@ data class TccCompilationResult(
     val diagnostics: List<CompilerDiagnostic>
 )
 
-/** Uses an embedded TinyCC runtime when present, otherwise invokes system TinyCC. */
+/** Uses embedded TinyCC for bundled targets and system TinyCC for native builds without a bundled sysroot. */
 class TccCompiler {
     fun compileExecutable(
         source: TranscodedSource,
@@ -39,6 +39,16 @@ class TccCompiler {
         val effectiveOptions = CompilerOptions.merge(options, source.compilerOptions)
         output.toAbsolutePath().parent?.let(Files::createDirectories)
         if (!hasEmbeddedRuntimeForCurrentPlatform()) {
+            return@pass compileWithExternalTcc(source, output, effectiveOptions)
+        }
+        val hostTarget = hostTarget()
+        val requestedTarget = targetOption(effectiveOptions)
+        if (hostTarget != null && (requestedTarget == null || requestedTarget == hostTarget) &&
+            !hasBundledSysroot(hostTarget)
+        ) {
+            // The no-sysroots cross payload supplies TinyCC's native driver, not
+            // the host's CRT, libc headers, or linker search paths. Let the
+            // installed system compiler use its configured native toolchain.
             return@pass compileWithExternalTcc(source, output, effectiveOptions)
         }
         if (effectiveOptions.any { it == "--target" || it.startsWith("--target=") || it == "-lraylib" } ||
@@ -277,7 +287,7 @@ class TccCompiler {
         try {
         Files.writeString(sourceFile, source.code)
         val tcc = System.getenv("TCC")?.takeIf(String::isNotBlank) ?: "tcc"
-        val (compileOptions, linkOptions) = splitLinkOptions(options)
+        val (compileOptions, linkOptions) = splitLinkOptions(withoutRedundantHostTarget(options))
         val command = buildList {
             add(tcc)
             addAll(compileOptions)
@@ -290,8 +300,8 @@ class TccCompiler {
                 ProcessBuilder(command).redirectErrorStream(true).start()
             } catch (error: IOException) {
                 throw IllegalStateException(
-                    "No embedded TinyCC runtime is available for this platform and external 'tcc' could not be started. " +
-                        "Install TinyCC and make it available on PATH, or set TCC to its executable path.",
+                    "External 'tcc' could not be started. Install TinyCC and make it available on PATH, " +
+                        "or set TCC to its executable path; native builds also need it when the embedded payload has no sysroot.",
                     error
                 )
             }
@@ -321,6 +331,30 @@ class TccCompiler {
         }
         val resource = "native/$nativeOs-$arch/files.list"
         return TccCompiler::class.java.classLoader.getResource(resource) != null
+    }
+
+    private fun hasBundledSysroot(target: String): Boolean {
+        val classLoader = TccCompiler::class.java.classLoader
+        val sysroot = "native/$target/tinycc/sysroot/"
+        return listOf(
+            "${sysroot}usr/include/stdio.h",
+            "${sysroot}include/stdio.h"
+        ).any { classLoader.getResource(it) != null }
+    }
+
+    private fun withoutRedundantHostTarget(options: List<String>): List<String> {
+        val host = hostTarget() ?: return options
+        if (targetOption(options) != host) return options
+        val filtered = mutableListOf<String>()
+        var index = 0
+        while (index < options.size) {
+            when {
+                options[index] == "--target" && options.getOrNull(index + 1) == host -> index += 2
+                options[index].startsWith("--target=") && options[index].substringAfter('=') == host -> index++
+                else -> filtered += options[index++]
+            }
+        }
+        return filtered
     }
 
     private fun isLinuxHost(): Boolean = System.getProperty("os.name").lowercase().contains("linux")
