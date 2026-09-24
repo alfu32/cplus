@@ -1,6 +1,7 @@
 #ifndef CPLUS_STDLIB_IO_FILE_CP
 #define CPLUS_STDLIB_IO_FILE_CP
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -223,10 +224,14 @@ typedef struct file_t {
         return file;
     }
 
-    pub borrowed FILE* freopen(borrowed mut *self, borrowed const char* path, borrowed const char* mode) {
-        if (self == NULL || self->stream == NULL) return NULL;
+    pub int freopen(borrowed mut *self, borrowed const char* path, borrowed const char* mode) {
+        if (self == NULL || self->stream == NULL || path == NULL || mode == NULL) return EINVAL;
+
+        errno = 0;
         self->stream = freopen(path, mode, self->stream);
-        return self->stream;
+        self->buffer = NULL;
+        if (self->stream == NULL) return errno == 0 ? EOF : errno;
+        return 0;
     }
 
     static pub file_t tmpfile(void) {
@@ -368,6 +373,9 @@ typedef struct file_t {
         if (self == NULL || self->stream == NULL) return 0;
         return ferror(self->stream);
     }
+} file_t;
+
+typedef struct path_t{
 
     static pub int remove(borrowed const char* path) {
         return remove(path);
@@ -376,7 +384,7 @@ typedef struct file_t {
     static pub int rename(borrowed const char* old_path, borrowed const char* new_path) {
         return rename(old_path, new_path);
     }
-} file_t;
+} path_t;
 
 
 typedef struct var_io_t {

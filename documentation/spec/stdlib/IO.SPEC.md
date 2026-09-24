@@ -22,7 +22,7 @@ if (stream.stream != NULL) {
 
 `file_t` is currently a small value wrapper around an owned `FILE*`, not a path object. `file_t.fopen(path, mode)` and `file_t.tmpfile()` return the wrapper by value; on failure its `stream` field is `NULL`. Instance operations infer the receiver address (`stream.fwrite(...)`). `stream.fclose()` closes the C stream and clears `stream.stream`; it does not free the `file_t` value. Use `defer` to close on scope exit.
 
-Its instance API groups file-stream operations: `freopen`, `fclose`, `fflush`, buffering, formatted `fprintf`/`fscanf` and `v*` forms, character/line/block I/O, positioning, and stream status. `remove` and `rename` are static path operations on `file_t` for now, although they are conceptually filesystem operations rather than stream methods.
+Its instance API groups file-stream operations: `freopen`, `fclose`, `fflush`, buffering, formatted `fprintf`/`fscanf` and `v*` forms, character/line/block I/O, positioning, and stream status. `freopen()` mutates the wrapper and returns `0` on success; on failure it returns `errno` (or `EOF` if libc did not set `errno`) and leaves the stream pointer `NULL`. Invalid wrapper/path/mode arguments return `EINVAL`. `remove` and `rename` are static path operations on `path_t`.
 
 ## `var_io_t` and `stdio_t`
 
@@ -32,7 +32,7 @@ Its instance API groups file-stream operations: `freopen`, `fclose`, `fflush`, b
 
 ## Safety and limitations
 
-The ownership/access annotations are documentation only; C-plus does not enforce their lifetime promises. Close each successfully opened `file_t` exactly once. In C, `freopen` closes the previous stream even if reopening fails; this wrapper records the resulting `NULL` stream. A custom `file_t.buffer` is borrowed: assign caller-owned storage before calling `setbuf()` or `setvbuf()`, and keep it alive as required by C. `fread`/`fwrite` return complete items, not bytes. Format strings must match argument types and destination capacities.
+The ownership/access annotations are documentation only; C-plus does not enforce their lifetime promises. Close each successfully opened `file_t` exactly once. In C, `freopen` closes the previous stream even if reopening fails; this wrapper records the resulting `NULL` stream and clears its borrowed buffer field. A custom `file_t.buffer` is borrowed: assign caller-owned storage before calling `setbuf()` or `setvbuf()`, and keep it alive as required by C. `fread`/`fwrite` return complete items, not bytes. Format strings must match argument types and destination capacities.
 
 `EOF`, `stdin`, `stdout`, `stderr`, `SEEK_SET`, and related macros come from `<stdio.h>`. The unsafe/obsolete `gets` and `tmpnam` functions are omitted. No `string_stream_t` exists yet; `sprintf`/`snprintf` currently target caller-provided buffers.
 

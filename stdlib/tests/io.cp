@@ -45,6 +45,16 @@ comptime import "stdlib:/io/file.cp";
     @assertEquals(EOF, stream.fclose());
 }
 
+@test "file facade freopen reports failure and clears the stream" {
+    file_t stream = file_t.tmpfile();
+    @assert(stream.stream != NULL);
+
+    int error = stream.freopen("", "r");
+    @assert(error != 0);
+    @assert(stream.stream == NULL);
+    @assert(stream.buffer == NULL);
+}
+
 @test "file facade writes reads and closes a temporary file" {
     file_t stream = file_t.tmpfile();
     @assert(stream.stream != NULL);
