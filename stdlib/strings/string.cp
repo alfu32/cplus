@@ -19,6 +19,130 @@ enum {
     STRING_ERROR_RANGE = 3
 };
 
+/* A borrowed view for the receiver-oriented C string.h functions. */
+typedef struct str_t {
+    borrowed const char* data;
+
+    static pub str_t from(borrowed const char* value) {
+        str_t view = { value };
+        return view;
+    }
+
+    pub void init(borrowed mut *self, borrowed const char* value) {
+        if (self != NULL) self->data = value;
+    }
+
+    pub borrowed const char* c_str(borrowed *self) {
+        return self == NULL || self->data == NULL ? "" : self->data;
+    }
+
+    pub size_t strlen(borrowed *self) {
+        return strlen(str_t.c_str(self));
+    }
+
+    pub int strcmp(borrowed *self, borrowed const char* other) {
+        if (other == NULL) return 1;
+        return strcmp(str_t.c_str(self), other);
+    }
+
+    pub int strncmp(borrowed *self, borrowed const char* other, size_t count) {
+        if (other == NULL) return 1;
+        return strncmp(str_t.c_str(self), other, count);
+    }
+
+    pub int strcoll(borrowed *self, borrowed const char* other) {
+        if (other == NULL) return 1;
+        return strcoll(str_t.c_str(self), other);
+    }
+
+    pub borrowed const char* strchr(borrowed *self, int value) {
+        return strchr(str_t.c_str(self), value);
+    }
+
+    pub borrowed const char* strrchr(borrowed *self, int value) {
+        return strrchr(str_t.c_str(self), value);
+    }
+
+    pub borrowed const char* strstr(borrowed *self, borrowed const char* needle) {
+        if (needle == NULL) return NULL;
+        return strstr(str_t.c_str(self), needle);
+    }
+
+    pub size_t strspn(borrowed *self, borrowed const char* accept) {
+        if (accept == NULL) return 0;
+        return strspn(str_t.c_str(self), accept);
+    }
+
+    pub size_t strcspn(borrowed *self, borrowed const char* reject) {
+        if (reject == NULL) return 0;
+        return strcspn(str_t.c_str(self), reject);
+    }
+
+    pub borrowed const char* strpbrk(borrowed *self, borrowed const char* accept) {
+        if (accept == NULL) return NULL;
+        return strpbrk(str_t.c_str(self), accept);
+    }
+
+    /* Raw C operations: the caller owns and sizes each destination buffer. */
+    static pub borrowed char* strcpy(borrowed mut char* destination, borrowed const char* source) {
+        if (destination == NULL || source == NULL) return NULL;
+        return strcpy(destination, source);
+    }
+
+    static pub borrowed char* strncpy(borrowed mut char* destination, borrowed const char* source, size_t count) {
+        if (destination == NULL || source == NULL) return NULL;
+        return strncpy(destination, source, count);
+    }
+
+    static pub borrowed char* strcat(borrowed mut char* destination, borrowed const char* source) {
+        if (destination == NULL || source == NULL) return NULL;
+        return strcat(destination, source);
+    }
+
+    static pub borrowed char* strncat(borrowed mut char* destination, borrowed const char* source, size_t count) {
+        if (destination == NULL || source == NULL) return NULL;
+        return strncat(destination, source, count);
+    }
+
+    static pub size_t strxfrm(borrowed mut char* destination, borrowed const char* source, size_t count) {
+        if (source == NULL || (destination == NULL && count != 0)) return (size_t)-1;
+        return strxfrm(destination, source, count);
+    }
+
+    static pub borrowed char* strerror(int error_number) {
+        return strerror(error_number);
+    }
+
+    static pub borrowed char* strtok(borrowed mut char* source, borrowed const char* delimiters) {
+        if (delimiters == NULL) return NULL;
+        return strtok(source, delimiters);
+    }
+
+    static pub borrowed void* memchr(borrowed const void* memory, int value, size_t count) {
+        return (void*)memchr(memory, value, count);
+    }
+
+    static pub int memcmp(borrowed const void* left, borrowed const void* right, size_t count) {
+        if (left == NULL || right == NULL) return left == right ? 0 : (left == NULL ? -1 : 1);
+        return memcmp(left, right, count);
+    }
+
+    static pub borrowed void* memcpy(borrowed mut void* destination, borrowed const void* source, size_t count) {
+        if (destination == NULL || source == NULL) return NULL;
+        return memcpy(destination, source, count);
+    }
+
+    static pub borrowed void* memmove(borrowed mut void* destination, borrowed const void* source, size_t count) {
+        if (destination == NULL || source == NULL) return NULL;
+        return memmove(destination, source, count);
+    }
+
+    static pub borrowed void* memset(borrowed mut void* destination, int value, size_t count) {
+        if (destination == NULL) return NULL;
+        return memset(destination, value, count);
+    }
+} str_t;
+
 typedef struct string {
     warm char* data;
     size_t length;
@@ -152,6 +276,10 @@ typedef struct string {
         return self->data;
     }
 
+    pub str_t as_str(borrowed *self) {
+        return str_t.from(string.c_str(self));
+    }
+
     pub size_t size(borrowed *self) {
         return self == NULL ? 0 : self->length;
     }
@@ -172,145 +300,8 @@ typedef struct string {
         self->capacity = 0;
     }
 
-    /* Object-managed facade over the C string functions. */
-    pub size_t strlen(borrowed *self) {
-        return strlen(string__c_str(self));
-    }
-
-    pub error_t strcpy(borrowed mut *self, borrowed const char* source) {
-        if (self == NULL || source == NULL) return STRING_ERROR_INVALID_ARGUMENT;
-        size_t source_length = strlen(source);
-        error_t error = string__reserve(self, source_length);
-        if (error != STRING_OK) return error;
-        size_t source_offset = 0;
-        int internal_source = 0;
-        if (self->data != NULL) {
-            for (size_t i = 0; i <= self->length; i++) {
-                if (source == self->data + i) { source_offset = i; internal_source = 1; break; }
-            }
-        }
-        if (internal_source) source = self->data + source_offset;
-        memmove(self->data, source, source_length + 1);
-        self->length = source_length;
-        return STRING_OK;
-    }
-
-    pub error_t strncpy(borrowed mut *self, borrowed const char* source, size_t count) {
-        if (self == NULL || source == NULL) return STRING_ERROR_INVALID_ARGUMENT;
-        size_t source_length = strlen(source);
-        size_t copied = source_length < count ? source_length : count;
-        error_t error = string__reserve(self, copied);
-        if (error != STRING_OK) return error;
-        size_t source_offset = 0;
-        int internal_source = 0;
-        if (self->data != NULL) {
-            for (size_t i = 0; i <= self->length; i++) {
-                if (source == self->data + i) { source_offset = i; internal_source = 1; break; }
-            }
-        }
-        if (internal_source) source = self->data + source_offset;
-        if (copied > 0) memmove(self->data, source, copied);
-        self->data[copied] = '\0';
-        self->length = copied;
-        return STRING_OK;
-    }
-
-    pub error_t strcat(borrowed mut *self, borrowed const char* suffix) {
-        if (self == NULL || suffix == NULL) return STRING_ERROR_INVALID_ARGUMENT;
-        size_t suffix_length = strlen(suffix);
-        size_t source_offset = 0;
-        int internal_source = 0;
-        if (self->data != NULL) {
-            for (size_t i = 0; i <= self->length; i++) {
-                if (suffix == self->data + i) { source_offset = i; internal_source = 1; break; }
-            }
-        }
-        if (suffix_length > ((size_t)-1) - self->length) return STRING_ERROR_RANGE;
-        size_t old_length = self->length;
-        size_t new_length = old_length + suffix_length;
-        error_t error = string__reserve(self, new_length);
-        if (error != STRING_OK) return error;
-        if (internal_source) {
-            suffix = self->data + source_offset;
-            memmove(self->data + old_length, suffix, suffix_length + 1);
-        } else {
-            strcat(self->data, suffix);
-        }
-        self->length = new_length;
-        return STRING_OK;
-    }
-
-    pub error_t strncat(borrowed mut *self, borrowed const char* suffix, size_t count) {
-        if (self == NULL || suffix == NULL) return STRING_ERROR_INVALID_ARGUMENT;
-        size_t suffix_length = strlen(suffix);
-        size_t appended = suffix_length < count ? suffix_length : count;
-        size_t source_offset = 0;
-        int internal_source = 0;
-        if (self->data != NULL) {
-            for (size_t i = 0; i <= self->length; i++) {
-                if (suffix == self->data + i) { source_offset = i; internal_source = 1; break; }
-            }
-        }
-        if (appended > ((size_t)-1) - self->length) return STRING_ERROR_RANGE;
-        size_t old_length = self->length;
-        size_t new_length = old_length + appended;
-        error_t error = string__reserve(self, new_length);
-        if (error != STRING_OK) return error;
-        if (internal_source) {
-            suffix = self->data + source_offset;
-            if (appended > 0) memmove(self->data + old_length, suffix, appended);
-            self->data[new_length] = '\0';
-        } else {
-            strncat(self->data, suffix, appended);
-        }
-        self->length = new_length;
-        return STRING_OK;
-    }
-
-    pub int strcmp(borrowed *self, borrowed const char* other) {
-        if (other == NULL) return 1;
-        return strcmp(string__c_str(self), other);
-    }
-
-    pub int strncmp(borrowed *self, borrowed const char* other, size_t count) {
-        if (other == NULL) return 1;
-        return strncmp(string__c_str(self), other, count);
-    }
-
-    pub int strcoll(borrowed *self, borrowed const char* other) {
-        if (other == NULL) return 1;
-        return strcoll(string__c_str(self), other);
-    }
-
-    pub borrowed const char* strchr(borrowed *self, int value) {
-        return strchr(string__c_str(self), value);
-    }
-
-    pub borrowed const char* strrchr(borrowed *self, int value) {
-        return strrchr(string__c_str(self), value);
-    }
-
-    pub borrowed const char* strstr(borrowed *self, borrowed const char* needle) {
-        if (needle == NULL) return NULL;
-        return strstr(string__c_str(self), needle);
-    }
-
-    pub size_t strspn(borrowed *self, borrowed const char* accept) {
-        if (accept == NULL) return 0;
-        return strspn(string__c_str(self), accept);
-    }
-
-    pub size_t strcspn(borrowed *self, borrowed const char* reject) {
-        if (reject == NULL) return 0;
-        return strcspn(string__c_str(self), reject);
-    }
-
-    pub borrowed const char* strpbrk(borrowed *self, borrowed const char* accept) {
-        if (accept == NULL) return NULL;
-        return strpbrk(string__c_str(self), accept);
-    }
-
-    pub error_t strxfrm(borrowed mut *self, borrowed const char* source) {
+    /* Replace the owned value with a locale collation key. */
+    pub error_t transform_collation_key(borrowed mut *self, borrowed const char* source) {
         if (self == NULL || source == NULL) return STRING_ERROR_INVALID_ARGUMENT;
         char* temporary_source = NULL;
         if (self->data != NULL) {
@@ -333,40 +324,6 @@ typedef struct string {
         if (transformed > required) return STRING_ERROR_RANGE;
         self->length = transformed;
         return STRING_OK;
-    }
-
-    /* Raw-memory/string.h utilities that do not belong to an instance. */
-    static pub borrowed void* memchr(borrowed const void* memory, int value, size_t count) {
-        return (void*)memchr(memory, value, count);
-    }
-
-    static pub int memcmp(borrowed const void* left, borrowed const void* right, size_t count) {
-        if (left == NULL || right == NULL) return left == right ? 0 : (left == NULL ? -1 : 1);
-        return memcmp(left, right, count);
-    }
-
-    static pub borrowed void* memcpy(borrowed mut void* destination, borrowed const void* source, size_t count) {
-        if (destination == NULL || source == NULL) return NULL;
-        return memcpy(destination, source, count);
-    }
-
-    static pub borrowed void* memmove(borrowed mut void* destination, borrowed const void* source, size_t count) {
-        if (destination == NULL || source == NULL) return NULL;
-        return memmove(destination, source, count);
-    }
-
-    static pub borrowed void* memset(borrowed mut void* destination, int value, size_t count) {
-        if (destination == NULL) return NULL;
-        return memset(destination, value, count);
-    }
-
-    static pub borrowed char* strerror(int error_number) {
-        return strerror(error_number);
-    }
-
-    static pub borrowed char* strtok(borrowed mut char* source, borrowed const char* delimiters) {
-        if (delimiters == NULL) return NULL;
-        return strtok(source, delimiters);
     }
 
     pub error_t indent(borrowed mut *self, int number_of_spaces) {
@@ -425,30 +382,30 @@ typedef struct string {
         return STRING_OK;
     }
 
-    static pub error_t trim_indent(borrowed mut string* str) {
-        if (str == NULL) return STRING_ERROR_INVALID_ARGUMENT;
-        if (str->length == 0 || str->data == NULL) return STRING_OK;
+    pub error_t trim_indent(borrowed mut *self) {
+        if (self == NULL) return STRING_ERROR_INVALID_ARGUMENT;
+        if (self->length == 0 || self->data == NULL) return STRING_OK;
 
         size_t minimum_indent = (size_t)-1;
         size_t index = 0;
-        while (index < str->length) {
+        while (index < self->length) {
             size_t indent_count = 0;
-            while (index < str->length && str->data[index] == ' ') {
+            while (index < self->length && self->data[index] == ' ') {
                 indent_count++;
                 index++;
             }
 
-            if (index < str->length && str->data[index] != '\n') {
+            if (index < self->length && self->data[index] != '\n') {
                 if (indent_count < minimum_indent) minimum_indent = indent_count;
             }
 
-            while (index < str->length && str->data[index] != '\n') index++;
-            if (index < str->length && str->data[index] == '\n') index++;
+            while (index < self->length && self->data[index] != '\n') index++;
+            if (index < self->length && self->data[index] == '\n') index++;
         }
 
         if (minimum_indent == (size_t)-1 || minimum_indent == 0) return STRING_OK;
         if (minimum_indent > (size_t)2147483647) return STRING_ERROR_RANGE;
-        return string__dedent(str, (int)minimum_indent);
+        return string.dedent(self, (int)minimum_indent);
     }
 } string;
 

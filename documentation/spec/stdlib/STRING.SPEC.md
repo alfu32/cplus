@@ -1,10 +1,10 @@
-# C-plus `string` Standard Library Specification
+# C-plus `string` and `str_t` Standard Library Specification
 
 Status: implemented for the source-level standard library.
 
 ## 1. Purpose
 
-`stdlib/strings/string.cp` provides an owning, mutable C-plus `string` object. It wraps the string-oriented parts of `<string.h>` behind receiver methods while preserving C interoperability through a NUL-terminated `char*` buffer.
+`stdlib/strings/string.cp` provides an owning, mutable C-plus `string` and a non-owning `str_t` view. `string` owns its resizable NUL-terminated buffer; `str_t` presents the read-only, receiver-oriented `<string.h>` operations for any borrowed NUL-terminated C string. The split avoids pretending raw C destination-buffer functions can safely resize an owning `string`.
 
 The object is intentionally not just a `char*`: operations such as indentation, concatenation, and assignment can resize the buffer, so the object tracks ownership, logical length, and capacity.
 
@@ -57,45 +57,37 @@ pub void destroy(string* self)
 
 `reserve(n)` reserves space for `n` non-NUL characters. The implementation allocates `n + 1` bytes so the terminator is never counted in `capacity`.
 
-## 4. `<string.h>` facade
+## 4. Borrowed `str_t` view and `<string.h>`
 
-String receiver methods preserve object invariants and are backed directly by the corresponding C library operation:
+Create a view from an existing C string or an owning `string`:
 
 ```c
-s.strlen()
-s.strcpy(source)
-s.strncpy(source, count)
-s.strcat(suffix)
-s.strncat(suffix, count)
-s.strcmp(other)
-s.strncmp(other, count)
-s.strcoll(other)
-s.strchr(ch)
-s.strrchr(ch)
-s.strstr(needle)
-s.strspn(accept)
-s.strcspn(reject)
-s.strpbrk(accept)
-s.strxfrm(source)
+str_t view = str_t.from(c_string);
+str_t owned_view = text.as_str();
+view.strlen();
+view.strcmp("expected");
+view.strstr("needle");
 ```
 
-The mutating copy/concatenation methods differ deliberately from raw C in one respect: they grow the owned destination as necessary and always leave it NUL terminated. `strncpy` therefore has useful string-object semantics rather than exposing an unterminated result.
+`str_t.data` is borrowed: the backing bytes must remain alive and NUL-terminated while the view is used. A view from `string.as_str()` is invalidated when the owner is destroyed or an operation reallocates its buffer. Read-only receiver methods (`strlen`, `strcmp`, `strncmp`, `strcoll`, `strchr`, `strrchr`, `strstr`, `strspn`, `strcspn`, and `strpbrk`) delegate to the corresponding C library function.
 
-The raw-memory members of `<string.h>` are exposed as static utility methods:
+Operations with a separate raw destination remain static C-style helpers, since neither libc nor these methods know the destination capacity:
 
 ```c
-string.memchr(...)
-string.memcmp(...)
-string.memcpy(...)
-string.memmove(...)
-string.memset(...)
+str_t.strcpy(destination, source);
+str_t.strncpy(destination, source, count);
+str_t.strcat(destination, source);
+str_t.strncat(destination, source, count);
+str_t.strxfrm(destination, source, count);
 ```
 
-`strerror` and the stateful standard `strtok` are also exposed as static utilities:
+The caller must provide a writable destination large enough for the operation (including the terminating NUL where applicable). These intentionally preserve libc's raw-buffer semantics; use `string.assign`, `assign_n`, `append`, or `append_n` for capacity-safe owned-string mutation. Raw memory functions and the remaining libc helpers are also static utilities:
 
 ```c
-string.strerror(error_number)
-string.strtok(buffer_or_null, delimiters)
+str_t.memchr(...); str_t.memcmp(...); str_t.memcpy(...);
+str_t.memmove(...); str_t.memset(...);
+str_t.strerror(error_number);
+str_t.strtok(buffer_or_null, delimiters);
 ```
 
 `strtok` operates on a caller-owned raw buffer, not on a `string`, because inserting internal NUL bytes into the owned object would invalidate its `length` invariant.
@@ -121,12 +113,12 @@ Removes up to `number_of_spaces` ASCII spaces from the beginning of every logica
 ### `trim_indent`
 
 ```c
-pub static error_t trim_indent(string* str)
+pub error_t trim_indent(string* self)
 ```
 
 Finds the minimum count of leading ASCII spaces across all nonblank lines, then removes that count from every line. Blank lines do not influence the minimum. Tabs are not expanded and therefore are not counted as indentation.
 
-This operation mutates the supplied `string`. It does not remove leading/trailing blank lines; it only normalizes common space indentation.
+This is an instance method (`text.trim_indent()`). It mutates the receiver and does not remove leading/trailing blank lines; it only normalizes common space indentation.
 
 ## 6. Complexity
 
@@ -146,5 +138,7 @@ text.init();
 text.assign("alpha\nbeta");
 text.indent(4);
 puts(text.c_str());
+str_t view = text.as_str();
+printf("length=%zu\n", view.strlen());
 text.destroy();
 ```

@@ -100,14 +100,14 @@ Use a normal C `#define` if a shorter public name is useful, for example `#defin
 
 ## Mutable `string`
 
-`strings/string.cp` defines an owning, NUL-terminated `string` backed by warm memory. `init()` starts it empty without allocating; `destroy()` frees its buffer. Successful operations preserve `length <= capacity` and `data[length] == '\0'` when data is allocated. Capacity counts characters but excludes the terminator. Failed allocation/range operations preserve the previous value, and mutating source arguments may alias the string's own buffer.
+`strings/string.cp` defines an owning, NUL-terminated `string` backed by warm memory, plus a borrowed `str_t` view for C string operations. `init()` starts `string` empty without allocating; `destroy()` frees its buffer. Successful operations preserve `length <= capacity` and `data[length] == '\0'` when data is allocated. Capacity counts characters but excludes the terminator. Failed allocation/range operations preserve the previous value, and mutating source arguments may alias the string's own buffer. A `str_t` created by `text.as_str()` borrows the current buffer and must not outlive it or a reallocation.
 
 Errors: `STRING_OK`, `STRING_ERROR_INVALID_ARGUMENT`, `STRING_ERROR_ALLOCATION`, and `STRING_ERROR_RANGE`.
 
 - Lifecycle/value API: `init`, `reserve`, `assign`, `assign_n`, `append`, `append_n`, `append_char`, `clear`, `c_str`, `size`, `capacity_of`, `empty`, `destroy`.
-- String facade: `strlen`, `strcpy`, `strncpy`, `strcat`, `strncat`, `strcmp`, `strncmp`, `strcoll`, `strchr`, `strrchr`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strxfrm`.
-- Static C helpers: `string.memchr`, `memcmp`, `memcpy`, `memmove`, `memset`, `strerror`, and `strtok`. `strtok` works on a caller-owned raw buffer, not the `string`'s internal storage.
-- Indentation: `indent(n)` adds spaces to each logical line; `dedent(n)` removes up to `n` leading spaces per line; `string.trim_indent(&value)` removes the common indentation of nonblank lines. Negative counts are rejected; tabs are not indentation.
+- Borrowed C-string view: `str_t view = text.as_str()`; receiver methods include `view.strlen()`, `view.strcmp(other)`, and `view.strstr(needle)`. `str_t.from(c_string)` creates a view over an existing C string.
+- Raw libc helpers: `str_t.strcpy`, `strncpy`, `strcat`, `strncat`, and `strxfrm` take caller-owned destination buffers and retain libc capacity requirements. Memory functions, `strerror`, and `strtok` are also `str_t` static helpers; `strtok` operates on a caller-owned mutable buffer.
+- Indentation: `indent(n)` adds spaces to each logical line; `dedent(n)` removes up to `n` leading spaces per line; `value.trim_indent()` removes the common indentation of nonblank lines. Negative counts are rejected; tabs are not indentation.
 
 See the [string API specification](../documentation/spec/stdlib/STRING.SPEC.md) for detailed behavior and complexity. Exercise the implementation with `cpc test stdlib/tests/string.cp`.
 

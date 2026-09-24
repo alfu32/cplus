@@ -8,6 +8,24 @@ comptime import "stdlib:/memory/xmem.cp";
     @assertEquals(0, xmem_init())
 }
 
+@test "allocator context methods route allocations to arenas" {
+    @assert(xmem.init() == 0)
+    warm unsigned char* warm_value = xmem.alloc_warm(32);
+    scratch unsigned char* scratch_value = xmem.alloc_scratch(48);
+    @assert(warm_value != NULL)
+    @assert(scratch_value != NULL)
+    warm_value[0] = 0x31;
+    scratch_value[0] = 0x42;
+    @assertEquals((unsigned char)0x31, warm_value[0])
+    @assertEquals((unsigned char)0x42, scratch_value[0])
+    xmem_stats_t statistics;
+    @assert(xmem.get_stats(XMEM_CLASS_WARM, &statistics) == 0)
+    @assert(statistics.allocation_count > 0)
+    xmem.free_warm(warm_value);
+    xmem.reset_scratch();
+    xmem.destroy();
+}
+
 @test "scratch allocation alignment growth and reset" {
     scratch unsigned char* first = alloc_scratch(32);
     scratch unsigned char* aligned = alloc_scratch_aligned(257, 128);

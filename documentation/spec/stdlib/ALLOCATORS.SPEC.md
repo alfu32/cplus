@@ -236,7 +236,7 @@ rather than pretending disk is another RAM allocator.
 
 # 4. C-plus allocator implementation
 
-The implementation should use C-plus structs and receiver methods internally.
+The implementation keeps allocator algorithms inside the owning C-plus type, rather than declaring file-scope helpers and exposing wrapper methods. `xmem_arena_t` owns its private static implementation methods (mapping, block/free-list operations, allocation, reallocation, reset, statistics, and destruction) as well as public arena receiver methods. `xmem_t` owns allocation-class routing and lifecycle operations, so that policy is not duplicated in exported free functions.
 
 Define an allocator arena:
 
@@ -335,7 +335,7 @@ typedef struct xmem_t {
 } xmem_t;
 ```
 
-The runtime owns one allocator context:
+The runtime owns one allocator context. The global C ABI functions remain small compatibility entry points that delegate to this object; new C-plus code may call its methods directly:
 
 ```c
 priv xmem_t xmem;
@@ -355,6 +355,7 @@ Shutdown:
 
 ```c
 xmem.destroy();
+xmem.alloc_warm(128);
 ```
 
 The allocator subsystem itself is therefore written idiomatically in C-plus.

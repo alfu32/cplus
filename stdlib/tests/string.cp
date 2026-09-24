@@ -11,7 +11,8 @@ comptime import "stdlib:/strings/string.cp";
     @assert(value.capacity_of() == 0);
     @assert(value.empty());
     @assert(strcmp(value.c_str(), "") == 0);
-    @assert(value.strlen() == 0);
+    str_t view = value.as_str();
+    @assert(view.strlen() == 0);
     value.destroy();
 }
 
@@ -59,16 +60,16 @@ comptime import "stdlib:/strings/string.cp";
     value.destroy();
 }
 
-@test "string strcpy strncpy strcat strncat facade" {
+@test "string assignment and append APIs" {
     string value;
     @assert(value.init() == STRING_OK);
-    @assert(value.strcpy("alpha") == STRING_OK);
+    @assert(value.assign("alpha") == STRING_OK);
     @assert(strcmp(value.c_str(), "alpha") == 0);
-    @assert(value.strcat("-beta") == STRING_OK);
+    @assert(value.append("-beta") == STRING_OK);
     @assert(strcmp(value.c_str(), "alpha-beta") == 0);
-    @assert(value.strncpy("123456", 4) == STRING_OK);
+    @assert(value.assign_n("123456", 4) == STRING_OK);
     @assert(strcmp(value.c_str(), "1234") == 0);
-    @assert(value.strncat("abcdef", 3) == STRING_OK);
+    @assert(value.append_n("abcdef", 3) == STRING_OK);
     @assert(strcmp(value.c_str(), "1234abc") == 0);
     value.destroy();
 }
@@ -77,10 +78,11 @@ comptime import "stdlib:/strings/string.cp";
     string value;
     @assert(value.init() == STRING_OK);
     @assert(value.assign("alphabet") == STRING_OK);
-    @assert(value.strcmp("alphabet") == 0);
-    @assert(value.strcmp("alphaz") < 0);
-    @assert(value.strncmp("alphaZZ", 5) == 0);
-    @assert(value.strcoll("alphabet") == 0);
+    str_t view = value.as_str();
+    @assert(view.strcmp("alphabet") == 0);
+    @assert(view.strcmp("alphaz") < 0);
+    @assert(view.strncmp("alphaZZ", 5) == 0);
+    @assert(view.strcoll("alphabet") == 0);
     value.destroy();
 }
 
@@ -88,10 +90,11 @@ comptime import "stdlib:/strings/string.cp";
     string value;
     @assert(value.init() == STRING_OK);
     @assert(value.assign("abc:def:ghi") == STRING_OK);
-    const char* first = value.strchr(':');
-    const char* last = value.strrchr(':');
-    const char* sub = value.strstr("def");
-    const char* any = value.strpbrk("xyz:g");
+    str_t view = value.as_str();
+    const char* first = view.strchr(':');
+    const char* last = view.strrchr(':');
+    const char* sub = view.strstr("def");
+    const char* any = view.strpbrk("xyz:g");
     @assert(first != NULL && strcmp(first, ":def:ghi") == 0);
     @assert(last != NULL && strcmp(last, ":ghi") == 0);
     @assert(sub != NULL && strcmp(sub, "def:ghi") == 0);
@@ -103,48 +106,50 @@ comptime import "stdlib:/strings/string.cp";
     string value;
     @assert(value.init() == STRING_OK);
     @assert(value.assign("aaab12") == STRING_OK);
-    @assert(value.strspn("ab") == 4);
-    @assert(value.strcspn("12") == 4);
+    str_t view = value.as_str();
+    @assert(view.strspn("ab") == 4);
+    @assert(view.strcspn("12") == 4);
     value.destroy();
 }
 
-@test "string strxfrm facade" {
+@test "string collation key and str view" {
     string value;
     @assert(value.init() == STRING_OK);
-    @assert(value.strxfrm("locale-text") == STRING_OK);
+    @assert(value.transform_collation_key("locale-text") == STRING_OK);
     @assert(value.size() == strlen(value.c_str()));
-    @assert(value.strcoll("locale-text") == 0);
+    str_t view = value.as_str();
+    @assert(view.strcoll("locale-text") == 0);
     value.destroy();
 }
 
-@test "string raw memory facade" {
+@test "str view raw memory utilities" {
     char source[8] = "abcdef";
     char destination[8];
-    @assert(string.memset(destination, 0, sizeof(destination)) == destination);
-    @assert(string.memcpy(destination, source, 7) == destination);
+    @assert(str_t.memset(destination, 0, sizeof(destination)) == destination);
+    @assert(str_t.memcpy(destination, source, 7) == destination);
     @assert(strcmp(destination, "abcdef") == 0);
-    @assert(string.memcmp(destination, source, 7) == 0);
-    @assert(string.memchr(destination, 'd', 7) == &destination[3]);
-    @assert(string.memmove(destination + 1, destination, 5) == destination + 1);
+    @assert(str_t.memcmp(destination, source, 7) == 0);
+    @assert(str_t.memchr(destination, 'd', 7) == &destination[3]);
+    @assert(str_t.memmove(destination + 1, destination, 5) == destination + 1);
     @assert(destination[1] == 'a');
     @assert(destination[5] == 'e');
 }
 
-@test "string strerror facade" {
-    char* message = string.strerror(EINVAL);
+@test "str view strerror helper" {
+    char* message = str_t.strerror(EINVAL);
     @assert(message != NULL);
     @assert(strlen(message) > 0);
 }
 
-@test "string strtok facade uses raw caller buffer" {
+@test "str view tokenizer uses raw caller buffer" {
     char buffer[32] = "one,two,three";
-    char* first = string.strtok(buffer, ",");
-    char* second = string.strtok(NULL, ",");
-    char* third = string.strtok(NULL, ",");
+    char* first = str_t.strtok(buffer, ",");
+    char* second = str_t.strtok(NULL, ",");
+    char* third = str_t.strtok(NULL, ",");
     @assert(first != NULL && strcmp(first, "one") == 0);
     @assert(second != NULL && strcmp(second, "two") == 0);
     @assert(third != NULL && strcmp(third, "three") == 0);
-    @assert(string.strtok(NULL, ",") == NULL);
+    @assert(str_t.strtok(NULL, ",") == NULL);
 }
 
 @test "string indent all logical lines" {
@@ -179,7 +184,7 @@ comptime import "stdlib:/strings/string.cp";
     string value;
     @assert(value.init() == STRING_OK);
     @assert(value.assign("    alpha\n      beta\n\n    gamma") == STRING_OK);
-    @assert(string.trim_indent(&value) == STRING_OK);
+    @assert(value.trim_indent() == STRING_OK);
     @assert(strcmp(value.c_str(), "alpha\n  beta\n\ngamma") == 0);
     value.destroy();
 }
@@ -188,7 +193,7 @@ comptime import "stdlib:/strings/string.cp";
     string value;
     @assert(value.init() == STRING_OK);
     @assert(value.assign("    alpha\n \n      beta") == STRING_OK);
-    @assert(string.trim_indent(&value) == STRING_OK);
+    @assert(value.trim_indent() == STRING_OK);
     @assert(strcmp(value.c_str(), "alpha\n\n  beta") == 0);
     value.destroy();
 }
@@ -219,10 +224,8 @@ comptime import "stdlib:/strings/string.cp";
     @assert(value.init() == STRING_OK);
     @assert(value.assign(NULL) == STRING_ERROR_INVALID_ARGUMENT);
     @assert(value.append(NULL) == STRING_ERROR_INVALID_ARGUMENT);
-    @assert(value.strcpy(NULL) == STRING_ERROR_INVALID_ARGUMENT);
-    @assert(value.strncpy(NULL, 1) == STRING_ERROR_INVALID_ARGUMENT);
-    @assert(value.strcat(NULL) == STRING_ERROR_INVALID_ARGUMENT);
-    @assert(value.strncat(NULL, 1) == STRING_ERROR_INVALID_ARGUMENT);
+    @assert(value.assign_n(NULL, 1) == STRING_ERROR_INVALID_ARGUMENT);
+    @assert(value.append_n(NULL, 1) == STRING_ERROR_INVALID_ARGUMENT);
     value.destroy();
 }
 
@@ -247,7 +250,7 @@ comptime import "stdlib:/strings/string.cp";
     value.destroy();
 
     @assert(value.init() == STRING_OK);
-    @assert(value.strcpy("") == STRING_OK);
+    @assert(value.assign("") == STRING_OK);
     @assert(value.data != NULL);
     @assert(strcmp(value.c_str(), "") == 0);
     @assert(value.append("") == STRING_OK);
@@ -276,26 +279,26 @@ comptime import "stdlib:/strings/string.cp";
     value.destroy();
 }
 
-@test "string strcat facade supports self alias" {
+@test "string append supports self alias" {
     string value;
     @assert(value.init() == STRING_OK);
-    @assert(value.strcpy("xy") == STRING_OK);
-    @assert(value.strcat(value.c_str()) == STRING_OK);
+    @assert(value.assign("xy") == STRING_OK);
+    @assert(value.append(value.c_str()) == STRING_OK);
     @assert(strcmp(value.c_str(), "xyxy") == 0);
-    @assert(value.strncat(value.c_str() + 1, 2) == STRING_OK);
+    @assert(value.append_n(value.c_str() + 1, 2) == STRING_OK);
     @assert(strcmp(value.c_str(), "xyxyyx") == 0);
     value.destroy();
 }
 
-@test "string strxfrm supports own buffer as source" {
+@test "string collation transform supports own buffer as source" {
     string value;
     @assert(value.init() == STRING_OK);
     @assert(value.assign("transform-me") == STRING_OK);
-    @assert(value.strxfrm(value.c_str()) == STRING_OK);
+    @assert(value.transform_collation_key(value.c_str()) == STRING_OK);
     @assert(value.size() == strlen(value.c_str()));
     value.destroy();
 }
 
-@test "string static trim indent validates null" {
+@test "string trim indent validates null receiver" {
     @assert(string.trim_indent(NULL) == STRING_ERROR_INVALID_ARGUMENT);
 }
