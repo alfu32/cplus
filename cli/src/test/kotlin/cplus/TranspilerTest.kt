@@ -98,6 +98,15 @@ class TranspilerTest {
     }
 
     @Test
+    fun cliTestRunsTheStdioFacadeSuite() {
+        val sourcePath = findRepositoryFile("stdlib/tests/io.cp")
+        val errors = StringBuilder()
+        val status = CPlusCli(output = StringBuilder(), errors = errors).run(listOf("test", sourcePath.toString()))
+
+        assertEquals(0, status, errors.toString())
+    }
+
+    @Test
     fun cliTestImportsUnchangedCAndRunsRuntimeAssertions() {
         val sourcePath = findRepositoryFile("stdlib/tests/c_import.cp")
         val errors = StringBuilder()

@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254" role="img" aria-labelledby="title desc">
+  <title id="title">C+ programming language logo</title>
+  <desc id="desc">Glossy cyan-to-blue C with a rounded blue plus.</desc>
+
+  <defs>
+    <linearGradient id="cMain" x1="170" y1="150" x2="900" y2="1080" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#28e6f4"/>
+      <stop offset="0.28" stop-color="#23c9f3"/>
+      <stop offset="0.56" stop-color="#1688ef"/>
+      <stop offset="0.8" stop-color="#0b3fbd"/>
+      <stop offset="1" stop-color="#092476"/>
+    </linearGradient>
+
+    <linearGradient id="cHighlight" x1="250" y1="180" x2="710" y2="790" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#58edfa"/>
+      <stop offset="0.5" stop-color="#27cbed"/>
+      <stop offset="1" stop-color="#0d70db"/>
+    </linearGradient>
+
+    <linearGradient id="cShadow" x1="360" y1="650" x2="820" y2="1090" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#123fb2"/>
+      <stop offset="1" stop-color="#071b63"/>
+    </linearGradient>
+
+    <linearGradient id="plusMain" x1="770" y1="480" x2="1100" y2="840" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#29e8f1"/>
+      <stop offset="0.45" stop-color="#1aa7ef"/>
+      <stop offset="0.75" stop-color="#105be1"/>
+      <stop offset="1" stop-color="#0a2e9e"/>
+    </linearGradient>
+
+    <linearGradient id="plusHighlight" x1="800" y1="500" x2="980" y2="700" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#54eef6" stop-opacity=".95"/>
+      <stop offset="1" stop-color="#2abbe9" stop-opacity=".15"/>
+    </linearGradient>
+
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#00134f" flood-opacity=".35"/>
+    </filter>
+  </defs>
+
+  <!-- Main C -->
+  <path d="M 936 315
+           A 470 470 0 1 0 920 974"
+        fill="none"
+        stroke="url(#cMain)"
+        stroke-width="230"
+        stroke-linecap="round"
+        filter="url(#softShadow)"/>
+
+  <!-- Upper glossy sweep -->
+  <path d="M 922 316
+           A 470 470 0 0 0 187 678"
+        fill="none"
+        stroke="url(#cHighlight)"
+        stroke-width="150"
+        stroke-linecap="round"
+        opacity=".88"/>
+
+  <!-- Lower faceted/shadow sweep -->
+  <path d="M 185 690
+           A 470 470 0 0 0 882 994"
+        fill="none"
+        stroke="url(#cShadow)"
+        stroke-width="132"
+        stroke-linecap="round"
+        opacity=".94"/>
+
+  <!-- Inner dark accent -->
+  <path d="M 798 410
+           A 314 314 0 1 0 760 873"
+        fill="none"
+        stroke="#082875"
+        stroke-width="78"
+        stroke-linecap="round"
+        opacity=".78"/>
+
+  <!-- Plus -->
+  <g filter="url(#softShadow)">
+    <rect x="878" y="460" width="174" height="408" rx="64" fill="url(#plusMain)"/>
+    <rect x="744" y="590" width="438" height="172" rx="62" fill="url(#plusMain)"/>
+
+    <!-- subtle glossy highlight -->
+    <path d="M 907 482
+             Q 878 482 878 518
+             L 878 590
+             L 789 590
+             Q 757 590 757 623
+             L 757 667
+             Q 820 636 879 602
+             Q 940 566 1010 492
+             Q 982 482 907 482 Z"
+          fill="url(#plusHighlight)" opacity=".72"/>
+  </g>
+</svg>

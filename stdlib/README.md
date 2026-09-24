@@ -15,6 +15,7 @@ The CLI resolves the `stdlib:/` root from the bundled or installed library, `--s
 | Source | Provides |
 | --- | --- |
 | [`memory/xmem.cp`](memory/xmem.cp) | OS-backed scratch, hot, warm, and cold arenas |
+| [`io/file.cp`](io/file.cp) | Namespaced facade over the C `<stdio.h>` API |
 | [`strings/string.cp`](strings/string.cp) | Owning mutable string and string/memory helpers |
 | [`containers/dynamic_list.cp`](containers/dynamic_list.cp) | Generic contiguous resizable list |
 | [`containers/dynamic_map.cp`](containers/dynamic_map.cp) | Generic linear key/value table |
@@ -135,6 +136,12 @@ Errors: `STRING_OK`, `STRING_ERROR_INVALID_ARGUMENT`, `STRING_ERROR_ALLOCATION`,
 - Indentation: `indent(n)` adds spaces to each logical line; `dedent(n)` removes up to `n` leading spaces per line; `value.trim_indent()` removes the common indentation of nonblank lines. Negative counts are rejected; tabs are not indentation.
 
 See the [string API specification](../documentation/spec/stdlib/STRING.SPEC.md) for detailed behavior and complexity. Exercise the implementation with `cpc test stdlib/tests/string.cp`.
+
+## File I/O
+
+`io/file.cp` provides a thin static facade over `<stdio.h>`. Import it with `comptime import "stdlib:/io/file.cp";`, then use the C-style signatures through `file_t`: `file_t.fopen(path, mode)`, `file_t.fprintf(stream, format, ...)`, `file_t.fread(buffer, size, count, stream)`, and `file_t.fwrite(buffer, size, count, stream)`. It also exposes formatted input/output, character and line operations, stream positioning, buffering, status, and file removal/rename helpers. Variadic wrappers forward through the matching `v*` functions.
+
+This is deliberately a facade, not an owning stream abstraction: `FILE*` lifetime and buffer sizing remain the caller's responsibility. Close every successfully opened stream with `file_t.fclose`; pass valid buffers and format arguments as required by C. The unsafe/obsolete `gets` and `tmpnam` interfaces are omitted. See the [stdio facade specification](../documentation/spec/stdlib/IO.SPEC.md) and run `cpc test stdlib/tests/io.cp`.
 
 ## Examples and tests
 
