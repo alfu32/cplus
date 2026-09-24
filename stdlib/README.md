@@ -76,7 +76,7 @@ comptime import "stdlib:/containers/dynamic_list.cp";
 comptime typedef dynamic_list(int) int_list_t;
 ```
 
-Methods: `init`, `reserve`, `push`, `each`, `pop`, `get`, `set`, `clear`, `size`, `capacity`, `empty`, `data`, and `destroy`. `push`/`set` copy a supplied item; `get` returns a borrowed pointer or `NULL` when out of range. `each` calls `int callback(mut T* item, size_t index)` in index order and stops on a nonzero callback result. `clear` retains capacity; `destroy` releases storage. Capacity grows geometrically from four elements. A failed growth leaves existing elements intact.
+Methods: `init`, `reserve`, `push`, `each`, `orderByNumeric`, `orderByAlphaumeric`, `pop`, `get`, `set`, `clear`, `size`, `capacity`, `empty`, `data`, and `destroy`. `push`/`set` copy a supplied item; `get` returns a borrowed pointer or `NULL` when out of range. `each` calls `int callback(mut T* item, size_t index)` in index order and stops on a nonzero callback result. The two order methods use in-place heapsort and take an item-to-`int` key callback or an item-to-`const char*` key callback respectively. `clear` retains capacity; `destroy` releases storage. Capacity grows geometrically from four elements. A failed growth leaves existing elements intact.
 
 ### `dynamic_map(K, V)`
 
@@ -85,7 +85,32 @@ comptime import "stdlib:/containers/dynamic_map.cp";
 comptime typedef dynamic_map(char*, int) score_map_t;
 ```
 
-Methods: `init(keys_equal)`, `reserve`, `put`, `get`, `contains`, `remove`, `clear`, `size`, `capacity`, `empty`, and `destroy`. Supply `int keys_equal(const K*, const K*)`; keys and values are copied by value. `get` returns a pointer to the stored value or `NULL`; `put` replaces an equal key's value. Lookup and removal are O(n) because this initial implementation uses linear search. `clear` keeps allocated capacity; `destroy` also clears the equality callback.
+Methods: `init(keys_equal)`, `reserve`, `put`, `get`, `contains`, `remove`, `orderByNumeric`, `orderByAlphaumeric`, `clear`, `size`, `capacity`, `empty`, and `destroy`. Supply `int keys_equal(const K*, const K*)` for semantic key equality; passing `NULL` selects bytewise equality. Keys and values are copied by value. `get` returns a pointer to the stored value or `NULL`; `put` replaces an equal key's value. Lookup and removal are O(n); callback ordering is in-place heapsort. `clear` keeps allocated capacity; `destroy` also clears the equality callback.
+
+### Callback aggregation and set operations
+
+Import the list, map, and aggregate templates, then use `comptime/list_aggregate.cp` to generate operations with concrete C signatures. The result types that vary independently from the input element type are supplied explicitly:
+
+```c
+comptime import "stdlib:/containers/dynamic_list.cp";
+comptime import "stdlib:/containers/dynamic_map.cp";
+comptime import "stdlib:/comptime/list_aggregate.cp";
+
+comptime typedef dynamic_list(int) int_list_t;
+comptime typedef dynamic_map(int, int_list_t) int_groups_t;
+comptime typedef dynamic_map(int, int) int_map_t;
+comptime list_fold(int, int, int_list_t);
+comptime list_group_by(int, int, int_list_t, int_list_t, int_groups_t);
+comptime list_zip(int, int, int_list_t, int_list_t, int_map_t);
+comptime list_union(int, int_list_t);
+comptime list_intersect(int, int_list_t);
+comptime list_subtract(int, int_list_t);
+comptime list_subtract_right(int, int_list_t);
+```
+
+This emits `list_fold__int__with__int`, `list_group_by__int__by__int`, `list_zip__int__with__int`, and the four `list_*__int` set functions. `fold` calls `A callback(A accumulator, const T* item, size_t index)` in list order. `group_by` returns `dynamic_map(R, dynamic_list(T))`; destroy each nested list's items before destroying the outer map. `zip` pairs by index through the shorter list and later duplicate keys replace earlier values. The set operations return initialized list values on success (`initialized == 0` signals allocation/argument failure), deduplicate results, and compare each item's object bytes with `memcmp`; this is not deep equality and includes struct padding. `subtract` means left minus right; `subtract_right` means right minus left.
+
+All collection storage uses the warm allocator. Sorting is in place and allocates no scratch memory; generated result operations reserve geometrically through shared warm-memory helpers. The receiver methods are therefore a good fit for frequently reused lists/maps, while the generated value-returning functions are convenient for one-off transformations.
 
 ## Generic list mapper
 
