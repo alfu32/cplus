@@ -1,0 +1,355 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 128 128"
+   role="img"
+   aria-labelledby="title desc"
+   version="1.1"
+   id="svg93"
+   sodipodi:docname="c-plus-logo-v6.svg"
+   inkscape:version="1.2.2 (b0a8486541, 2022-12-01)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <sodipodi:namedview
+     id="namedview95"
+     pagecolor="#505050"
+     bordercolor="#eeeeee"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     showgrid="false"
+     inkscape:zoom="1.84375"
+     inkscape:cx="4.8813559"
+     inkscape:cy="88.40678"
+     inkscape:window-width="1880"
+     inkscape:window-height="1019"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg93" />
+  <title
+     id="title">C+ programming language logo</title>
+  <desc
+     id="desc">A gray-blue C paired with the larger bandage-shaped plus from version 4.</desc>
+  <defs
+     id="defs5">
+    <linearGradient
+       inkscape:collect="always"
+       id="linearGradient1055">
+      <stop
+         style="stop-color:#005db5;stop-opacity:1;"
+         offset="0"
+         id="stop1108" />
+      <stop
+         style="stop-color:#004f94;stop-opacity:1;"
+         offset="0.13372047"
+         id="stop1053" />
+      <stop
+         style="stop-color:#0088ff;stop-opacity:1;"
+         offset="0.51389414"
+         id="stop1110" />
+      <stop
+         style="stop-color:#2ca0ff;stop-opacity:1;"
+         offset="0.54409426"
+         id="stop1114" />
+      <stop
+         style="stop-color:#0088ff;stop-opacity:1;"
+         offset="0.57495648"
+         id="stop1116" />
+      <stop
+         style="stop-color:#0062b8;stop-opacity:1;"
+         offset="0.97852033"
+         id="stop1112" />
+    </linearGradient>
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient1055"
+       id="linearGradient1057"
+       x1="13.751144"
+       y1="116.63263"
+       x2="114.85487"
+       y2="11.770124"
+       gradientUnits="userSpaceOnUse" />
+  </defs>
+  <!-- Letter C supplied by user -->
+  <path
+     fill="#00958f"
+     d="M125 50c-4-32-24-50-62-50C29 0 3 24 3 64c0 39 24 64 64 64 32 0 55-19 58-50H87c-2 11-8 20-20 20-21 0-24-16-24-33 0-23 8-35 22-35 13 0 20 7 22 20z"
+     id="path7"
+     style="fill:url(#linearGradient1057);fill-opacity:1" />
+  <!-- Bandage plus from v4, scaled to this viewBox -->
+  <g
+     transform="matrix(0.13745274,0,0,0.13745274,98.284735,29.715266)"
+     id="g49">
+    <rect
+       x="-206"
+       y="-60"
+       width="412"
+       height="120"
+       rx="50"
+       fill="#e44300"
+       id="rect9"
+       style="fill:#00dbb3;fill-opacity:1" />
+    <rect
+       x="-60"
+       y="-206"
+       width="120"
+       height="412"
+       rx="50"
+       fill="#b74100"
+       id="rect11"
+       style="fill:#00dbb3;fill-opacity:1" />
+    <rect
+       x="-60"
+       y="-60"
+       width="120"
+       height="120"
+       rx="28"
+       fill="#8c2900"
+       opacity="0.48"
+       id="rect13"
+       style="fill:#009076;fill-opacity:1" />
+    <g
+       fill="#cb4100"
+       opacity="0.9"
+       id="g47"
+       transform="translate(0,4.7939444)">
+      <circle
+         cx="-160"
+         cy="-22"
+         r="6"
+         id="circle15"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="-112"
+         cy="-22"
+         r="6"
+         id="circle17"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="-160"
+         cy="12"
+         r="6"
+         id="circle19"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="-112"
+         cy="12"
+         r="6"
+         id="circle21"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="112"
+         cy="-22"
+         r="6"
+         id="circle23"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="160"
+         cy="-22"
+         r="6"
+         id="circle25"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="112"
+         cy="12"
+         r="6"
+         id="circle27"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="160"
+         cy="12"
+         r="6"
+         id="circle29"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="-18"
+         cy="-160"
+         r="6"
+         id="circle31"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="18"
+         cy="-160"
+         r="6"
+         id="circle33"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="-18"
+         cy="-112"
+         r="6"
+         id="circle35"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="18"
+         cy="-112"
+         r="6"
+         id="circle37"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="-18"
+         cy="112"
+         r="6"
+         id="circle39"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="18"
+         cy="112"
+         r="6"
+         id="circle41"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="-18"
+         cy="160"
+         r="6"
+         id="circle43"
+         style="fill:#00633a;fill-opacity:1" />
+      <circle
+         cx="18"
+         cy="160"
+         r="6"
+         id="circle45"
+         style="fill:#00633a;fill-opacity:1" />
+    </g>
+  </g>
+  <!-- Bandage plus -->
+  <g
+     transform="translate(22.067267,23.8)"
+     id="g91"
+     style="display:none">
+    <!-- horizontal strip -->
+    <rect
+       x="-23"
+       y="-8"
+       width="46"
+       height="16"
+       rx="8"
+       fill="#6b7cff"
+       id="rect51" />
+    <!-- vertical strip -->
+    <rect
+       x="-8"
+       y="-23"
+       width="16"
+       height="46"
+       rx="8"
+       fill="#4457d6"
+       id="rect53" />
+    <!-- central pad -->
+    <rect
+       x="-8.5"
+       y="-8.5"
+       width="17"
+       height="17"
+       rx="4.4000001"
+       fill="#2f3ea7"
+       opacity="0.45"
+       id="rect55" />
+    <!-- perforations -->
+    <g
+       fill="#2f3ea7"
+       opacity="0.95"
+       id="g89">
+      <!-- horizontal left -->
+      <circle
+         cx="-17"
+         cy="-3.2"
+         r="1.05"
+         id="circle57" />
+      <circle
+         cx="-11.5"
+         cy="-3.2"
+         r="1.05"
+         id="circle59" />
+      <circle
+         cx="-17"
+         cy="2.2"
+         r="1.05"
+         id="circle61" />
+      <circle
+         cx="-11.5"
+         cy="2.2"
+         r="1.05"
+         id="circle63" />
+      <!-- horizontal right -->
+      <circle
+         cx="11.5"
+         cy="-3.2"
+         r="1.05"
+         id="circle65" />
+      <circle
+         cx="17"
+         cy="-3.2"
+         r="1.05"
+         id="circle67" />
+      <circle
+         cx="11.5"
+         cy="2.2"
+         r="1.05"
+         id="circle69" />
+      <circle
+         cx="17"
+         cy="2.2"
+         r="1.05"
+         id="circle71" />
+      <!-- vertical top -->
+      <circle
+         cx="-3.2"
+         cy="-17"
+         r="1.05"
+         id="circle73" />
+      <circle
+         cx="2.2"
+         cy="-17"
+         r="1.05"
+         id="circle75" />
+      <circle
+         cx="-3.2"
+         cy="-11.5"
+         r="1.05"
+         id="circle77" />
+      <circle
+         cx="2.2"
+         cy="-11.5"
+         r="1.05"
+         id="circle79" />
+      <!-- vertical bottom -->
+      <circle
+         cx="-3.2"
+         cy="11.5"
+         r="1.05"
+         id="circle81" />
+      <circle
+         cx="2.2"
+         cy="11.5"
+         r="1.05"
+         id="circle83" />
+      <circle
+         cx="-3.2"
+         cy="17"
+         r="1.05"
+         id="circle85" />
+      <circle
+         cx="2.2"
+         cy="17"
+         r="1.05"
+         id="circle87" />
+    </g>
+  </g>
+  <metadata
+     id="metadata1122">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:title>C+ programming language logo</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+</svg>

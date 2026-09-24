@@ -9,6 +9,8 @@ With `-Ptarget` omitted, `bundleDist` creates a distribution without TinyCC bina
 ./gradlew -Prelease=0.3.3 -Ptarget=crossbuild bundleDist
 ```
 
+Each `bundleDist` run produces a ZIP distribution and an equivalent standalone executable JAR beside it: `dist/cplus-VERSION-TARGET.zip` and `dist/cplus-VERSION-TARGET.jar`. If ZIPs were built before sidecar JAR output was added, run `./gradlew -Prelease=VERSION bundleJars` to extract a matching JAR for each versioned ZIP already in `dist/`.
+
 Each host-specific bundle includes exactly its selected native TinyCC payload and matching sysroot when available; it is intended for native builds and does not carry other target sysroots. TinyCC does not include a macOS SDK. `-Ptarget=all` and `-Ptarget=crossbuild` both include all six host payloads plus the available Linux/Windows libc sysroots. The all-host bundle's root contains all three launchers (`cpc.sh`, `cpc.zsh`, `cpc.cmd`) and all three installer/uninstaller entry points (`install.sh`, `install.zsh`, `install.cmd`, `uninstall.sh`, `uninstall.zsh`, `uninstall.cmd`); platform copies are also under `install/`. Every bundle contains the CLI jar, C-plus standard library, language/compiler documentation, examples, launchers, and platform install scripts. Supported host target values match TinyCC's payload names: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, and `windows-aarch64`.
 
-The CI workflow tests the CLI, smoke-tests the Linux bundle and scaffolder, builds each of the six host combinations, and uploads a complete `crossbuild` bundle.
+The CI workflow tests the CLI, smoke-tests the Linux bundle and scaffolder, builds each of the six host combinations, and uploads both ZIP and standalone JAR artifacts for each target, including the complete `crossbuild` bundle.

@@ -14,6 +14,7 @@ dependencies {
     implementation(project(":compiler"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
+    testRuntimeOnly(files(rootProject.file("lib/tinycc-cli-cross.jar")))
 }
 
 kotlin {
@@ -62,6 +63,20 @@ val selectedTccTargets = when (tccTargetOption) {
     )
 }
 val tinyccCliJar = rootProject.file("lib/tinycc-cli.jar").canonicalFile
+val tinyccPayloadJars = when {
+    selectedTccTargets.isEmpty() -> emptyList()
+    selectedTccTargets.size == allTccTargets.size ->
+        listOf(rootProject.file("lib/tinycc-cli-cross.jar").canonicalFile)
+    else -> selectedTccTargets.sorted().map { target ->
+        rootProject.file("lib/tinycc-cli-$target.jar").canonicalFile
+    }
+}
+val missingTinyccPayloads = tinyccPayloadJars.filterNot { it.isFile }
+if (missingTinyccPayloads.isNotEmpty()) {
+    throw GradleException(
+        "Missing TinyCC payload JAR(s): ${missingTinyccPayloads.joinToString { it.relativeTo(rootProject.projectDir).path }}"
+    )
+}
 
 tasks.register<Jar>("fatJar") {
     group = "build"
@@ -71,6 +86,7 @@ tasks.register<Jar>("fatJar") {
     archiveClassifier.set("")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     inputs.property("tccTarget", tccTargetOption)
+    inputs.files(tinyccPayloadJars)
 
     dependsOn(tasks.named("classes"))
     from(sourceSets.main.get().output)
@@ -81,6 +97,10 @@ tasks.register<Jar>("fatJar") {
         if (file.isDirectory) file else zipTree(file)
     })
     from(zipTree(tinyccCliJar)) {
+        exclude("native/**")
+    }
+    from(tinyccPayloadJars.map { zipTree(it) }) {
+        include("native/**")
         exclude { details ->
             val path = details.path
             val target = path

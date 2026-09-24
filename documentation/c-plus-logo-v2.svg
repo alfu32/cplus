@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">C+ programming language logo</title>
+  <desc id="desc">A light teal C with a bandage-shaped plus shifted up and right and rotated five degrees counterclockwise.</desc>
+
+  <defs>
+    <linearGradient id="cGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#57d7e8"/>
+      <stop offset="48%" stop-color="#33b8d2"/>
+      <stop offset="100%" stop-color="#1785a8"/>
+    </linearGradient>
+
+    <linearGradient id="bandageGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffd6a2"/>
+      <stop offset="100%" stop-color="#e8ad69"/>
+    </linearGradient>
+
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000000" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <!-- C -->
+    <path
+      d="M 749 226
+         A 330 330 0 1 0 749 798"
+      fill="none"
+      stroke="url(#cGrad)"
+      stroke-width="162"
+      stroke-linecap="round"/>
+
+    <!-- bandage plus -->
+    <g transform="translate(724 414) rotate(-5)">
+      <!-- horizontal strip -->
+      <rect x="-154" y="-50" width="308" height="100" rx="50" fill="url(#bandageGrad)"/>
+      <!-- vertical strip -->
+      <rect x="-50" y="-154" width="100" height="308" rx="50" fill="url(#bandageGrad)"/>
+
+      <!-- central pad -->
+      <rect x="-52" y="-52" width="104" height="104" rx="28" fill="#d79b58" opacity="0.48"/>
+
+      <!-- perforations -->
+      <g fill="#b97a3d" opacity="0.9">
+        <!-- horizontal left -->
+        <circle cx="-116" cy="-22" r="6"/><circle cx="-82" cy="-22" r="6"/><circle cx="-116" cy="12" r="6"/><circle cx="-82" cy="12" r="6"/>
+        <!-- horizontal right -->
+        <circle cx="82" cy="-22" r="6"/><circle cx="116" cy="-22" r="6"/><circle cx="82" cy="12" r="6"/><circle cx="116" cy="12" r="6"/>
+        <!-- vertical top -->
+        <circle cx="-18" cy="-116" r="6"/><circle cx="18" cy="-116" r="6"/><circle cx="-18" cy="-82" r="6"/><circle cx="18" cy="-82" r="6"/>
+        <!-- vertical bottom -->
+        <circle cx="-18" cy="82" r="6"/><circle cx="18" cy="82" r="6"/><circle cx="-18" cy="116" r="6"/><circle cx="18" cy="116" r="6"/>
+      </g>
+    </g>
+  </g>
+</svg>

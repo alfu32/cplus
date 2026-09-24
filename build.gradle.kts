@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.Copy
 import org.gradle.api.tasks.Sync
 import org.gradle.api.tasks.bundling.Zip
 import java.time.LocalDate
@@ -173,6 +174,7 @@ val bundleNameSuffix = when {
 val bundleName = "cplus-$resolvedVersion-$bundleNameSuffix"
 val bundleStageDirectory = layout.buildDirectory.dir("distributions/$bundleName")
 val distributionDirectory = rootProject.file("distribution")
+val distDirectory = rootProject.file("dist")
 val bundleTargetList = bundledTccTargets.sorted()
 val bundleOs = when (bundledTccTargets.singleOrNull()?.substringBefore('-')) {
     "linux" -> "linux"
@@ -249,10 +251,49 @@ val stageBundleDist = tasks.register<Sync>("stageBundleDist") {
     }
 }
 
+val bundleJar = tasks.register<Copy>("bundleJar") {
+    group = "distribution"
+    description = "Copies the standalone C-plus JAR matching the selected -Ptarget bundle."
+    dependsOn(":cli:fatJar")
+    from(rootProject.file("cli/build/libs/c-plus.jar")) {
+        rename { "$bundleName.jar" }
+    }
+    into(distDirectory)
+}
+
+val bundleJars = tasks.register<Copy>("bundleJars") {
+    group = "distribution"
+    description = "Extracts standalone C-plus JARs from existing ZIP bundles for the selected release."
+    val versionBundleZips = rootProject.fileTree(distDirectory) {
+        include("cplus-$resolvedVersion-*.zip")
+    }.files.sorted()
+    inputs.files(versionBundleZips)
+    versionBundleZips.forEach { bundleZip ->
+        from(zipTree(bundleZip)) {
+            include("c-plus.jar")
+            rename { bundleZip.name.removeSuffix(".zip") + ".jar" }
+        }
+    }
+    into(distDirectory)
+    doFirst {
+        if (versionBundleZips.isEmpty()) {
+            throw GradleException("No dist/cplus-$resolvedVersion-*.zip bundles were found to extract.")
+        }
+        val missingCliJars = versionBundleZips.filter { bundleZip ->
+            zipTree(bundleZip).matching { include("c-plus.jar") }.isEmpty
+        }
+        if (missingCliJars.isNotEmpty()) {
+            throw GradleException(
+                "Bundle ZIP(s) do not contain c-plus.jar: ${missingCliJars.joinToString { it.name }}"
+            )
+        }
+    }
+}
+
 tasks.register<Zip>("bundleDist") {
     group = "distribution"
     description = "Builds a versioned C-plus distribution bundle for -Ptarget."
-    dependsOn(stageBundleDist)
+    dependsOn(stageBundleDist, bundleJar)
     from(bundleStageDirectory)
     eachFile {
         if (name in setOf("cpc.sh", "cpc.zsh", "install.sh", "install.zsh", "uninstall.sh", "uninstall.zsh")) {

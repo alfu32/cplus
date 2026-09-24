@@ -92,7 +92,8 @@ For local development, install a Java 21 JDK and use the Gradle wrapper:
 ./gradlew -Prelease=0.3.4 fatJar
 ./gradlew -Prelease=0.3.4 -Ptarget=linux-x86_64 bundleDist
 ./gradlew -Prelease=0.3.4 -Ptarget=crossbuild bundleDist
+./gradlew bundleJars
 ./gradlew -Prelease=0.3.4 editorArtifacts
 ```
 
-The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. With `-Ptarget` absent, the CLI jar and distribution omit TinyCC binaries and sysroots; `compile`, `run`, and `test` use `tcc` from `PATH` (or `TCC`). Use one host payload name (`linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, or `windows-aarch64`) for a native-only bundle. Use `-Ptarget=all` or `-Ptarget=crossbuild` to include all six host payloads and the available Linux/Windows libc sysroots. The older `-Pos` and `-Parch` properties are no longer supported.
+The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. `bundleDist` writes both `dist/cplus-VERSION-TARGET.zip` and a directly executable `dist/cplus-VERSION-TARGET.jar`; `bundleJars` extracts matching JARs from ZIPs already present for that version. With `-Ptarget` absent, the CLI JAR and distribution omit TinyCC binaries and sysroots; `compile`, `run`, and `test` use `tcc` from `PATH` (or `TCC`). Use one host payload name (`linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, or `windows-aarch64`) for a native-only bundle. Use `-Ptarget=all` or `-Ptarget=crossbuild` to include all six host payloads and the available Linux/Windows libc sysroots. The older `-Pos` and `-Parch` properties are no longer supported.

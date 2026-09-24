@@ -31,11 +31,15 @@ jobs:
           test -z "$native_targets"
           sysroot_targets="$(jar tf cli/build/libs/c-plus.jar | sed -n 's|^native/\([^/]*\)/tinycc/sysroot/.*|\1|p' | sort -u)"
           test -z "$sysroot_targets"
+          cmp <(unzip -p "dist/cplus-${RELEASE_VERSION}-none-none.zip" c-plus.jar) "dist/cplus-${RELEASE_VERSION}-none-none.jar"
+          java -jar "dist/cplus-${RELEASE_VERSION}-none-none.jar" help >/dev/null
           unzip -l "dist/cplus-${RELEASE_VERSION}-none-none.zip" | grep -F 'c-plus.jar'
       - uses: actions/upload-artifact@v4
         with:
           name: cplus-none-none
-          path: dist/cplus-${{ env.RELEASE_VERSION }}-none-none.zip
+          path: |
+            dist/cplus-${{ env.RELEASE_VERSION }}-none-none.zip
+            dist/cplus-${{ env.RELEASE_VERSION }}-none-none.jar
           if-no-files-found: error
           compression-level: 0
       - name: Build and smoke-test Linux x86_64 bundle
@@ -43,6 +47,8 @@ jobs:
           release="$RELEASE_VERSION"
           ./gradlew "-Prelease=$release" -Ptarget=linux-x86_64 bundleDist --no-daemon
           archive="dist/cplus-${release}-linux-x86_64.zip"
+          cmp <(unzip -p "$archive" c-plus.jar) "dist/cplus-${release}-linux-x86_64.jar"
+          java -jar "dist/cplus-${release}-linux-x86_64.jar" version
           mkdir -p build/bundle-smoke
           unzip -q "$archive" -d build/bundle-smoke
           cd build/bundle-smoke
@@ -85,10 +91,12 @@ jobs:
         shell: bash
         run: |
           target='${{ matrix.target }}'
-          targets="$(jar tf cli/build/libs/c-plus.jar | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
+          artifact="dist/cplus-${RELEASE_VERSION}-${{ matrix.bundle }}.jar"
+          cmp <(unzip -p "dist/cplus-${RELEASE_VERSION}-${{ matrix.bundle }}.zip" c-plus.jar) "$artifact"
+          targets="$(jar tf "$artifact" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
           test "$targets" = "$target"
           grep -Fx "$target" "build/distributions/cplus-${RELEASE_VERSION}-${{ matrix.bundle }}/TARGETS.txt"
-          sysroot_targets="$(jar tf cli/build/libs/c-plus.jar | sed -n 's|^native/\([^/]*\)/tinycc/sysroot/.*|\1|p' | sort -u)"
+          sysroot_targets="$(jar tf "$artifact" | sed -n 's|^native/\([^/]*\)/tinycc/sysroot/.*|\1|p' | sort -u)"
           if [[ "$target" == macos-* ]]; then
             test -z "$sysroot_targets"
           else
@@ -97,7 +105,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cplus-${{ matrix.bundle }}
-          path: dist/cplus-${{ env.RELEASE_VERSION }}-${{ matrix.bundle }}.zip
+          path: |
+            dist/cplus-${{ env.RELEASE_VERSION }}-${{ matrix.bundle }}.zip
+            dist/cplus-${{ env.RELEASE_VERSION }}-${{ matrix.bundle }}.jar
           if-no-files-found: error
           compression-level: 0
 
@@ -116,12 +126,14 @@ jobs:
         run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=crossbuild bundleDist --no-daemon
       - name: Verify all six host payloads, libc sysroots, and launchers
         run: |
-          native_targets="$(jar tf cli/build/libs/c-plus.jar | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
+          artifact="dist/cplus-${RELEASE_VERSION}-all-all.jar"
+          cmp <(unzip -p "dist/cplus-${RELEASE_VERSION}-all-all.zip" c-plus.jar) "$artifact"
+          native_targets="$(jar tf "$artifact" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
           for target in linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64 windows-aarch64; do
             grep -Fx "$target" "build/distributions/cplus-${RELEASE_VERSION}-all-all/TARGETS.txt"
             grep -Fx "$target" <<< "$native_targets"
           done
-          sysroot_targets="$(jar tf cli/build/libs/c-plus.jar | sed -n 's|^native/\([^/]*\)/tinycc/sysroot/.*|\1|p' | sort -u)"
+          sysroot_targets="$(jar tf "$artifact" | sed -n 's|^native/\([^/]*\)/tinycc/sysroot/.*|\1|p' | sort -u)"
           expected_sysroots="$(printf '%s\n' linux-aarch64 linux-x86_64 windows-aarch64 windows-x86_64)"
           test "$sysroot_targets" = "$expected_sysroots"
           for entry in cpc.sh cpc.zsh cpc.cmd install.sh install.zsh install.cmd uninstall.sh uninstall.zsh uninstall.cmd; do
@@ -130,7 +142,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cplus-all-all
-          path: dist/cplus-${{ env.RELEASE_VERSION }}-all-all.zip
+          path: |
+            dist/cplus-${{ env.RELEASE_VERSION }}-all-all.zip
+            dist/cplus-${{ env.RELEASE_VERSION }}-all-all.jar
           if-no-files-found: error
           compression-level: 0
 
