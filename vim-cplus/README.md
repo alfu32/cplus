@@ -4,7 +4,7 @@ This Vim runtime module detects `.cp` and `.c+` files, highlights C-plus syntax,
 
 The compiler-lowered `defer` statement has dedicated C-plus keyword highlighting and completion.
 
-It gives comptime keywords and the `self` receiver distinct highlighting, and recognizes `@test` blocks, identifier splices such as `mapper__@name(T)__to__@name(R)`, and C preprocessor directives. Completion includes simple `#define generated_name public_name` aliases. Vim does not evaluate comptime itself; use `:CPlusTranscode` to inspect the generated C. The alias remains an ordinary C preprocessor convention.
+It gives comptime directives and built-ins, `comptime flags`, the target value `os`, reflection properties, assertion/test macros, and the `self` receiver distinct highlighting. Completion includes C keywords, all C-plus annotations, comptime forms and built-ins, test helper macros, identifier splices such as `mapper__@name(T)__to__@name(R)`, and simple `#define generated_name public_name` aliases. Vim does not evaluate comptime itself; use `:CPlusTranscode` to inspect the generated C.
 
 Install by adding this directory to Vim's `runtimepath`, for example:
 

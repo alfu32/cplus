@@ -2,7 +2,7 @@
 
 This extension provides C-plus file detection for `.cp` and `.c+`, TextMate syntax highlighting, annotation and receiver-aware member completion, symbols, hover information, local delimiter diagnostics, definition/reference navigation, and optional compiler-backed diagnostics. Completion resolves `value.` and `pointer->` against declared struct values/pointers, and `type_t.` offers static methods.
 
-The highlighter gives comptime keywords and `self` dedicated scopes, and recognizes `@test` blocks and identifier splices such as `mapper__@name(T)__to__@name(R)`. Simple object-like `#define generated_name public_name` aliases are indexed as callable symbols for completion and navigation. These editor services do not evaluate comptime; use the CLI for the exact materialized C output. The C preprocessor alias is a normal C convention, not a C-plus alias directive.
+The highlighter gives comptime keywords, built-in comptime forms (`@if`, `@for`, `@assert`, and related forms), test helper macros, reflection properties, compiler flags, the `os` comptime value, and `self` dedicated scopes. Completion includes C keywords, all C-plus annotations, comptime forms and built-in test helpers. Identifier splices such as `mapper__@name(T)__to__@name(R)` are recognized. These editor services do not evaluate comptime; use the CLI for the exact materialized C output.
 
 The compiler-lowered `defer` statement is highlighted and offered as a C-plus keyword completion.
 

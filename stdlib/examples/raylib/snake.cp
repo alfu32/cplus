@@ -106,7 +106,7 @@ typedef struct snake_app_t {
         self->segments[2] = (snake_grid_pos_t){SNAKE_BOARD_WIDTH / 2 - 2, SNAKE_BOARD_HEIGHT / 2};
         self->segments[3] = (snake_grid_pos_t){SNAKE_BOARD_WIDTH / 2 - 3, SNAKE_BOARD_HEIGHT / 2};
         self->direction = self->next_direction = SNAKE_RIGHT;
-        self->step_interval = 0.12f;
+        self->step_interval = 0.24f;
         self->random_state = seed;
         snake_app_t.spawn_food(self);
     }

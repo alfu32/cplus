@@ -34,11 +34,16 @@
     },
     "comptime": {
       "patterns": [
-        {"name": "keyword.control.comptime.cplus", "match": "\\b(comptime|type|variable|function|import|code|test|var|fn|defer)\\b"},
-        {"name": "keyword.control.comptime.cplus", "match": "@(import|if|else|for|type|var|fn|test)\\b"},
+        {"name": "meta.directive.comptime-flags.cplus", "match": "\\bcomptime\\s+flags\\b"},
+        {"name": "keyword.control.comptime.cplus", "match": "\\b(comptime|type|variable|function|import|code|test|var|fn|defer|string)\\b"},
+        {"name": "keyword.control.comptime.cplus", "match": "@(?=\\s*\\{)"},
+        {"name": "keyword.control.comptime.cplus", "match": "@(import|if|else|for|type|var|fn|code|test)\\b"},
+        {"name": "support.function.builtin.cplus", "match": "@(assertEquals|assert)\\b"},
+        {"name": "support.function.builtin.cplus", "match": "\\b(CPLUS_TEST_ASSERT_EQUALS|CPLUS_TEST_ASSERT|CPLUS_TEST_FAIL)\\b"},
         {"name": "entity.name.function.comptime.splice.cplus", "match": "@[A-Za-z_]\\w*(?=\\s*\\([^()]*\\)(?:[A-Za-z_]|\\())"},
         {"name": "entity.name.function.comptime.cplus", "match": "@[A-Za-z_]\\w*"},
-        {"name": "variable.other.comptime.cplus", "match": "\\b[A-Za-z_]\\w*(?=\\.(name|size|align|fields)\\b)"}
+        {"name": "variable.language.comptime.cplus", "match": "\\bos\\b"},
+        {"name": "variable.other.comptime.property.cplus", "match": "\\.(name|size|align|fields|type)\\b"}
       ]
     },
     "special-identifiers": {
@@ -53,9 +58,9 @@
     },
     "keywords": {
       "patterns": [
-        {"name": "keyword.control.c", "match": "\\b(if|else|for|while|do|switch|case|default|return|break|continue|goto)\\b"},
-        {"name": "storage.type.c", "match": "\\b(typedef|struct|enum|union|const|volatile|restrict|signed|unsigned|short|long|void|char|int|float|double|size_t)\\b"},
-        {"name": "keyword.control.comptime.cplus", "match": "\\b(variable|function)\\b"}
+        {"name": "keyword.control.c", "match": "\\b(auto|break|case|continue|default|do|else|for|goto|if|return|sizeof|switch|while)\\b"},
+        {"name": "storage.type.c", "match": "\\b(char|const|double|enum|extern|float|inline|int|long|register|restrict|short|signed|static|struct|typedef|union|unsigned|void|volatile)\\b"},
+        {"name": "storage.type.c", "match": "\\b(_Alignas|_Alignof|_Atomic|_Bool|_Complex|_Generic|_Imaginary|_Noreturn|_Static_assert|_Thread_local|bool|size_t|ptrdiff_t|wchar_t|char16_t|char32_t)\\b"}
       ]
     },
     "functions": {

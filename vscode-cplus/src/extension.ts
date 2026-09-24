@@ -4,11 +4,18 @@ import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CPlusSymbol, indexText, memberContext } from "./index";
-
-const annotations = ["pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"];
-const comptimeKeywords = ["import", "if", "else", "for", "type", "var", "fn", "test"];
-const comptimeResultKinds = ["type", "variable", "function", "code", "string", "int", "float", "void"];
-const cKeywords = ["typedef", "struct", "enum", "union", "const", "volatile", "restrict", "return", "if", "else", "for", "while", "switch", "case", "default", "break", "continue", "static", "comptime", "defer"];
+import {
+    builtinTestMacros,
+    cKeywords,
+    cplusAnnotations,
+    cplusKeywords,
+    cTypes,
+    comptimeAtForms,
+    comptimeForms,
+    comptimeProperties,
+    comptimeResultKinds,
+    comptimeValues
+} from "./builtins";
 
 function symbolKind(kind: CPlusSymbol["kind"]): vscode.SymbolKind {
     switch (kind) {
@@ -67,27 +74,49 @@ class CPlusCompletionProvider implements vscode.CompletionItemProvider {
             return new vscode.CompletionList(items, false);
         }
 
+        const reflectionReceiver = /\b([A-Za-z_]\w*)\.\w*$/.exec(line)?.[1];
+        if (reflectionReceiver && new RegExp("(?:^|\\W)@?type\\s+" + reflectionReceiver + "\\b").test(document.getText())) {
+            for (const property of comptimeProperties) {
+                addItem(property, vscode.CompletionItemKind.Property, "C-plus comptime reflection property");
+            }
+            return new vscode.CompletionList(items, false);
+        }
+
         if (/\bcomptime\s+[A-Za-z_]*$/.test(line)) {
-            for (const kind of comptimeResultKinds) {
-                addItem(kind, vscode.CompletionItemKind.Keyword, "C-plus comptime result kind");
+            for (const kind of [...comptimeResultKinds, ...comptimeForms]) {
+                addItem(kind, vscode.CompletionItemKind.Keyword, "C-plus comptime form");
             }
             return new vscode.CompletionList(items, false);
         }
 
         const atContext = /@[A-Za-z_]*$/.test(line);
         if (atContext) {
-            for (const keyword of comptimeKeywords) {
-                addItem("@" + keyword, vscode.CompletionItemKind.Keyword, "C-plus comptime form", keyword);
+            for (const form of comptimeAtForms) {
+                addItem(form, vscode.CompletionItemKind.Keyword, "C-plus comptime built-in", form.slice(1));
             }
             for (const symbol of index.symbols.filter((candidate) => candidate.kind === "comptime")) {
                 addItem(symbol.name, vscode.CompletionItemKind.Constant, symbol.detail, symbol.name.slice(1));
             }
         } else {
-            for (const annotation of annotations) {
+            for (const annotation of cplusAnnotations) {
                 addItem(annotation, vscode.CompletionItemKind.Keyword, "C-plus annotation");
+            }
+            for (const keyword of cplusKeywords) {
+                addItem(keyword, vscode.CompletionItemKind.Keyword, "C-plus keyword");
             }
             for (const keyword of cKeywords) {
                 addItem(keyword, vscode.CompletionItemKind.Keyword, "C keyword");
+            }
+            for (const type of cTypes) {
+                addItem(type, vscode.CompletionItemKind.Class, "C/C-plus built-in type");
+            }
+            for (const macro of builtinTestMacros) {
+                addItem(macro, vscode.CompletionItemKind.Function, "C-plus test helper macro");
+            }
+            if (/(?:@if|@else\s+if)\s*\([^)]*$/.test(line)) {
+                for (const value of comptimeValues) {
+                    addItem(value, vscode.CompletionItemKind.Constant, "C-plus comptime target value");
+                }
             }
             for (const symbol of index.symbols) {
                 if (symbol.kind === "field" || symbol.kind === "comptime") continue;
@@ -114,7 +143,7 @@ class CPlusHoverProvider implements vscode.HoverProvider {
         if (word === "cold") {
             return new vscode.Hover("cold: infrequently accessed or large memory; use alloc_cold() and free_cold()");
         }
-        if (annotations.includes(word)) {
+        if (cplusAnnotations.includes(word)) {
             return new vscode.Hover(word + ": optional C-plus source annotation; retained as an empty C macro");
         }
         const index = indexText(document.getText());

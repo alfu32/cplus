@@ -357,7 +357,7 @@ val packageIntellij = tasks.register<Exec>("packageIntellij") {
     group = "build"
     description = "Packages the IntelliJ plugin."
     workingDir(rootProject.projectDir)
-    commandLine("./gradlew", "-p", "intellij-cplus", "buildPlugin", "-Prelease=$version")
+    commandLine("./gradlew", "-p", "intellij-cplus", "test", "buildPlugin", "-Prelease=$version")
 }
 
 tasks.register("editorArtifacts") {

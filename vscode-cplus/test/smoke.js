@@ -1,6 +1,33 @@
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
 const { indexText, memberContext } = require("../out/index.js");
+const builtins = require("../out/builtins.js");
 const { resolveVersion } = require("../scripts/package.js");
+
+for (const value of ["pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"]) {
+  assert.ok(builtins.cplusAnnotations.includes(value), `missing annotation completion: ${value}`);
+}
+for (const value of ["@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@code", "@test", "@assert", "@assertEquals"]) {
+  assert.ok(builtins.comptimeAtForms.includes(value), `missing comptime completion: ${value}`);
+}
+for (const value of ["comptime", "defer", "type", "variable", "function", "code", "test", "var", "fn", "flags"]) {
+  assert.ok(builtins.cplusKeywords.includes(value), `missing C-plus keyword completion: ${value}`);
+}
+for (const value of ["flags", "os"]) {
+  assert.ok(builtins.comptimeForms.includes(value) || builtins.comptimeValues.includes(value), `missing comptime builtin: ${value}`);
+}
+for (const value of ["name", "size", "align", "fields", "type"]) {
+  assert.ok(builtins.comptimeProperties.includes(value), `missing comptime reflection property: ${value}`);
+}
+for (const value of ["CPLUS_TEST_ASSERT", "CPLUS_TEST_ASSERT_EQUALS", "CPLUS_TEST_FAIL"]) {
+  assert.ok(builtins.builtinTestMacros.includes(value), `missing test macro completion: ${value}`);
+}
+
+const grammar = JSON.parse(readFileSync("syntaxes/cplus.tmLanguage.json", "utf8"));
+const grammarText = JSON.stringify(grammar);
+for (const value of ["assertEquals", "CPLUS_TEST_ASSERT_EQUALS", "comptime\\\\s+flags", "variable.language.comptime.cplus", "comptime.property.cplus"]) {
+  assert.ok(grammarText.includes(value), `missing syntax scope/pattern: ${value}`);
+}
 
 assert.equal(resolveVersion({ CPLUS_RELEASE_VERSION: "2.3.4" }), "2.3.4");
 assert.equal(resolveVersion({ CPLUS_RELEASE_VERSION: "  " }), resolveVersion({}));

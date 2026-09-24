@@ -15,6 +15,10 @@ class CPlusSyntaxHighlighter : SyntaxHighlighterBase() {
     override fun getTokenHighlights(tokenType: IElementType): Array<TextAttributesKey> = when (tokenType) {
         CPlusTokenTypes.ANNOTATION -> pack(ANNOTATION)
         CPlusTokenTypes.COMPTIME_KEYWORD -> pack(COMPTIME_KEYWORD)
+        CPlusTokenTypes.COMPTIME_BUILTIN -> pack(COMPTIME_BUILTIN)
+        CPlusTokenTypes.BUILTIN_MACRO -> pack(BUILTIN_MACRO)
+        CPlusTokenTypes.COMPTIME_VALUE -> pack(COMPTIME_VALUE)
+        CPlusTokenTypes.COMPTIME_PROPERTY -> pack(COMPTIME_PROPERTY)
         CPlusTokenTypes.COMMENT -> pack(DefaultLanguageHighlighterColors.LINE_COMMENT)
         CPlusTokenTypes.PREPROCESSOR -> pack(DefaultLanguageHighlighterColors.METADATA)
         CPlusTokenTypes.KEYWORD -> pack(DefaultLanguageHighlighterColors.KEYWORD)
@@ -32,6 +36,18 @@ class CPlusSyntaxHighlighter : SyntaxHighlighterBase() {
         )
         private val COMPTIME_KEYWORD = TextAttributesKey.createTextAttributesKey(
             "CPLUS_COMPTIME_KEYWORD", DefaultLanguageHighlighterColors.KEYWORD
+        )
+        private val COMPTIME_BUILTIN = TextAttributesKey.createTextAttributesKey(
+            "CPLUS_COMPTIME_BUILTIN", DefaultLanguageHighlighterColors.KEYWORD
+        )
+        private val BUILTIN_MACRO = TextAttributesKey.createTextAttributesKey(
+            "CPLUS_BUILTIN_MACRO", DefaultLanguageHighlighterColors.METADATA
+        )
+        private val COMPTIME_VALUE = TextAttributesKey.createTextAttributesKey(
+            "CPLUS_COMPTIME_VALUE", DefaultLanguageHighlighterColors.CONSTANT
+        )
+        private val COMPTIME_PROPERTY = TextAttributesKey.createTextAttributesKey(
+            "CPLUS_COMPTIME_PROPERTY", DefaultLanguageHighlighterColors.INSTANCE_FIELD
         )
     }
 }

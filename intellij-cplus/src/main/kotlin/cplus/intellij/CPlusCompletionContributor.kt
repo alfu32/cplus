@@ -30,23 +30,37 @@ class CPlusCompletionContributor : CompletionContributor() {
                     return
                 }
 
+                val reflectionReceiver = Regex("\\b([A-Za-z_]\\w*)\\.\\w*$").find(prefix)?.groupValues?.get(1)
+                if (reflectionReceiver != null && Regex("(?:^|\\W)@?type\\s+${Regex.escape(reflectionReceiver)}\\b").containsMatchIn(text)) {
+                    comptimeProperties.forEach {
+                        result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus comptime reflection property"))
+                    }
+                    return
+                }
+
                 if (prefix.matches(Regex("(?s).*\\bcomptime\\s+[A-Za-z_]*$"))) {
-                    listOf("type", "variable", "function", "code", "import", "string", "int", "float", "void").forEach {
+                    (comptimeForms + comptimeResultKinds).forEach {
                         result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus comptime form"))
                     }
                     return
                 }
 
                 if (prefix.matches(Regex("(?s).*@[A-Za-z_]*$"))) {
-                    listOf("@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@test").forEach {
+                    comptimeAtBuiltins.forEach {
                         result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus comptime"))
                     }
                     Regex("@([A-Za-z_]\\w*)").findAll(text).map { it.groupValues[1] }.distinct().forEach {
                         result.addElement(LookupElementBuilder.create("@$it").withTypeText("comptime symbol"))
                     }
                 } else {
-                    result.addElement(LookupElementBuilder.create("defer").withTypeText("C-plus deferred statement"))
-                    annotations.forEach { result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus annotation")) }
+                    cplusKeywords.forEach { result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus keyword")) }
+                    cKeywords.forEach { result.addElement(LookupElementBuilder.create(it).withTypeText("C keyword")) }
+                    cplusAnnotations.forEach { result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus annotation")) }
+                    cTypes.forEach { result.addElement(LookupElementBuilder.create(it).withTypeText("C/C-plus type")) }
+                    builtinTestMacros.forEach { result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus test helper macro")) }
+                    if (Regex("(?s).*(?:@if|@else\\s+if)\\s*\\([^)]*$").matches(prefix)) {
+                        result.addElement(LookupElementBuilder.create("os").withTypeText("C-plus comptime target value"))
+                    }
                     Regex("\\b[A-Za-z_]\\w*_t\\b").findAll(text).map { it.value }.distinct().forEach {
                         result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus type"))
                     }
@@ -90,7 +104,7 @@ class CPlusCompletionContributor : CompletionContributor() {
         return Regex("\\b([A-Za-z_]\\w*)\\s*(?:\\[[^]]*])?\\s*;")
             .findAll(body)
             .map { it.groupValues[1] }
-            .filterNot { it in annotations }
+            .filterNot { it in cplusAnnotations }
             .distinct()
             .toList()
     }
@@ -111,8 +125,28 @@ class CPlusCompletionContributor : CompletionContributor() {
             .find(text)?.groupValues?.get(1)
 
     companion object {
-        private val annotations = listOf(
+        private val cplusAnnotations = listOf(
             "pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"
+        )
+        private val cplusKeywords = listOf(
+            "comptime", "defer", "import", "type", "variable", "function", "code", "test", "var", "fn", "flags"
+        )
+        private val comptimeForms = listOf("import", "flags")
+        private val comptimeResultKinds = listOf("type", "variable", "function", "code", "string", "int", "float", "void")
+        private val comptimeAtBuiltins = listOf(
+            "@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@code", "@test",
+            "@assert", "@assertEquals"
+        )
+        private val comptimeProperties = listOf("name", "size", "align", "fields", "type")
+        private val builtinTestMacros = listOf("CPLUS_TEST_ASSERT", "CPLUS_TEST_ASSERT_EQUALS", "CPLUS_TEST_FAIL")
+        private val cTypes = listOf("bool", "size_t", "ptrdiff_t", "wchar_t", "char16_t", "char32_t")
+        private val cKeywords = listOf(
+            "auto", "break", "case", "char", "const", "continue", "default", "do", "double",
+            "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long",
+            "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct",
+            "switch", "typedef", "union", "unsigned", "void", "volatile", "while",
+            "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic", "_Imaginary",
+            "_Noreturn", "_Static_assert", "_Thread_local"
         )
         private val controlKeywords = setOf("if", "for", "while", "switch")
     }

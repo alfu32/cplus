@@ -16,6 +16,14 @@ function! cpluscomplete#Complete(findstart, base) abort
   let seen = {}
   let AddCandidate = {word, menu, kind -> s:Add(candidates, seen, word, menu, kind)}
 
+  let reflection = matchlist(line, '\<\([A-Za-z_][A-Za-z0-9_]*\)\.\w*$')
+  if !empty(reflection) && s:IsComptimeTypeName(reflection[1])
+    for property in ['name', 'size', 'align', 'fields', 'type']
+      call AddCandidate(property, '[C-plus comptime reflection property]', 'v')
+    endfor
+    return s:Filter(candidates, a:base)
+  endif
+
   if line =~# '\%(\.\|->\)\s*\w*$'
     for field in s:Fields()
       call AddCandidate(field, '[C-plus field]', 'f')
@@ -27,24 +35,38 @@ function! cpluscomplete#Complete(findstart, base) abort
   endif
 
   if line =~# '\<comptime\s\+[A-Za-z_]*$'
-    for kind in ['type', 'variable', 'function', 'code', 'import', 'string', 'int', 'float', 'void']
+    for kind in ['type', 'variable', 'function', 'code', 'import', 'flags', 'string', 'int', 'float', 'void']
       call AddCandidate(kind, '[C-plus comptime result/form]', 'k')
     endfor
     return s:Filter(candidates, a:base)
   endif
 
   if line =~# '@\a\w*$'
-    for keyword in ['@import', '@if', '@else', '@for', '@type', '@var', '@fn']
+    for keyword in ['@import', '@if', '@else', '@for', '@type', '@var', '@fn', '@code', '@test', '@assert', '@assertEquals']
       call AddCandidate(keyword, '[C-plus comptime]', 'k')
     endfor
     for symbol in s:ComptimeSymbols()
       call AddCandidate(symbol, '[C-plus comptime]', 'v')
     endfor
   else
-    call AddCandidate('defer', '[C-plus deferred statement]', 'k')
+    for keyword in ['comptime', 'defer', 'import', 'type', 'variable', 'function', 'code', 'test', 'var', 'fn', 'flags']
+      call AddCandidate(keyword, '[C-plus keyword]', 'k')
+    endfor
+    for keyword in ['auto', 'break', 'case', 'char', 'const', 'continue', 'default', 'do', 'double', 'else', 'enum', 'extern', 'float', 'for', 'goto', 'if', 'inline', 'int', 'long', 'register', 'restrict', 'return', 'short', 'signed', 'sizeof', 'static', 'struct', 'switch', 'typedef', 'union', 'unsigned', 'void', 'volatile', 'while', '_Alignas', '_Alignof', '_Atomic', '_Bool', '_Complex', '_Generic', '_Imaginary', '_Noreturn', '_Static_assert', '_Thread_local']
+      call AddCandidate(keyword, '[C keyword]', 'k')
+    endfor
     for annotation in ['pub', 'priv', 'mut', 'borrowed', 'owned', 'stat', 'scratch', 'hot', 'warm', 'cold']
       call AddCandidate(annotation, '[C-plus annotation]', 'k')
     endfor
+    for type_name in ['bool', 'size_t', 'ptrdiff_t', 'wchar_t', 'char16_t', 'char32_t']
+      call AddCandidate(type_name, '[C/C-plus built-in type]', 't')
+    endfor
+    for macro in ['CPLUS_TEST_ASSERT', 'CPLUS_TEST_ASSERT_EQUALS', 'CPLUS_TEST_FAIL']
+      call AddCandidate(macro, '[C-plus test helper macro]', 'f')
+    endfor
+    if line =~# '\%(@if\|@else\s\+if\)\s*(.*$'
+      call AddCandidate('os', '[C-plus comptime target value]', 'v')
+    endif
     for type_name in s:Types()
       call AddCandidate(type_name, '[C-plus type]', 't')
     endfor
@@ -56,6 +78,16 @@ function! cpluscomplete#Complete(findstart, base) abort
     endfor
   endif
   return s:Filter(candidates, a:base)
+endfunction
+
+function! s:IsComptimeTypeName(name) abort
+  let pattern = '\%(@\)\?type\s\+' . escape(a:name, '\') . '\>'
+  for source_line in getline(1, '$')
+    if source_line =~# pattern
+      return 1
+    endif
+  endfor
+  return 0
 endfunction
 
 function! s:Add(result, seen, word, menu, kind) abort
@@ -128,7 +160,7 @@ function! s:ComptimeSymbols() abort
       if empty(match[0])
         break
       endif
-      if index(['@import', '@if', '@else', '@for', '@type', '@var', '@fn'], match[0]) < 0
+      if index(['@import', '@if', '@else', '@for', '@type', '@var', '@fn', '@code', '@test', '@assert', '@assertEquals'], match[0]) < 0
         call add(result, match[0])
       endif
       let start = match[2]
