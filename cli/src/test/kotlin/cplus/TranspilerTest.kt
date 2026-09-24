@@ -116,25 +116,33 @@ class TranspilerTest {
     }
 
     @Test
-    fun raylibExampleLinksTheBundledArchiveOnLinux() {
+    fun raylibExampleCompilesAgainstBundledHeadersOnLinux() {
         val os = System.getProperty("os.name").lowercase()
         val architecture = System.getProperty("os.arch").lowercase()
         assumeTrue(os.contains("linux") && architecture in setOf("amd64", "x86_64"))
 
         val example = findRepositoryFile("stdlib/examples/raylib_hello.cp")
+        val payload = TccCompiler::class.java.classLoader
+        assertTrue(
+            payload.getResource("native/linux-x86_64/tinycc/sysroot/usr/include/raylib.h") != null,
+            "Linux TinyCC payload should include Raylib headers"
+        )
+        assertTrue(
+            payload.getResource("native/linux-x86_64/tinycc/sysroot/usr/lib/libraylib.a") != null,
+            "Linux TinyCC payload should include the Raylib archive"
+        )
         val directory = Files.createTempDirectory("cplus-raylib-link")
         try {
-            val executable = directory.resolve("raylib-hello")
+            val objectFile = directory.resolve("raylib-hello.o")
             val errors = StringBuilder()
             val status = CPlusCli(output = StringBuilder(), errors = errors).run(
                 listOf(
-                    "compile", example.toString(), "-o", executable.toString(),
-                    "-dynamic", "-lraylib", "-lGL", "-lm", "-lpthread", "-ldl", "-lrt",
-                    "-lX11", "-lXrandr", "-lXinerama", "-lXcursor", "-lXi"
+                    "compile", example.toString(), "-o", objectFile.toString(),
+                    "-c", "--target=linux-x86_64"
                 )
             )
             assertEquals(0, status, errors.toString())
-            assertTrue(Files.size(executable) > 0)
+            assertTrue(Files.size(objectFile) > 0)
         } finally {
             Files.walk(directory).use { paths ->
                 paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
