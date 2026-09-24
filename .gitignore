@@ -2,7 +2,6 @@
 /.gradle/
 *.class
 *.jar
-!lib/*.jar
 !gradle/wrapper/gradle-wrapper.jar
 
 .kode/

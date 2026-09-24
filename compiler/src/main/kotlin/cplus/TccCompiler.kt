@@ -40,7 +40,9 @@ class TccCompiler {
         if (!hasEmbeddedRuntimeForCurrentPlatform()) {
             return@pass compileWithExternalTcc(source, output, options)
         }
-        if (options.any { it == "--target" || it.startsWith("--target=") }) {
+        if (options.any { it == "--target" || it.startsWith("--target=") || it == "-lraylib" } ||
+            options.zipWithNext().any { (option, value) -> option == "-l" && value == "raylib" }
+        ) {
             return@pass compileWithEmbeddedTccCli(source, output, options)
         }
 
@@ -72,13 +74,25 @@ class TccCompiler {
     ): TccCompilationResult {
         val outputPath = output.toAbsolutePath().normalize()
         val sourceFile = Files.createTempFile(outputPath.parent, "cplus-", ".c")
+        var packagedRaylibDirectory: Path? = null
         try {
             Files.writeString(sourceFile, source.code)
+            val raylibTarget = targetOption(options) ?: hostTarget()
+            val effectiveOptions = if (hasCustomSysroot(options)) {
+                options
+            } else {
+                materializeBundledRaylib(options, raylibTarget, source.code)?.let { (rewritten, directory) ->
+                    packagedRaylibDirectory = directory
+                    rewritten
+                } ?: options
+            }
+            val (compileOptions, linkOptions) = splitLinkOptions(effectiveOptions)
             val arguments = buildList {
-                addAll(options)
+                addAll(compileOptions)
                 add("-o")
                 add(outputPath.toString())
                 add(sourceFile.toString())
+                addAll(linkOptions)
             }
             val exitCode = TinyCC.executeTcc(*arguments.toTypedArray())
             val outputExists = Files.isRegularFile(outputPath) && Files.size(outputPath) > 0
@@ -101,7 +115,121 @@ class TccCompiler {
             return TccCompilationResult(0, emptyList())
         } finally {
             Files.deleteIfExists(sourceFile)
+            packagedRaylibDirectory?.let(::deleteTree)
         }
+    }
+
+    private fun materializeBundledRaylib(
+        options: List<String>,
+        target: String?,
+        sourceCode: String
+    ): Pair<List<String>, Path>? {
+        val raylibInclude = Regex("""#\s*include\s*[<"](?:raylib|raymath|rlgl)\.h[>"]""")
+        val linksRaylib = options.any { it == "-lraylib" } ||
+            options.zipWithNext().any { (option, value) -> option == "-l" && value == "raylib" }
+        if (target == null || (!linksRaylib && !raylibInclude.containsMatchIn(sourceCode))) return null
+        val (includeRoot, libraryResource) = when {
+            target.startsWith("linux-") ->
+                "native/$target/tinycc/sysroot/usr/include" to "native/$target/tinycc/sysroot/usr/lib/libraylib.a"
+            target.startsWith("windows-") ->
+                "native/$target/tinycc/sysroot/include" to "native/$target/tinycc/sysroot/lib/libraylib.a"
+            target.startsWith("macos-") ->
+                "native/$target/tinycc/lib/tcc/include" to "native/$target/tinycc/lib/tcc/lib/libraylib.a"
+            else -> return null
+        }
+        val classLoader = TccCompiler::class.java.classLoader
+        val headerNames = listOf("raylib.h", "raymath.h", "rlgl.h")
+        if (headerNames.none { classLoader.getResource("$includeRoot/$it") != null }) return null
+
+        val directory = Files.createTempDirectory("cplus-raylib-")
+        try {
+            val includeDirectory = Files.createDirectories(directory.resolve("include"))
+            headerNames.forEach { name ->
+                classLoader.getResourceAsStream("$includeRoot/$name")?.use { stream ->
+                    Files.copy(stream, includeDirectory.resolve(name))
+                }
+            }
+
+            val rewritten = mutableListOf<String>()
+            rewritten += "-I${includeDirectory.toAbsolutePath()}"
+            val archive = classLoader.getResourceAsStream(libraryResource)?.use { stream ->
+                directory.resolve("libraylib.a").also { Files.copy(stream, it) }
+            }
+            var index = 0
+            while (index < options.size) {
+                when {
+                    archive != null && options[index] == "-lraylib" -> {
+                        rewritten += archive.toAbsolutePath().toString()
+                        index++
+                    }
+                    archive != null && options[index] == "-l" && options.getOrNull(index + 1) == "raylib" -> {
+                        rewritten += archive.toAbsolutePath().toString()
+                        index += 2
+                    }
+                    else -> rewritten += options[index++]
+                }
+            }
+            return rewritten to directory
+        } catch (error: Throwable) {
+            deleteTree(directory)
+            throw error
+        }
+    }
+
+    private fun hasCustomSysroot(options: List<String>): Boolean =
+        options.any { it == "--sysroot" || it.startsWith("--sysroot=") }
+
+    private fun deleteTree(directory: Path) {
+        if (!Files.exists(directory)) return
+        Files.walk(directory).use { paths ->
+            paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    private fun hostTarget(): String? {
+        val os = System.getProperty("os.name").lowercase()
+        val nativeOs = when {
+            "win" in os -> "windows"
+            "mac" in os || "darwin" in os -> "macos"
+            "linux" in os -> "linux"
+            else -> return null
+        }
+        val arch = when (System.getProperty("os.arch").lowercase()) {
+            "amd64", "x86_64", "x64" -> "x86_64"
+            "aarch64", "arm64" -> "aarch64"
+            else -> return null
+        }
+        return "$nativeOs-$arch"
+    }
+
+    /** Static link archives must follow the source/object files that reference them. */
+    private fun splitLinkOptions(options: List<String>): Pair<List<String>, List<String>> {
+        val compile = mutableListOf<String>()
+        val link = mutableListOf<String>()
+        var index = 0
+        while (index < options.size) {
+            val option = options[index]
+            when {
+                option == "-l" || option == "-framework" -> {
+                    link += option
+                    options.getOrNull(index + 1)?.let(link::add)
+                    index += if (index + 1 < options.size) 2 else 1
+                }
+                option.startsWith("-l") || option.startsWith("-Wl,") -> {
+                    link += option
+                    index++
+                }
+                option.endsWith(".a") || option.endsWith(".so") || option.endsWith(".dylib") || option.endsWith(".lib") -> {
+                    link += option
+                    index++
+                }
+                else -> {
+                    compile += option
+                    index++
+                }
+            }
+        }
+        return compile to link
     }
 
     private fun targetOption(options: List<String>): String? {
@@ -146,15 +274,17 @@ class TccCompiler {
         val outputPath = output.toAbsolutePath().normalize()
         val sourceFile = Files.createTempFile(outputPath.parent, "cplus-", ".c")
         try {
-            Files.writeString(sourceFile, source.code)
-            val tcc = System.getenv("TCC")?.takeIf(String::isNotBlank) ?: "tcc"
-            val command = buildList {
-                add(tcc)
-                addAll(options)
-                add("-o")
-                add(outputPath.toString())
-                add(sourceFile.toString())
-            }
+        Files.writeString(sourceFile, source.code)
+        val tcc = System.getenv("TCC")?.takeIf(String::isNotBlank) ?: "tcc"
+        val (compileOptions, linkOptions) = splitLinkOptions(options)
+        val command = buildList {
+            add(tcc)
+            addAll(compileOptions)
+            add("-o")
+            add(outputPath.toString())
+            add(sourceFile.toString())
+            addAll(linkOptions)
+        }
             val process = try {
                 ProcessBuilder(command).redirectErrorStream(true).start()
             } catch (error: IOException) {

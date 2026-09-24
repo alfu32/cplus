@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.nio.file.Files
 
 class TranspilerTest {
@@ -61,6 +62,84 @@ class TranspilerTest {
         }
         assertTrue(error.message!!.contains("inside a function body"))
         assertEquals(1, error.sourceSpan?.startLine)
+    }
+
+    @Test
+    fun raylibDomainImportsExposeNativeHeadersThroughTheUmbrella() {
+        val example = findRepositoryFile("stdlib/examples/raylib_hello.cp")
+        val raylibDirectory = findRepositoryFile("stdlib/graphics/raylib/core.cp").parent
+        val domains = mapOf(
+            "core.cp" to listOf("raylib.h"),
+            "input.cp" to listOf("raylib.h"),
+            "gestures.cp" to listOf("raylib.h"),
+            "camera.cp" to listOf("raylib.h"),
+            "draw.cp" to listOf("raylib.h"),
+            "shapes.cp" to listOf("raylib.h"),
+            "textures.cp" to listOf("raylib.h"),
+            "text.cp" to listOf("raylib.h"),
+            "models.cp" to listOf("raylib.h"),
+            "audio.cp" to listOf("raylib.h"),
+            "resources.cp" to listOf("raylib.h"),
+            "math.cp" to listOf("raylib.h", "raymath.h"),
+            "low_level.cp" to listOf("raylib.h", "rlgl.h")
+        )
+        domains.forEach { (module, headers) ->
+            val moduleSource = Files.readString(raylibDirectory.resolve(module))
+            headers.forEach { header ->
+                assertTrue("#include <$header>" in moduleSource, "$module should include <$header>")
+            }
+        }
+
+        val generated = CPlusTranspiler().transpile(
+            Files.readString(example),
+            example.toString(),
+            importPaths = CPlusImportPaths(
+                standardLibraryRoots = listOf(findRepositoryFile("stdlib/README.md").parent.toAbsolutePath())
+            )
+        ).code
+
+        listOf("raylib.h", "raymath.h", "rlgl.h").forEach { header ->
+            assertTrue("#include <$header>" in generated, "umbrella import omitted <$header>")
+        }
+        listOf("InitWindow", "WindowShouldClose", "DrawText").forEach { symbol ->
+            assertTrue(symbol in generated, "example should use raw Raylib symbol $symbol")
+        }
+    }
+
+    @Test
+    fun raymathStandardLibraryTestsPass() {
+        val source = findRepositoryFile("stdlib/tests/raylib_math.cp")
+        val errors = StringBuilder()
+        val status = CPlusCli(output = StringBuilder(), errors = errors)
+            .run(listOf("test", source.toString()))
+        assertEquals(0, status, errors.toString())
+    }
+
+    @Test
+    fun raylibExampleLinksTheBundledArchiveOnLinux() {
+        val os = System.getProperty("os.name").lowercase()
+        val architecture = System.getProperty("os.arch").lowercase()
+        assumeTrue(os.contains("linux") && architecture in setOf("amd64", "x86_64"))
+
+        val example = findRepositoryFile("stdlib/examples/raylib_hello.cp")
+        val directory = Files.createTempDirectory("cplus-raylib-link")
+        try {
+            val executable = directory.resolve("raylib-hello")
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf(
+                    "compile", example.toString(), "-o", executable.toString(),
+                    "-dynamic", "-lraylib", "-lGL", "-lm", "-lpthread", "-ldl", "-lrt",
+                    "-lX11", "-lXrandr", "-lXinerama", "-lXcursor", "-lXi"
+                )
+            )
+            assertEquals(0, status, errors.toString())
+            assertTrue(Files.size(executable) > 0)
+        } finally {
+            Files.walk(directory).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
     }
 
     @Test

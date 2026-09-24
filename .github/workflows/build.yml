@@ -10,11 +10,84 @@ permissions:
   contents: read
 
 jobs:
+  resolve-tinycc-release:
+    name: Resolve latest TinyCC release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Resolve latest published release tag
+        id: resolve
+        shell: bash
+        run: |
+          tag="$(curl --fail --location --retry 3 --silent --show-error \
+            https://api.github.com/repos/alfu32/tinycc/releases/latest | jq --exit-status --raw-output '.tag_name')"
+          test -n "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Using TinyCC release $tag"
+
+  prepare-tinycc-payloads:
+    name: Download TinyCC ${{ matrix.target }} payload
+    needs: resolve-tinycc-release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: base
+            artifact: tinycc-base
+            asset: tinycc-cli.jar
+          - target: linux-x86_64
+            artifact: tinycc-linux-x86_64
+            asset: tinycc-cli-linux-x86_64.jar
+          - target: linux-aarch64
+            artifact: tinycc-linux-aarch64
+            asset: tinycc-cli-linux-aarch64.jar
+          - target: macos-x86_64
+            artifact: tinycc-macos-x86_64
+            asset: tinycc-cli-macos-x86_64.jar
+          - target: macos-aarch64
+            artifact: tinycc-macos-aarch64
+            asset: tinycc-cli-macos-aarch64.jar
+          - target: windows-x86_64
+            artifact: tinycc-windows-x86_64
+            asset: tinycc-cli-windows-x86_64.jar
+          - target: windows-aarch64
+            artifact: tinycc-windows-aarch64
+            asset: tinycc-cli-windows-aarch64.jar
+          - target: cross
+            artifact: tinycc-cross
+            asset: tinycc-cli-cross.jar
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download TinyCC CLI and selected host payload
+        run: bash .github/scripts/download-tinycc.sh '${{ needs.resolve-tinycc-release.outputs.tag }}' '${{ matrix.asset }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: lib/${{ matrix.asset }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   test-and-smoke:
     name: Tests and Linux bundle smoke test
+    needs: prepare-tinycc-payloads
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinycc-base
+          path: lib
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinycc-linux-x86_64
+          path: lib
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinycc-cross
+          path: lib
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -61,6 +134,7 @@ jobs:
 
   distribution-matrix:
     name: Bundle ${{ matrix.bundle }}
+    needs: prepare-tinycc-payloads
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -80,6 +154,14 @@ jobs:
             bundle: win-arm64
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinycc-base
+          path: lib
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinycc-${{ matrix.target }}
+          path: lib
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -117,6 +199,14 @@ jobs:
     needs: test-and-smoke
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinycc-base
+          path: lib
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinycc-cross
+          path: lib
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

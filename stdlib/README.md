@@ -22,6 +22,7 @@ The CLI resolves the `stdlib:/` root from the bundled or installed library, `--s
 | [`encodings/uchar.cp`](encodings/uchar.cp) | `char16_t` and restartable C runtime conversion bindings |
 | [`encodings/wchar.cp`](encodings/wchar.cp) | Borrowed wide-string, wide-string-operation, and wide-I/O facades |
 | [`encodings/wctype.cp`](encodings/wctype.cp) | Locale-aware wide-character classification and case mapping |
+| [`graphics/raylib.cp`](graphics/raylib.cp) | Raylib 6.0 native headers, grouped by domain |
 | [`containers/dynamic_list.cp`](containers/dynamic_list.cp) | Generic contiguous resizable list |
 | [`containers/dynamic_map.cp`](containers/dynamic_map.cp) | Generic linear key/value table |
 | [`comptime/list_mapper.cp`](comptime/list_mapper.cp) | Typed callback-based list conversion generator |
@@ -160,6 +161,35 @@ if (utf8_t.count(utf8_bytes, byte_count, &rune_count) == UTF8_OK)
 `next` advances the byte offset only on `UTF8_OK`; it returns `UTF8_END`, `UTF8_INCOMPLETE`, `UTF8_INVALID_SEQUENCE`, or `UTF8_INVALID_ARGUMENT` as appropriate. `count` writes its output only when the whole input is valid. `print` writes canonical UTF-8 bytes to a `FILE*`; terminal display still depends on the user's terminal encoding. See the [encoding specification](../documentation/spec/stdlib/ENCODINGS.SPEC.md) and run `cpc test stdlib/tests/utf8.cp stdlib/tests/encoding.cp`.
 
 The C conversion facade, wide I/O, and classification still follow the target runtime and locale. `wchar_t` has platform-dependent width and is not interchangeable with `rune_t`. The owning `string` remains byte-oriented; UTF-8 iteration/counting exists as a separate codec and is not yet integrated into string slicing or mutation.
+
+## Graphics, input, and audio with raylib
+
+Raylib 6.0 is exposed as its native C API: these modules include Raylib headers and do not rename functions, wrap resources, or add automatic linking. Import the umbrella module or only the domain you use; you can also `#include <raylib.h>` directly:
+
+```c
+comptime import "stdlib:/graphics/raylib.cp";
+
+int main(void) {
+    InitWindow(960, 540, "C-plus with Raylib");
+    defer CloseWindow();
+    while (!WindowShouldClose()) {
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+        DrawText("Hello from C-plus", 32, 32, 24, DARKBLUE);
+        EndDrawing();
+    }
+}
+```
+
+Available domains are `core`, `input`, `gestures`, `camera`, `draw`, `shapes`, `textures`, `text`, `models`, `audio`, `resources`, `math` (`raymath.h`), and `low_level` (`rlgl.h`). Every module includes `<raylib.h>`; math and low-level rendering also include their companion headers. Use the native structs, enums, constants, and functions directly; resource lifetime follows Raylib's `Unload*` contracts. See the [Raylib standard-library specification](../documentation/spec/stdlib/RAYLIB.SPEC.md) for the module inventory and resource notes.
+
+The standalone `rcamera.h` and `rgestures.h` are not staged consistently across targets, so their functions are exposed through `<raylib.h>`. Raylib headers and libraries are target-specific; C-plus selects the matching bundled header and archive when using an embedded payload without a custom `--sysroot`. Explicitly link Raylib and platform libraries. For Linux, for example:
+
+```sh
+cpc run stdlib/examples/raylib_hello.cp -dynamic -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXinerama -lXcursor -lXi
+```
+
+The headless test suite exercises `raymath.h` and links the example on Linux x86-64; it does not open a window or initialize audio. See [`examples/raylib_hello.cp`](examples/raylib_hello.cp) and run `cpc test stdlib/tests/raylib_math.cp`.
 
 ## Streams and I/O
 
