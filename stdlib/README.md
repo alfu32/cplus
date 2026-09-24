@@ -17,6 +17,9 @@ The CLI resolves the `stdlib:/` root from the bundled or installed library, `--s
 | [`memory/xmem.cp`](memory/xmem.cp) | OS-backed scratch, hot, warm, and cold arenas |
 | [`io/file.cp`](io/file.cp) | Namespaced facade over the C `<stdio.h>` API |
 | [`strings/string.cp`](strings/string.cp) | Owning mutable string and string/memory helpers |
+| [`encodings/uchar.cp`](encodings/uchar.cp) | `char16_t`, `char32_t`/`rune_t`, and restartable conversion bindings |
+| [`encodings/wchar.cp`](encodings/wchar.cp) | Borrowed wide-string, wide-string-operation, and wide-I/O facades |
+| [`encodings/wctype.cp`](encodings/wctype.cp) | Locale-aware wide-character classification and case mapping |
 | [`containers/dynamic_list.cp`](containers/dynamic_list.cp) | Generic contiguous resizable list |
 | [`containers/dynamic_map.cp`](containers/dynamic_map.cp) | Generic linear key/value table |
 | [`comptime/list_mapper.cp`](comptime/list_mapper.cp) | Typed callback-based list conversion generator |
@@ -136,6 +139,12 @@ Errors: `STRING_OK`, `STRING_ERROR_INVALID_ARGUMENT`, `STRING_ERROR_ALLOCATION`,
 - Indentation: `indent(n)` adds spaces to each logical line; `dedent(n)` removes up to `n` leading spaces per line; `value.trim_indent()` removes the common indentation of nonblank lines. Negative counts are rejected; tabs are not indentation.
 
 See the [string API specification](../documentation/spec/stdlib/STRING.SPEC.md) for detailed behavior and complexity. Exercise the implementation with `cpc test stdlib/tests/string.cp`.
+
+### C character and encoding facades
+
+The `encodings/` modules follow the C header boundaries: `uchar.cp` wraps UTF-16/UTF-32 code-unit conversions and defines `rune_t`; `wchar.cp` wraps wide strings and wide I/O; `wctype.cp` wraps wide classification and case mapping. Import only the modules you need. Keep an `encoding_state_t` per independent conversion and call `reset()` before starting one. Conversion return values preserve the C runtime's sentinel values.
+
+These are deliberately libc facades, not a portable UTF-8 guarantee: conversion, wide I/O, and classification follow the target runtime and locale. `wchar_t` has platform-dependent width and is not interchangeable with `rune_t`. The owning `string` remains byte-oriented; UTF-8 invariants, rune iteration/counting, and encoding-aware string operations are not yet integrated. See the [encoding specification](../documentation/spec/stdlib/ENCODINGS.SPEC.md) and run `cpc test stdlib/tests/encoding.cp`.
 
 ## Streams and I/O
 

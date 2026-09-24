@@ -142,3 +142,7 @@ str_t view = text.as_str();
 printf("length=%zu\n", view.strlen());
 text.destroy();
 ```
+
+## 8. Encoding boundary
+
+Rune values and libc encoding/wide-character facades live under `stdlib/encodings/`, separately from the owning byte-oriented `string`. See the [encoding specification](ENCODINGS.SPEC.md) for the `<uchar.h>`, `<wchar.h>`, and `<wctype.h>` APIs and their locale/platform limitations. `string` does not yet validate UTF-8 or offer rune iteration/counting.
