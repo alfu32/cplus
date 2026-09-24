@@ -8,7 +8,7 @@ group = rootProject.group
 version = rootProject.version
 
 dependencies {
-    implementation(files(rootProject.file("lib/tinycc-embed.jar")))
+    implementation(files(rootProject.file("lib/tinycc-cli.jar")))
 }
 
 kotlin {

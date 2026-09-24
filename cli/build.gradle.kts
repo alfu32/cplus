@@ -78,7 +78,7 @@ val allTccTargets = setOf(
 val selectedTccTargets = tccOperatingSystems
     .flatMap { os -> tccArchitectures.map { arch -> "$os-$arch" } }
     .toSet()
-val tinyccEmbedJar = rootProject.file("lib/tinycc-embed.jar").canonicalFile
+val tinyccCliJar = rootProject.file("lib/tinycc-cli.jar").canonicalFile
 
 tasks.register<Jar>("fatJar") {
     group = "build"
@@ -93,12 +93,12 @@ tasks.register<Jar>("fatJar") {
     dependsOn(tasks.named("classes"))
     from(sourceSets.main.get().output)
     val runtimeArtifacts = configurations.runtimeClasspath.get().filterNot {
-        it.canonicalFile == tinyccEmbedJar
+        it.canonicalFile == tinyccCliJar
     }
     from(runtimeArtifacts.map { file ->
         if (file.isDirectory) file else zipTree(file)
     })
-    from(zipTree(tinyccEmbedJar)) {
+    from(zipTree(tinyccCliJar)) {
         exclude { details ->
             val path = details.path
             val target = path
