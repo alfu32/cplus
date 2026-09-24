@@ -105,14 +105,24 @@ tasks.register<Jar>("fatJar") {
                 .takeIf { it.startsWith("native/") }
                 ?.removePrefix("native/")
                 ?.substringBefore('/')
-            path.trimEnd('/') == "native" || (target != null && target in allTccTargets && target !in selectedTccTargets)
+            val normalizedPath = path.trimEnd('/')
+            val isTargetSysrootPayload = target != null && (
+                normalizedPath == "native/$target/files.list" ||
+                    normalizedPath == "native/$target/tinycc/sysroot" ||
+                    normalizedPath.startsWith("native/$target/tinycc/sysroot/")
+                )
+            path.trimEnd('/') == "native" || (
+                target != null && target in allTccTargets && target !in selectedTccTargets &&
+                    !(selectedTccTargets.isNotEmpty() && isTargetSysrootPayload)
+                )
         }
     }
 
     exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
     manifest {
         attributes["Main-Class"] = "cplus.MainKt"
-        attributes["Cplus-Tcc-Targets"] = selectedTccTargets.sorted().joinToString(",")
+        attributes["Cplus-Tcc-Host-Payloads"] = selectedTccTargets.sorted().joinToString(",")
+        attributes["Cplus-Tcc-Targets"] = if (selectedTccTargets.isEmpty()) "" else allTccTargets.sorted().joinToString(",")
     }
 
     doLast {
@@ -120,6 +130,7 @@ tasks.register<Jar>("fatJar") {
         val targetJar = sourceJar.parentFile.resolve("${archiveBaseName.get()}.jar")
 
         sourceJar.copyTo(targetJar, overwrite = true)
-        logger.lifecycle("Bundled TinyCC targets: ${selectedTccTargets.sorted().joinToString(", ")}")
+        logger.lifecycle("Bundled TinyCC host payloads: ${selectedTccTargets.sorted().joinToString(", ").ifEmpty { "none" }}")
+        logger.lifecycle("Bundled TinyCC target drivers: ${if (selectedTccTargets.isEmpty()) "none" else allTccTargets.sorted().joinToString(", ")}")
     }
 }

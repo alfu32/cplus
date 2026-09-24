@@ -406,6 +406,63 @@ class TranspilerTest {
     }
 
     @Test
+    fun compilesForAnExplicitEmbeddedCrossTarget() {
+        val directory = Files.createTempDirectory("cplus-cross-target")
+        try {
+            val sourcePath = directory.resolve("minimal.cp")
+            val executable = directory.resolve("minimal-linux-arm64")
+            Files.writeString(sourcePath, "int main(void) { return 0; }")
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf(
+                    "compile",
+                    sourcePath.toString(),
+                    "--target=linux-aarch64",
+                    "-o",
+                    executable.toString()
+                )
+            )
+
+            assertEquals(0, status, errors.toString())
+            val binary = Files.readAllBytes(executable)
+            assertTrue(binary.size > 20, "TinyCC produced an empty cross-target executable")
+            assertEquals(0x7f, binary[0].toInt() and 0xff)
+            assertEquals('E'.code, binary[1].toInt())
+            assertEquals('L'.code, binary[2].toInt())
+            assertEquals('F'.code, binary[3].toInt())
+            assertEquals(183, binary[18].toInt() and 0xff, "Expected an AArch64 ELF target")
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun rejectsCrossTargetOutputWithTheWrongObjectFormat() {
+        val directory = Files.createTempDirectory("cplus-invalid-cross-format")
+        try {
+            val sourcePath = directory.resolve("minimal.cp")
+            val outputPath = directory.resolve("minimal-macos.o")
+            Files.writeString(sourcePath, "int main(void) { return 0; }")
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf(
+                    "compile",
+                    sourcePath.toString(),
+                    "--target=macos-x86_64",
+                    "-c",
+                    "-o",
+                    outputPath.toString()
+                )
+            )
+
+            assertEquals(1, status, errors.toString())
+            assertTrue(errors.toString().contains("output format does not match"), errors.toString())
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun rejectsInvalidIdentifierInterpolationAtTheGeneratorCall() {
         val source = """
             comptime string @bad_name(type T) {

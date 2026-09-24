@@ -40,10 +40,18 @@ class TccCompiler {
         if (!hasEmbeddedRuntimeForCurrentPlatform()) {
             return@pass compileWithExternalTcc(source, output, options)
         }
+        if (options.any { it == "--target" || it.startsWith("--target=") }) {
+            return@pass compileWithEmbeddedTccCli(source, output, options)
+        }
 
         val rawDiagnostics = StringBuilder()
         val diagnostics = DiagnosticListener { message -> rawDiagnostics.append(message) }
-        val optionString = options.joinToString(" ", transform = ::quoteOption)
+        val nativeOptions = if (isLinuxHost() && options.none { it == "-static" || it == "-dynamic" || it == "-shared" }) {
+            options + "-static"
+        } else {
+            options
+        }
+        val optionString = nativeOptions.joinToString(" ", transform = ::quoteOption)
         val exitCode = TinyCC.compile(
             source.code,
             TinyCC.OutputType.EXECUTABLE,
@@ -55,6 +63,79 @@ class TccCompiler {
             exitCode = exitCode,
             diagnostics = TccDiagnosticParser.parse(rawDiagnostics.toString(), source)
         )
+    }
+
+    private fun compileWithEmbeddedTccCli(
+        source: TranscodedSource,
+        output: Path,
+        options: List<String>
+    ): TccCompilationResult {
+        val outputPath = output.toAbsolutePath().normalize()
+        val sourceFile = Files.createTempFile(outputPath.parent, "cplus-", ".c")
+        try {
+            Files.writeString(sourceFile, source.code)
+            val arguments = buildList {
+                addAll(options)
+                add("-o")
+                add(outputPath.toString())
+                add(sourceFile.toString())
+            }
+            val exitCode = TinyCC.executeTcc(*arguments.toTypedArray())
+            val outputExists = Files.isRegularFile(outputPath) && Files.size(outputPath) > 0
+            if (exitCode != 0) return TccCompilationResult(exitCode, emptyList())
+            if (!outputExists) {
+                return TccCompilationResult(
+                    1,
+                    listOf(targetDiagnostic("TinyCC did not produce the requested output file"))
+                )
+            }
+
+            val target = targetOption(options)
+            val outputFormatError = target?.let { targetOutputFormatError(it, outputPath, options) }
+            if (outputFormatError != null) {
+                return TccCompilationResult(
+                    1,
+                    listOf(targetDiagnostic(outputFormatError))
+                )
+            }
+            return TccCompilationResult(0, emptyList())
+        } finally {
+            Files.deleteIfExists(sourceFile)
+        }
+    }
+
+    private fun targetOption(options: List<String>): String? {
+        val targetFlag = options.indexOf("--target")
+        return when {
+            targetFlag >= 0 -> options.getOrNull(targetFlag + 1)
+            else -> options.firstOrNull { it.startsWith("--target=") }?.substringAfter('=')
+        }
+    }
+
+    private fun targetDiagnostic(message: String) = CompilerDiagnostic(
+        DiagnosticSeverity.ERROR,
+        message,
+        null,
+        null,
+        null,
+        message
+    )
+
+    private fun targetOutputFormatError(target: String, output: Path, options: List<String>): String? {
+        val header = Files.newInputStream(output).use { it.readNBytes(4) }
+        val compileOnly = "-c" in options
+        val formatMatches = when {
+            target.startsWith("linux-") -> header.contentEquals(byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte()))
+            target.startsWith("windows-") && compileOnly ->
+                header.size >= 2 && when {
+                    target.endsWith("x86_64") -> header[0] == 0x64.toByte() && header[1] == 0x86.toByte()
+                    else -> header[0] == 0x64.toByte() && header[1] == 0xaa.toByte()
+                }
+            target.startsWith("windows-") -> header.size >= 2 && header[0] == 'M'.code.toByte() && header[1] == 'Z'.code.toByte()
+            target.startsWith("macos-") -> header.contentEquals(byteArrayOf(0xcf.toByte(), 0xfa.toByte(), 0xed.toByte(), 0xfe.toByte()))
+            else -> true
+        }
+        return if (formatMatches) null else "TinyCC output format does not match requested target '$target'"
     }
 
     private fun compileWithExternalTcc(
@@ -110,6 +191,8 @@ class TccCompiler {
         val resource = "native/$nativeOs-$arch/files.list"
         return TccCompiler::class.java.classLoader.getResource(resource) != null
     }
+
+    private fun isLinuxHost(): Boolean = System.getProperty("os.name").lowercase().contains("linux")
 
     private fun quoteOption(option: String): String {
         if (option.isEmpty()) return "\"\""

@@ -2,6 +2,28 @@
 
 C-plus is C with struct-scoped methods and a staged compile-time language. It accepts `.cp` and `.c+` files and transcodes them to ordinary C; the generated program keeps C's data layout, ABI, and runtime model.
 
+## Cross-compilation
+
+The platform-specific CLI bundles contain the same TinyCC target drivers for each host OS (both x86-64 and ARM64 host builds). The bundled JVM facade accepts the six target triples below, while end-to-end support depends on the target runtime and sysroot:
+
+| Host bundle | Linux x86-64 | Linux ARM64 | macOS x86-64 | macOS ARM64 | Windows x86-64 | Windows ARM64 |
+| --- |:---:|:---:|:---:|:---:|:---:|:---:|
+| Linux (x86-64 / ARM64) | ✓ | ✓ | — | — | △ | △ |
+| macOS (x86-64 / ARM64) | ✓ | ✓ | — | — | △ | △ |
+| Windows (x86-64 / ARM64) | ✓ | ✓ | — | — | △ | △ |
+
+Legend: `✓` executable output verified; `△` minimal executable output works, but the bundled sysroot is incomplete; `—` the current C-plus/TinyCC bridge does not produce a usable target binary. The Windows sysroots currently lack `mm_malloc.h`, required through `<stdlib.h>`, so typical programs using the standard library may fail to compile. The macOS target currently fails to link `libc`; even `-c` has produced an ELF object rather than Mach-O, and C-plus now reports a target-format mismatch instead of treating that as success.
+
+Select a target with TinyCC's `--target` option; C-plus forwards it through the bundled API (ARM64 is named `aarch64`):
+
+```sh
+cpc compile src/main.cp --target=linux-aarch64 -o build/app
+```
+
+The host bundle selected when packaging (`-Pos` and `-Parch`) determines which machine can run the compiler; `--target` independently selects the program's output platform and TinyCC injects the matching target sysroot. Use `compile` for cross-target output—`run` also attempts to execute the binary, so it is only suitable when the target can run on the current host. Pass `--sysroot path` or `--sysroot=path` to override the bundled sysroot. An external `tcc` installation is governed by that compiler's own targets.
+
+The JARs also contain additional TinyCC command-line backends such as `i386`, `arm`, and `riscv64`. Their unsuffixed upstream defaults are Linux ABI targets; `c67` is a TMS320C67 DSP backend that emits COFF, not a general-purpose host executable. These extra backend binaries are not among the six target triples currently exposed through C-plus `--target`. See the [TinyCC target notes](https://github.com/Tiny-C-Compiler/tinycc-mirror-repository/blob/mob/tcc-doc.texi) and [upstream target defaults](https://github.com/mirror/tinycc/blob/mob/Makefile).
+
 ## Language and examples
 
 Write methods inside a struct and call them on values or pointers. C-plus infers the receiver address and lowers the method to a normal C function:
@@ -72,4 +94,4 @@ For local development, install a Java 21 JDK and use the Gradle wrapper:
 ./gradlew -Prelease=0.3.4 editorArtifacts
 ```
 
-The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. With no platform properties, the CLI jar and distribution omit TinyCC binaries and sysroots; `compile` and `run` then use `tcc` from `PATH` (or the executable named by `TCC`). Add matching `-Pos` and `-Parch` properties to embed a target, or set both to `all` for a complete all-platform bundle. The accepted values are `linux|mac|win|all|none` and `x86_64|arm64|all|none`; `none` must be selected for both.
+The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. With no platform properties, the CLI jar and distribution omit TinyCC binaries and sysroots; `compile` and `run` then use `tcc` from `PATH` (or the executable named by `TCC`). Matching `-Pos` and `-Parch` properties select the host runtime payload, while the single-host jar retains the supported target sysroots for cross-compilation. Set both properties to `all` for all six host runtimes. The accepted values are `linux|mac|win|all|none` and `x86_64|arm64|all|none`; `none` must be selected for both.
