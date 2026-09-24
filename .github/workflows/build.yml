@@ -22,6 +22,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Run Gradle tests
         run: ./gradlew test --no-daemon
+      - name: Build external-TCC (none-none) bundle
+        run: ./gradlew "-Prelease=$RELEASE_VERSION" bundleDist --no-daemon
+      - name: Verify external-TCC bundle excludes native payloads
+        run: |
+          test ! -s "build/distributions/cplus-${RELEASE_VERSION}-none-none/TARGETS.txt"
+          native_targets="$(jar tf cli/build/libs/c-plus.jar | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
+          test -z "$native_targets"
+          unzip -l "dist/cplus-${RELEASE_VERSION}-none-none.zip" | grep -F 'c-plus.jar'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cplus-none-none
+          path: dist/cplus-${{ env.RELEASE_VERSION }}-none-none.zip
+          if-no-files-found: error
+          compression-level: 0
       - name: Build and smoke-test Linux x86_64 bundle
         run: |
           release="$RELEASE_VERSION"
