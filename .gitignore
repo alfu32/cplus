@@ -17,3 +17,5 @@ intellij-cplus/.intellijPlatform/
 /cli/src/main/kotlin/cplus/Version.kt
 dist
 c-plus-bin
+/lib/
+tinycc-cli*.jar
