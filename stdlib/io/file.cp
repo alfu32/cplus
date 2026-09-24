@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 /* Compatibility facade retaining the direct, static C stdio signatures. */
 typedef struct stdio_t {
@@ -214,36 +215,65 @@ typedef struct stdio_t {
     }
 } stdio_t;
 
-/* Value wrapper for an owned C stream. fclose() closes and clears the stream. */
-typedef struct file_t {
-    owned FILE* stream;
+enum {
+    STREAM_BORROWED = 0,
+    STREAM_OWNED = 1
+};
+
+/* A FILE wrapper records whether this value is responsible for closing it. */
+typedef struct stream_t {
+    FILE* stream;
+    int is_owned;
     borrowed mut char* buffer;
 
-    static pub file_t fopen(borrowed const char* path, borrowed const char* mode) {
-        file_t file = { fopen(path, mode), NULL };
-        return file;
+    static pub stream_t from_owned(owned FILE* handle) {
+        stream_t value = { handle, handle == NULL ? STREAM_BORROWED : STREAM_OWNED, NULL };
+        return value;
+    }
+
+    static pub stream_t from_borrowed(borrowed FILE* handle) {
+        stream_t value = { handle, STREAM_BORROWED, NULL };
+        return value;
+    }
+
+    static pub stream_t standard_input(void) {
+        return stream_t.from_borrowed(stdin);
+    }
+
+    static pub stream_t standard_output(void) {
+        return stream_t.from_borrowed(stdout);
+    }
+
+    static pub stream_t standard_error(void) {
+        return stream_t.from_borrowed(stderr);
     }
 
     pub int freopen(borrowed mut *self, borrowed const char* path, borrowed const char* mode) {
-        if (self == NULL || self->stream == NULL || path == NULL || mode == NULL) return EINVAL;
+        if (self == NULL || self->stream == NULL || path == NULL || mode == NULL || self->is_owned != STREAM_OWNED) {
+            errno = EINVAL;
+            return EINVAL;
+        }
 
         errno = 0;
         self->stream = freopen(path, mode, self->stream);
         self->buffer = NULL;
-        if (self->stream == NULL) return errno == 0 ? EOF : errno;
+        if (self->stream == NULL) {
+            self->is_owned = STREAM_BORROWED;
+            return errno == 0 ? EOF : errno;
+        }
         return 0;
     }
 
-    static pub file_t tmpfile(void) {
-        file_t file = { tmpfile(), NULL };
-        return file;
-    }
-
     pub int fclose(borrowed mut *self) {
-        if (self == NULL) return EOF;
+        if (self == NULL || self->stream == NULL) return EOF;
+        if (self->is_owned != STREAM_OWNED) {
+            errno = EINVAL;
+            return EOF;
+        }
 
-        int result = self->stream == NULL ? EOF : fclose(self->stream);
+        int result = fclose(self->stream);
         self->stream = NULL;
+        self->is_owned = STREAM_BORROWED;
         self->buffer = NULL;
         return result;
     }
@@ -373,9 +403,20 @@ typedef struct file_t {
         if (self == NULL || self->stream == NULL) return 0;
         return ferror(self->stream);
     }
+} stream_t;
+
+/* Path-facing factories create streams that own the opened FILE handle. */
+typedef struct file_t {
+    static pub stream_t fopen(borrowed const char* path, borrowed const char* mode) {
+        return stream_t.from_owned(fopen(path, mode));
+    }
+
+    static pub stream_t tmpfile(void) {
+        return stream_t.from_owned(tmpfile());
+    }
 } file_t;
 
-typedef struct path_t{
+typedef struct path_t {
 
     static pub int remove(borrowed const char* path) {
         return remove(path);
@@ -388,27 +429,83 @@ typedef struct path_t{
 
 
 typedef struct var_io_t {
-    borrowed FILE* input;
-    borrowed FILE* output;
-    borrowed FILE* error;
+    stream_t input;
+    stream_t output;
+    stream_t error;
 
     static pub var_io_t standard(void) {
-        var_io_t streams = { stdin, stdout, stderr };
+        var_io_t streams = {
+            stream_t.standard_input(),
+            stream_t.standard_output(),
+            stream_t.standard_error()
+        };
         return streams;
     }
 
-    static pub int sprintf(borrowed mut char* destination, borrowed const char* format, ...) {
+    pub int printf(borrowed mut *self, borrowed const char* format, ...) {
+        if (self == NULL || self->output.stream == NULL) return EOF;
         va_list arguments;
         va_start(arguments, format);
-        int result = vsprintf(destination, format, arguments);
+        int result = vfprintf(self->output.stream, format, arguments);
         va_end(arguments);
         return result;
     }
 
-    static pub int printf(borrowed const char* format, ...) {
+    pub int scanf(borrowed mut *self, borrowed const char* format, ...) {
+        if (self == NULL || self->input.stream == NULL) return EOF;
         va_list arguments;
         va_start(arguments, format);
-        int result = vprintf(format, arguments);
+        int result = vfscanf(self->input.stream, format, arguments);
+        va_end(arguments);
+        return result;
+    }
+
+    pub int vprintf(borrowed mut *self, borrowed const char* format, va_list arguments) {
+        if (self == NULL || self->output.stream == NULL) return EOF;
+        return vfprintf(self->output.stream, format, arguments);
+    }
+
+    pub int vscanf(borrowed mut *self, borrowed const char* format, va_list arguments) {
+        if (self == NULL || self->input.stream == NULL) return EOF;
+        return vfscanf(self->input.stream, format, arguments);
+    }
+
+    pub int getchar(borrowed mut *self) {
+        if (self == NULL || self->input.stream == NULL) return EOF;
+        return fgetc(self->input.stream);
+    }
+
+    pub int putchar(borrowed mut *self, int character) {
+        if (self == NULL || self->output.stream == NULL) return EOF;
+        return fputc(character, self->output.stream);
+    }
+
+    pub int puts(borrowed mut *self, borrowed const char* text) {
+        if (self == NULL || self->output.stream == NULL || text == NULL) return EOF;
+        if (fputs(text, self->output.stream) == EOF) return EOF;
+        return fputc('\n', self->output.stream);
+    }
+
+    pub void perror(borrowed mut *self, borrowed const char* prefix) {
+        if (self == NULL || self->error.stream == NULL) return;
+        int error_number = errno;
+        const char* message = strerror(error_number);
+        if (prefix != NULL && prefix[0] != '\0') {
+            if (fputs(prefix, self->error.stream) == EOF) return;
+            if (fputs(": ", self->error.stream) == EOF) return;
+        }
+        if (message == NULL) return;
+        if (fputs(message, self->error.stream) == EOF) return;
+        fputc('\n', self->error.stream);
+    }
+} var_io_t;
+
+/* Buffer-only conversion belongs here rather than on an actual stream. */
+typedef struct format_t {
+    static pub int sprintf(borrowed mut char* destination, borrowed const char* format, ...) {
+        va_list arguments;
+        va_start(arguments, format);
+        int result = vsprintf(destination, format, arguments);
         va_end(arguments);
         return result;
     }
@@ -421,24 +518,12 @@ typedef struct var_io_t {
         return result;
     }
 
-    static pub int scanf(borrowed const char* format, ...) {
-        va_list arguments;
-        va_start(arguments, format);
-        int result = vscanf(format, arguments);
-        va_end(arguments);
-        return result;
-    }
-
     static pub int sscanf(borrowed const char* input, borrowed const char* format, ...) {
         va_list arguments;
         va_start(arguments, format);
         int result = vsscanf(input, format, arguments);
         va_end(arguments);
         return result;
-    }
-
-    static pub int vprintf(borrowed const char* format, va_list arguments) {
-        return vprintf(format, arguments);
     }
 
     static pub int vsprintf(borrowed mut char* destination, borrowed const char* format, va_list arguments) {
@@ -449,30 +534,9 @@ typedef struct var_io_t {
         return vsnprintf(destination, size, format, arguments);
     }
 
-    static pub int vscanf(borrowed const char* format, va_list arguments) {
-        return vscanf(format, arguments);
-    }
-
     static pub int vsscanf(borrowed const char* input, borrowed const char* format, va_list arguments) {
         return vsscanf(input, format, arguments);
     }
-
-    static pub int getchar(void) {
-        return getchar();
-    }
-
-    static pub int putchar(int character) {
-        return putchar(character);
-    }
-
-    static pub int puts(borrowed const char* text) {
-        return puts(text);
-    }
-
-    static pub void perror(borrowed const char* prefix) {
-        perror(prefix);
-    }
-
-} var_io_t;
+} format_t;
 
 #endif

@@ -1,13 +1,13 @@
-# C-plus I/O Facades
+# C-plus I/O, Streams, and Formatting
 
-Status: C `<stdio.h>` wrappers, with both a raw compatibility facade and a value-based `file_t` stream wrapper.
+Status: receiver-oriented `FILE*` streams, file/path factories, configurable standard I/O, plus the retained raw compatibility facade.
 
-## Import and `file_t`
+## Import and streams
 
 ```c
 comptime import "stdlib:/io/file.cp";
 
-file_t stream = file_t.fopen("notes.txt", "w+");
+stream_t stream = file_t.fopen("notes.txt", "w+");
 if (stream.stream != NULL) {
     defer stream.fclose();
     stream.fprintf("%s %d\n", "answer", 42);
@@ -15,27 +15,31 @@ if (stream.stream != NULL) {
 
     char label[32];
     int value = 0;
-    if (stream.fscanf("%31s %d", label, &value) == 2)
-        var_io_t.printf("%s=%d\n", label, value);
+    if (stream.fscanf("%31s %d", label, &value) == 2) {
+        var_io_t io = var_io_t.standard();
+        io.printf("%s=%d\n", label, value);
+    }
 }
 ```
 
-`file_t` is currently a small value wrapper around an owned `FILE*`, not a path object. `file_t.fopen(path, mode)` and `file_t.tmpfile()` return the wrapper by value; on failure its `stream` field is `NULL`. Instance operations infer the receiver address (`stream.fwrite(...)`). `stream.fclose()` closes the C stream and clears `stream.stream`; it does not free the `file_t` value. Use `defer` to close on scope exit.
+`stream_t` wraps a C `FILE*`, its close-responsibility flag, and optional caller-provided buffer. `file_t.fopen(path, mode)` and `file_t.tmpfile()` are path-facing factories returning `stream_t`; successful results own the handle. `path_t.remove(path)` and `path_t.rename(old, new)` hold path-only operations. Stream instance methods cover formatted stream I/O, characters/lines, block I/O, positioning, buffering, and status.
 
-Its instance API groups file-stream operations: `freopen`, `fclose`, `fflush`, buffering, formatted `fprintf`/`fscanf` and `v*` forms, character/line/block I/O, positioning, and stream status. `freopen()` mutates the wrapper and returns `0` on success; on failure it returns `errno` (or `EOF` if libc did not set `errno`) and leaves the stream pointer `NULL`. Invalid wrapper/path/mode arguments return `EINVAL`. `remove` and `rename` are static path operations on `path_t`.
+## Ownership policy
 
-## `var_io_t` and `stdio_t`
+`STREAM_OWNED` and `STREAM_BORROWED` are explicit values stored in `stream_t.is_owned`. `stream_t.from_owned(FILE*)` marks a handle owned; `from_borrowed(FILE*)` does not. `stream_t.standard_input()`, `standard_output()`, and `standard_error()` produce borrowed wrappers. `var_io_t.standard()` returns those wrappers in its `input`, `output`, and `error` fields.
 
-`var_io_t` groups process-global standard I/O (`printf`, `scanf`, `getchar`, `putchar`, `puts`, `perror`) and buffer/string conversion (`sprintf`, `snprintf`, `sscanf` and their available `v*` variants). `var_io_t.standard()` returns the current `stdin`, `stdout`, and `stderr` handles as fields. The global wrappers still call libc's global streams; the returned handles are not yet connected to instance methods.
+`stream.fclose()` closes and clears an owned handle, then resets its ownership flag. On a borrowed handle it returns `EOF`, sets `errno` to `EINVAL`, and leaves the handle usable. `stream.freopen()` is restricted to owned handles because libc closes/replaces the original stream; it returns `0` on success, otherwise an errno value (or `EOF` if libc left errno unset), and clears the wrapper on failure. Invalid arguments return `EINVAL`. Use `defer stream.fclose()` for owned streams.
 
-`stdio_t` retains the original raw C-style static facade for compatibility: functions accept and return `FILE*` directly, e.g. `stdio_t.fopen(...)`, `stdio_t.fwrite(..., stream)`, and `stdio_t.fclose(stream)`. New code should prefer `file_t` for an owned stream value and `var_io_t` for process-global I/O. Both facades forward variadic functions through matching `v*` functions.
+Ownership is a C-plus convention, not compiler-enforced move semantics. Do not copy an owned `stream_t` value: copies duplicate the pointer and ownership flag, risking double-close. Borrowed wrappers may be copied while the underlying handle remains alive. `buffer` is always borrowed; keep custom storage alive as required by C. `fread`/`fwrite` report complete items, not bytes.
 
-## Safety and limitations
+## Standard I/O and formatting
 
-The ownership/access annotations are documentation only; C-plus does not enforce their lifetime promises. Close each successfully opened `file_t` exactly once. In C, `freopen` closes the previous stream even if reopening fails; this wrapper records the resulting `NULL` stream and clears its borrowed buffer field. A custom `file_t.buffer` is borrowed: assign caller-owned storage before calling `setbuf()` or `setvbuf()`, and keep it alive as required by C. `fread`/`fwrite` return complete items, not bytes. Format strings must match argument types and destination capacities.
+`var_io_t` is now an instance facade over its configured streams. `io.printf`/`io.vprintf` write to `io.output`; `io.scanf`/`io.vscanf` read from `io.input`; `getchar`, `putchar`, and `puts` use those same fields. `io.perror(prefix)` writes the prefix and current `strerror(errno)` message to `io.error`. Fields can be replaced with borrowed `stream_t` wrappers to redirect I/O.
 
-`EOF`, `stdin`, `stdout`, `stderr`, `SEEK_SET`, and related macros come from `<stdio.h>`. The unsafe/obsolete `gets` and `tmpnam` functions are omitted. No `string_stream_t` exists yet; `sprintf`/`snprintf` currently target caller-provided buffers.
+`format_t` owns stream-independent buffer conversion: `sprintf`, `snprintf`, `sscanf`, and their `v*` forms. These use caller-provided buffers or C strings; no `string_stream_t` exists yet. `stdio_t` remains the original raw C-style compatibility/reference facade, with static methods that take `FILE*` explicitly. It retains libc behavior and is useful for migration and direct comparisons.
 
-## Tests
+## Limitations and tests
 
-`stdlib/tests/io.cp` covers string formatting/parsing, open failure, close-state clearing, temporary-file reads/writes, EOF, and deferred cleanup. Run `cpc test stdlib/tests/io.cp`.
+The unsafe/obsolete `gets` and `tmpnam` APIs are omitted. This module does not add encoding conversion, dynamic string streams, or safer format-string checking; ensure format types and buffer capacities are correct. `<stdio.h>` provides `EOF`, standard stream macros, seek constants, and related declarations.
+
+`stdlib/tests/io.cp` exercises ownership states, refusal to close/reopen borrowed streams, standard-handle routing for formatted and character I/O, path errors, formatting/parsing, temporary-file I/O, failure behavior, and deferred close. Run `cpc test stdlib/tests/io.cp`.

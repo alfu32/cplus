@@ -4,22 +4,82 @@ comptime import "stdlib:/io/file.cp";
 
 @test "var_io facade formats and parses strings" {
     char formatted[32];
-    int length = var_io_t.snprintf(formatted, sizeof(formatted), "%s:%d", "rank", 17);
+    int length = format_t.snprintf(formatted, sizeof(formatted), "%s:%d", "rank", 17);
     @assertEquals(7, length);
     @assert(strcmp(formatted, "rank:17") == 0);
 
     char label[16];
     int rank = 0;
-    @assertEquals(2, var_io_t.sscanf(formatted, "%15[^:]:%d", label, &rank));
+    @assertEquals(2, format_t.sscanf(formatted, "%15[^:]:%d", label, &rank));
     @assert(strcmp(label, "rank") == 0);
     @assertEquals(17, rank);
 }
 
 @test "var_io facade exposes standard stream handles" {
     var_io_t streams = var_io_t.standard();
-    @assert(streams.input == stdin);
-    @assert(streams.output == stdout);
-    @assert(streams.error == stderr);
+    @assert(streams.input.stream == stdin);
+    @assert(streams.output.stream == stdout);
+    @assert(streams.error.stream == stderr);
+    @assertEquals(STREAM_BORROWED, streams.input.is_owned);
+    @assertEquals(STREAM_BORROWED, streams.output.is_owned);
+    @assertEquals(STREAM_BORROWED, streams.error.is_owned);
+}
+
+@test "var_io writes through its configured output stream" {
+    stream_t output = file_t.tmpfile();
+    @assert(output.stream != NULL);
+    defer output.fclose();
+
+    var_io_t io = var_io_t.standard();
+    io.output = stream_t.from_borrowed(output.stream);
+    @assertEquals(8, io.printf("value=%d", 42));
+    @assert(io.puts("line") != EOF);
+    @assertEquals('!', io.putchar('!'));
+    @assertEquals(0, output.fflush());
+    output.rewind();
+
+    char rendered[32];
+    @assert(output.fgets(rendered, sizeof(rendered)) != NULL);
+    @assert(strcmp(rendered, "value=42line\n") == 0);
+    @assertEquals('!', output.fgetc());
+}
+
+@test "var_io reads and reports through configured streams" {
+    stream_t input = file_t.tmpfile();
+    stream_t error = file_t.tmpfile();
+    @assert(input.stream != NULL && error.stream != NULL);
+    defer input.fclose();
+    defer error.fclose();
+
+    @assertEquals(0, input.fputs("73Z"));
+    input.rewind();
+
+    var_io_t io = var_io_t.standard();
+    io.input = stream_t.from_borrowed(input.stream);
+    io.error = stream_t.from_borrowed(error.stream);
+    int value = 0;
+    @assertEquals(1, io.scanf("%d", &value));
+    @assertEquals(73, value);
+    @assertEquals('Z', io.getchar());
+
+    errno = EINVAL;
+    io.perror("parse");
+    error.rewind();
+    char message[64];
+    @assert(error.fgets(message, sizeof(message)) != NULL);
+    @assert(strncmp(message, "parse: ", 7) == 0);
+}
+
+@test "stream close refuses borrowed handles" {
+    FILE* raw = stdio_t.tmpfile();
+    @assert(raw != NULL);
+    stream_t borrowed_stream = stream_t.from_borrowed(raw);
+    @assertEquals(EINVAL, borrowed_stream.freopen("", "r"));
+    @assert(borrowed_stream.stream == raw);
+    @assertEquals(EOF, borrowed_stream.fclose());
+    @assert(borrowed_stream.stream == raw);
+    @assertEquals((size_t)1, stdio_t.fwrite("x", 1, 1, raw));
+    @assertEquals(0, stdio_t.fclose(raw));
 }
 
 @test "stdio compatibility facade retains raw FILE operations" {
@@ -32,21 +92,29 @@ comptime import "stdlib:/io/file.cp";
     @assertEquals(input_size, stdio_t.fwrite(input, 1, input_size, stream));
 }
 
-@test "file facade preserves fopen failure results" {
-    file_t stream = file_t.fopen("", "r");
+@test "file factory preserves fopen failure results" {
+    stream_t stream = file_t.fopen("", "r");
     @assert(stream.stream == NULL);
+    @assertEquals(STREAM_BORROWED, stream.is_owned);
 }
 
-@test "file facade close clears the stream handle" {
-    file_t stream = file_t.tmpfile();
+@test "path facade reports invalid empty paths" {
+    @assert(path_t.remove("") != 0);
+    @assert(path_t.rename("", "") != 0);
+}
+
+@test "stream close clears an owned handle" {
+    stream_t stream = file_t.tmpfile();
     @assert(stream.stream != NULL);
+    @assertEquals(STREAM_OWNED, stream.is_owned);
     @assertEquals(0, stream.fclose());
     @assert(stream.stream == NULL);
+    @assertEquals(STREAM_BORROWED, stream.is_owned);
     @assertEquals(EOF, stream.fclose());
 }
 
-@test "file facade freopen reports failure and clears the stream" {
-    file_t stream = file_t.tmpfile();
+@test "stream freopen reports failure and clears the stream" {
+    stream_t stream = file_t.tmpfile();
     @assert(stream.stream != NULL);
 
     int error = stream.freopen("", "r");
@@ -55,8 +123,8 @@ comptime import "stdlib:/io/file.cp";
     @assert(stream.buffer == NULL);
 }
 
-@test "file facade writes reads and closes a temporary file" {
-    file_t stream = file_t.tmpfile();
+@test "stream writes reads and closes a temporary file" {
+    stream_t stream = file_t.tmpfile();
     @assert(stream.stream != NULL);
     defer stream.fclose();
 
@@ -78,8 +146,8 @@ comptime import "stdlib:/io/file.cp";
     @assert(!stream.feof());
 }
 
-@test "file facade forwards formatted stream operations" {
-    file_t stream = file_t.tmpfile();
+@test "stream forwards formatted I/O operations" {
+    stream_t stream = file_t.tmpfile();
     @assert(stream.stream != NULL);
     defer stream.fclose();
 

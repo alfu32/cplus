@@ -139,7 +139,7 @@ See the [string API specification](../documentation/spec/stdlib/STRING.SPEC.md) 
 
 ## File I/O
 
-`io/file.cp` exposes three facades over `<stdio.h>`. `file_t.fopen(path, mode)` and `file_t.tmpfile()` return a value wrapping an owned `FILE*`; use receiver calls such as `stream.fwrite(data, 1, size)` and close it with `defer stream.fclose()`. `stream.freopen(path, mode)` mutates the handle and returns `0` on success or a nonzero error code. Closing clears the stream pointer without freeing the wrapper value. `stdio_t` preserves the older static C-style API taking raw `FILE*`; `var_io_t` groups process-global console and string-buffer formatting helpers. Ownership annotations do not enforce lifetimes, and custom stream buffers remain caller-owned. See the [I/O specification](../documentation/spec/stdlib/IO.SPEC.md) and run `cpc test stdlib/tests/io.cp`.
+`io/file.cp` separates `stream_t` (receiver-based `FILE*` operations and explicit `STREAM_OWNED`/`STREAM_BORROWED` close policy), `file_t` (open and temporary-file factories), and `path_t` (remove/rename). `var_io_t.standard()` creates borrowed stdin/stdout/stderr stream wrappers, and its instance methods use those configured fields. `format_t` handles buffer-based formatting/parsing. `stdio_t` remains the raw static compatibility/reference API. Ownership is conventional rather than compiler-enforced; do not copy owned stream values. See the [I/O specification](../documentation/spec/stdlib/IO.SPEC.md) and run `cpc test stdlib/tests/io.cp`.
 
 ## Examples and tests
 
