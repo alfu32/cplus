@@ -183,11 +183,15 @@ int main(void) {
 
 Available domains are `core`, `input`, `gestures`, `camera`, `draw`, `shapes`, `textures`, `text`, `models`, `audio`, `resources`, `math` (`raymath.h`), and `low_level` (`rlgl.h`). Every module includes `<raylib.h>`; math and low-level rendering also include their companion headers. Use the native structs, enums, constants, and functions directly; resource lifetime follows Raylib's `Unload*` contracts. See the [Raylib standard-library specification](../documentation/spec/stdlib/RAYLIB.SPEC.md) for the module inventory and resource notes.
 
-The standalone `rcamera.h` and `rgestures.h` are not staged consistently across targets, so their functions are exposed through `<raylib.h>`. Raylib headers and libraries are target-specific; C-plus selects the matching bundled header and archive when using an embedded payload without a custom `--sysroot`. Explicitly link Raylib and platform libraries. For Linux, for example:
+The standalone `rcamera.h` and `rgestures.h` are not staged consistently across targets, so their functions are exposed through `<raylib.h>`. Raylib headers and libraries are target-specific; C-plus selects the matching bundled header and archive when using an embedded payload without a custom `--sysroot`. Explicitly link Raylib and platform libraries. For a directly runnable Linux desktop build, transcode and link with the host C compiler and host Raylib development package:
 
 ```sh
-cpc run stdlib/examples/raylib_hello.cp -dynamic -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXinerama -lXcursor -lXi
+cpc transcode stdlib/examples/raylib_hello.cp -o raylib-hello.c
+cc raylib-hello.c -o raylib-hello \
+  -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXinerama -lXcursor -lXi
 ```
+
+The embedded Linux TinyCC sysroot supplies the Raylib static archive and link-time headers, but its dynamic output needs the target musl loader and a compatible graphics runtime; it is not a self-contained desktop runtime. `-static` is not a workaround because the bundled sysroot has `libGL.so` but no `libGL.a`. For local desktop execution, use the host compiler and host Raylib/graphics stack as above.
 
 The headless test suite exercises `raymath.h` and links the example on Linux x86-64; it does not open a window or initialize audio. See [`examples/raylib_hello.cp`](examples/raylib_hello.cp) and run `cpc test stdlib/tests/raylib_math.cp`.
 

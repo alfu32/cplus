@@ -1,4 +1,5 @@
 comptime import "stdlib:/graphics/raylib.cp";
+comptime flags -lGL -lm -lpthread -ldl -lrt -lXrandr -lXinerama -lXcursor -lXi -lraylib;
 
 #include <stdbool.h>
 #include <stdint.h>

@@ -163,6 +163,17 @@ Ordinary paths are relative to the importing file. Stable `stdlib:/path` and `mo
 
 For unchanged C implementation files, `@import("fixture.c")` instead resolves the path and emits an absolute `#include` directive. The C file is processed by the C preprocessor/compiler rather than the comptime evaluator. `#include "fixture.c"` remains equally valid and is the direct C spelling.
 
+### Compiler flags
+
+Use a top-level `comptime flags` directive to attach compiler/linker arguments to a C-plus translation unit:
+
+```c
+comptime import "stdlib:/graphics/raylib.cp";
+comptime flags -lGL -lm -lpthread -ldl -lrt -lXrandr -lXinerama -lXcursor -lXi -lraylib;
+```
+
+Arguments are split into tokens (quoted arguments may contain spaces); the directive ends at a semicolon or line ending. C comments and backslash-newline continuation are supported. Flags from imported C-plus modules are collected before the importing file's flags, then exact duplicate tokens are removed while retaining first-seen order. `compile`, `run`, and `test` pass the collected tokens to TinyCC, whether embedded or externally installed. `transcode` writes one informational `/* cplus compiler flags: ... */` line into generated C; a separate C compiler does not interpret that comment, so pass those flags to it yourself. C has no portable source directive for requesting linker arguments; `#pragma comment(lib, ...)` is a compiler-specific alternative, not C-plus behavior. Choose platform-appropriate flags explicitly.
+
 ### Types, generics, and reflection
 
 `type` is the preferred type-value keyword; legacy `@type` remains accepted. It can be used as a generic parameter and inside comptime reflection. This legacy generic declaration remains accepted:

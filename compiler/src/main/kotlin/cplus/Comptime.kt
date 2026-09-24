@@ -68,7 +68,7 @@ internal class ComptimeCompiler(
                 )
             )
         }
-        return ComptimeCompilation(runtime, resolvedTests)
+        return ComptimeCompilation(runtime, resolvedTests, result.compilerOptions)
     }
 
     private fun compileModule(source: SourceFile, stack: ArrayDeque<Path>): ComptimeModuleResult {
@@ -87,6 +87,7 @@ internal class ComptimeCompiler(
         try {
             val environment = ComptimeEnvironment()
             val importedModules = linkedMapOf<String, ComptimeModuleResult>()
+            val compilerOptions = mutableListOf<String>()
             val seenSources = mutableSetOf<String>()
             var mapped = MappedText.identity(source)
 
@@ -112,6 +113,9 @@ internal class ComptimeCompiler(
                         item.source,
                         item.bodyStart
                     )
+                }
+                parsed.items.filterIsInstance<ComptimeFlags>().forEach { item ->
+                    compilerOptions += item.options
                 }
                 environment.registerRuntimeTypes(passSource)
                 parsed.items.filterIsInstance<ComptimeImport>().forEach { item ->
@@ -150,7 +154,8 @@ internal class ComptimeCompiler(
                             environment,
                             next,
                             key?.toString() ?: "<input:${source.name}>",
-                            importedModules.values.toList()
+                            importedModules.values.toList(),
+                            compilerOptions.distinct()
                         )
                         if (key != null) modules[key] = result
                         return result
@@ -333,6 +338,7 @@ internal class ComptimeCompiler(
             val replacement = try {
                 when (item) {
                     is ComptimeImport,
+                    is ComptimeFlags,
                     is ComptimeStruct,
                     is ComptimeValue,
                     is ComptimeFunction,
@@ -948,7 +954,8 @@ internal class ComptimeCompiler(
 
 internal data class ComptimeCompilation(
     val runtime: MappedText,
-    val tests: List<ComptimeTestBlock>
+    val tests: List<ComptimeTestBlock>,
+    val compilerOptions: List<String>
 )
 
 internal data class ComptimeTestBlock(
@@ -962,8 +969,22 @@ private data class ComptimeModuleResult(
     val environment: ComptimeEnvironment,
     val runtime: MappedText,
     val identity: String,
-    val runtimeDependencies: List<ComptimeModuleResult>
+    val runtimeDependencies: List<ComptimeModuleResult>,
+    val ownCompilerOptions: List<String>
 ) {
+    val compilerOptions: List<String>
+        get() {
+            val result = mutableListOf<String>()
+            val emitted = mutableSetOf<String>()
+            fun collect(module: ComptimeModuleResult) {
+                if (!emitted.add(module.identity)) return
+                module.runtimeDependencies.forEach(::collect)
+                result += module.ownCompilerOptions
+            }
+            collect(this)
+            return result.distinct()
+        }
+
     fun emitInto(output: MappedTextBuilder, emitted: MutableSet<String>) {
         if (!emitted.add(identity)) return
         runtimeDependencies.forEach { it.emitInto(output, emitted) }
@@ -990,6 +1011,13 @@ private data class ComptimeCImport(
     override val start: Int,
     override val end: Int,
     val path: String
+) : ComptimeItem
+
+private data class ComptimeFlags(
+    override val source: SourceFile,
+    override val start: Int,
+    override val end: Int,
+    val options: List<String>
 ) : ComptimeItem
 
 private data class ComptimeBlock(
@@ -1169,6 +1197,7 @@ private class ComptimeParser(private val source: SourceFile) {
         if (afterKeyword >= masked.length) throw syntax("incomplete comptime construct", source, at)
         if (masked[afterKeyword] == '{') return parseBlockAt(start, afterKeyword)
         if (isKeywordAt(masked, afterKeyword, "import")) return parseComptimeImport(start, afterKeyword)
+        if (isKeywordAt(masked, afterKeyword, "flags")) return parseComptimeFlags(start, afterKeyword)
 
         if (isKeywordAt(masked, afterKeyword, "typedef")) {
             val nameStart = skipWhitespace(masked, afterKeyword + "typedef".length)
@@ -1194,6 +1223,133 @@ private class ComptimeParser(private val source: SourceFile) {
         if (sigil != null) return parseFunctionOrValue(start, sigil)
 
         return parseComptimeValue(start, afterKeyword)
+    }
+
+    private fun parseComptimeFlags(start: Int, flagsAt: Int): ComptimeFlags {
+        val argumentsStart = skipHorizontalWhitespace(source.text, flagsAt + "flags".length)
+        val (arguments, end) = readFlagsDirective(argumentsStart)
+        val options = tokenizeFlags(arguments, argumentsStart)
+        if (options.isEmpty()) throw syntax("comptime flags requires at least one compiler argument", source, flagsAt)
+        return ComptimeFlags(source, start, end, options)
+    }
+
+    private fun skipHorizontalWhitespace(text: String, from: Int): Int {
+        var index = from
+        while (index < text.length && text[index] in setOf(' ', '\t', '\r')) index++
+        return index
+    }
+
+    /** Reads a directive through its line ending or semicolon, honoring quotes and C comments. */
+    private fun readFlagsDirective(from: Int): Pair<String, Int> {
+        val arguments = StringBuilder()
+        var index = from
+        var quote: Char? = null
+        while (index < source.text.length) {
+            val character = source.text[index]
+            if (quote != null) {
+                arguments.append(character)
+                if (character == '\\' && index + 1 < source.text.length) {
+                    arguments.append(source.text[index + 1])
+                    index += 2
+                    continue
+                }
+                if (character == quote) quote = null
+                index++
+                continue
+            }
+            if (character == '"' || character == '\'') {
+                quote = character
+                arguments.append(character)
+                index++
+                continue
+            }
+            if (character == '/' && source.text.getOrNull(index + 1) == '/') {
+                val newline = source.text.indexOf('\n', index)
+                return arguments.toString() to if (newline < 0) source.text.length else newline + 1
+            }
+            if (character == '/' && source.text.getOrNull(index + 1) == '*') {
+                val close = source.text.indexOf("*/", index + 2)
+                if (close < 0) throw syntax("unclosed comment in comptime flags", source, index)
+                arguments.append(' ')
+                index = close + 2
+                continue
+            }
+            if (character == '\n') {
+                val trimmed = arguments.toString().trimEnd()
+                if (trimmed.endsWith('\\')) {
+                    arguments.setLength(trimmed.length - 1)
+                    arguments.append(' ')
+                    index++
+                    continue
+                }
+                return arguments.toString() to index + 1
+            }
+            if (character == ';') return arguments.toString() to index + 1
+            arguments.append(character)
+            index++
+        }
+        return arguments.toString() to source.text.length
+    }
+
+    private fun tokenizeFlags(arguments: String, offset: Int): List<String> {
+        val options = mutableListOf<String>()
+        val token = StringBuilder()
+        var quote: Char? = null
+        var tokenStarted = false
+        var index = 0
+        while (index < arguments.length) {
+            val character = arguments[index]
+            if (quote != null) {
+                when {
+                    character == quote -> {
+                        quote = null
+                        tokenStarted = true
+                        index++
+                    }
+                    character == '\\' && index + 1 < arguments.length && arguments[index + 1] in setOf(quote, '\\') -> {
+                        token.append(arguments[index + 1])
+                        tokenStarted = true
+                        index += 2
+                    }
+                    else -> {
+                        token.append(character)
+                        tokenStarted = true
+                        index++
+                    }
+                }
+            } else when {
+                character == '"' || character == '\'' -> {
+                    quote = character
+                    tokenStarted = true
+                    index++
+                }
+                character.isWhitespace() -> {
+                    if (tokenStarted) {
+                        options += token.toString()
+                        token.setLength(0)
+                        tokenStarted = false
+                    }
+                    index++
+                }
+                character == '\\' && index + 1 < arguments.length &&
+                    (arguments[index + 1].isWhitespace() || arguments[index + 1] in setOf('"', '\'', '\\')) -> {
+                    token.append(arguments[index + 1])
+                    tokenStarted = true
+                    index += 2
+                }
+                else -> {
+                    token.append(character)
+                    tokenStarted = true
+                    index++
+                }
+            }
+        }
+        if (quote != null) throw syntax("unclosed quote in comptime flags", source, offset)
+        if (tokenStarted) options += token.toString()
+        if (options.any { option -> option.isEmpty() || option.any { it.isISOControl() } }) {
+            throw syntax("comptime flags arguments must be non-empty and contain no control characters", source, offset)
+        }
+        return options
     }
 
     private fun parseComptimeImport(start: Int, importAt: Int): ComptimeImport =

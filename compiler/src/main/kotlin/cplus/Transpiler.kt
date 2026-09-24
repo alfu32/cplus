@@ -51,7 +51,12 @@ class CPlusTranspiler {
             AllocationIntentAnalyzer().analyze(structs)
         }
         val emitted = logger.pass("emit-mapped-c") {
-            MappedEmitter(sourceFile).emit(structs, CPlusPreamble.text, allocationAnalysis)
+            MappedEmitter(sourceFile).emit(
+                structs,
+                CPlusPreamble.text,
+                allocationAnalysis,
+                comptime.compilerOptions
+            )
         }
         return TranscodedTestSource(emitted, input.fixtures.map { it.name }, input.fixtures)
     }

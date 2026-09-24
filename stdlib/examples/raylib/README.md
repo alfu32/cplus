@@ -11,17 +11,18 @@ Each loop drains Raylib's queued keyboard presses with `GetKeyPressed()`, sample
 | [`tetris.cp`](tetris.cp) | Left/right, down, Up/X rotate, Z reverse-rotate, Space hard drop, C hold. Includes line clears, levels, next/hold previews, and a landing ghost. |
 | [`game_2048.cp`](game_2048.cp) | Arrow keys/WASD or mouse swipe; R restarts. Includes 2/4 tile spawns, score, win, and no-moves states. |
 
-Build and run one game from the repository root (the link flags below are for Linux):
+For a directly runnable Linux desktop executable, transcode to C and link with the host C compiler and host Raylib development package (the link flags below are for Linux):
+
+The `.cp` examples declare their Linux link dependencies with `comptime flags`, so `cpc compile` and `cpc run` consume them automatically. The generated C also displays their consolidated flags in a comment for manual builds. This Linux-specific list is not suitable for other host platforms; use the platform's native Raylib dependencies there.
 
 ```sh
-./gradlew -Ptarget=linux-x86_64 :cli:fatJar
-java -jar cli/build/libs/c-plus.jar compile stdlib/examples/raylib/tetris.cp \
-  -o build/tetris -dynamic -lraylib -lGL -lm -lpthread -ldl -lrt \
+cpc transcode stdlib/examples/raylib/tetris.cp -o build/tetris.c
+cc build/tetris.c -o build/tetris -lraylib -lGL -lm -lpthread -ldl -lrt \
   -lX11 -lXrandr -lXinerama -lXcursor -lXi
 build/tetris
 build/tetris --self-test
 ```
 
-Use the corresponding source/output names for the other games. A windowing session is required to play; `--self-test` is headless. Raylib and platform link dependencies are selected for the compiler target, so non-Linux targets need their native Raylib link options instead of the Linux list above.
+Use the corresponding source/output names for the other games. A windowing session is required to play; `--self-test` is headless. This route needs Raylib headers and libraries installed for the host C compiler. The embedded Linux TinyCC payload can compile against its Raylib archive, but its dynamic output uses the bundled musl loader and still depends on a compatible graphics runtime; the sysroot is not a self-contained desktop runtime. In particular, `-static` cannot satisfy `-lGL` because the payload provides `libGL.so`, not `libGL.a`. Non-Linux hosts need their native Raylib link options and host compiler.
 
 Each `--self-test` runs deterministic rules checks before any window initialization. The checks cover Arkanoid collision/damage, Invaders movement/fire/hits, Tetris hold/placement/line clearing, and 2048 compression/merging/spawn behavior. The implementation order follows `games.md`: Arkanoid, Space Invaders, Tetris, then 2048.

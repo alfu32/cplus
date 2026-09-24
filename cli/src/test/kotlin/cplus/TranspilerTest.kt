@@ -282,6 +282,63 @@ class TranspilerTest {
     }
 
     @Test
+    fun comptimeFlagsAreCollectedDeduplicatedAndPassedToTcc() {
+        val directory = Files.createTempDirectory("cplus-comptime-flags")
+        try {
+            val imported = directory.resolve("graphics.cp")
+            val source = directory.resolve("main.cp")
+            Files.writeString(
+                imported,
+                "comptime flags -DIMPORT_FLAG=1 -lm\n"
+            )
+            Files.writeString(
+                source,
+                """comptime import "graphics.cp";
+                    |comptime flags -DLOCAL_FLAG=2 -lm
+                    |int main(void) {
+                    |    return IMPORT_FLAG != 1 || LOCAL_FLAG != 2;
+                    |}
+                    |@test "declared flags compile test fixtures" {
+                    |    @assert(IMPORT_FLAG == 1 && LOCAL_FLAG == 2);
+                    |}
+                """.trimMargin()
+            )
+
+            val transcoded = CPlusTranspiler().transpile(
+                Files.readString(source),
+                source.toString()
+            )
+            assertEquals(
+                listOf("-DIMPORT_FLAG=1", "-lm", "-DLOCAL_FLAG=2"),
+                transcoded.compilerOptions
+            )
+            assertEquals(
+                1,
+                transcoded.code.lines().count { it.startsWith("/* cplus compiler flags:") },
+                transcoded.code
+            )
+            assertTrue(
+                "/* cplus compiler flags: \"-DIMPORT_FLAG=1\" \"-lm\" \"-DLOCAL_FLAG=2\" */" in transcoded.code,
+                transcoded.code
+            )
+            assertFalse("comptime flags" in transcoded.code, transcoded.code)
+
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors)
+                .run(listOf("run", source.toString()))
+            assertEquals(0, status, errors.toString())
+
+            val testStatus = CPlusCli(output = StringBuilder(), errors = errors)
+                .run(listOf("test", source.toString()))
+            assertEquals(0, testStatus, errors.toString())
+        } finally {
+            Files.walk(directory).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+    }
+
+    @Test
     fun cliNewScaffoldsAProjectWithoutOverwritingExistingFiles() {
         val directory = Files.createTempDirectory("cplus-new-project")
         try {

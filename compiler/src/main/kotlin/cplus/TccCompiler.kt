@@ -36,22 +36,26 @@ class TccCompiler {
         options: List<String>,
         logger: CompilationLogger = SilentCompilationLogger
     ): TccCompilationResult = logger.pass("tcc-compile") {
+        val effectiveOptions = buildList {
+            addAll(options)
+            source.compilerOptions.forEach { option -> if (option !in this) add(option) }
+        }
         output.toAbsolutePath().parent?.let(Files::createDirectories)
         if (!hasEmbeddedRuntimeForCurrentPlatform()) {
-            return@pass compileWithExternalTcc(source, output, options)
+            return@pass compileWithExternalTcc(source, output, effectiveOptions)
         }
-        if (options.any { it == "--target" || it.startsWith("--target=") || it == "-lraylib" } ||
-            options.zipWithNext().any { (option, value) -> option == "-l" && value == "raylib" }
+        if (effectiveOptions.any { it == "--target" || it.startsWith("--target=") || it == "-lraylib" } ||
+            effectiveOptions.zipWithNext().any { (option, value) -> option == "-l" && value == "raylib" }
         ) {
-            return@pass compileWithEmbeddedTccCli(source, output, options)
+            return@pass compileWithEmbeddedTccCli(source, output, effectiveOptions)
         }
 
         val rawDiagnostics = StringBuilder()
         val diagnostics = DiagnosticListener { message -> rawDiagnostics.append(message) }
-        val nativeOptions = if (isLinuxHost() && options.none { it == "-static" || it == "-dynamic" || it == "-shared" }) {
-            options + "-static"
+        val nativeOptions = if (isLinuxHost() && effectiveOptions.none { it == "-static" || it == "-dynamic" || it == "-shared" }) {
+            effectiveOptions + "-static"
         } else {
-            options
+            effectiveOptions
         }
         val optionString = nativeOptions.joinToString(" ", transform = ::quoteOption)
         val exitCode = TinyCC.compile(

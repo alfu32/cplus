@@ -197,7 +197,8 @@ data class TranscodedSource(
     val code: String,
     val sourceFile: SourceFile,
     val sourceMap: SourceMap,
-    val allocationAnalysis: AllocationAnalysisResult = AllocationAnalysisResult()
+    val allocationAnalysis: AllocationAnalysisResult = AllocationAnalysisResult(),
+    val compilerOptions: List<String> = emptyList()
 )
 
 /** Emits C-plus text and inserts compiler-visible source locations at mapped line boundaries. */
@@ -205,11 +206,18 @@ class MappedEmitter(private val sourceFile: SourceFile) {
     fun emit(
         mapped: MappedText,
         prelude: String,
-        allocationAnalysis: AllocationAnalysisResult = AllocationAnalysisResult()
+        allocationAnalysis: AllocationAnalysisResult = AllocationAnalysisResult(),
+        compilerOptions: List<String> = emptyList()
     ): TranscodedSource {
         val output = StringBuilder(prelude)
+        val uniqueCompilerOptions = compilerOptions.distinct()
+        if (uniqueCompilerOptions.isNotEmpty()) {
+            output.append("/* cplus compiler flags: ")
+                .append(uniqueCompilerOptions.joinToString(" ", transform = ::commentSafeOption))
+                .append(" */\n")
+        }
         val entries = mutableListOf<SourceMapEntry>()
-        var physicalLine = prelude.count { it == '\n' } + 1
+        var physicalLine = output.count { it == '\n' } + 1
         var previousSourceLine: Int? = null
         var previousSourceFile: String? = null
         var cursor = 0
@@ -247,7 +255,25 @@ class MappedEmitter(private val sourceFile: SourceFile) {
             cursor = end
         }
 
-        return TranscodedSource(output.toString(), sourceFile, SourceMap(entries), allocationAnalysis)
+        return TranscodedSource(
+            output.toString(), sourceFile, SourceMap(entries), allocationAnalysis, uniqueCompilerOptions
+        )
+    }
+
+    private fun commentSafeOption(option: String): String = buildString {
+        append('"')
+        option.forEach { character ->
+            when (character) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                '/' -> if (lastOrNull() == '*') append("\\/") else append(character)
+                else -> append(character)
+            }
+        }
+        append('"')
     }
 
     private fun escapeFile(file: String): String = file

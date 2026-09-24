@@ -58,17 +58,20 @@ This is an inventory, not a second C-plus type system. The imported headers rema
 
 Raylib's matching `Unload*` functions define resource lifetimes. In particular, release sound aliases with `UnloadSoundAlias`; model-owned meshes/materials must not be unloaded separately; and `VrStereoConfig` has its own unload function. C-plus ownership annotations are hints, not enforced move semantics.
 
+Raylib link dependencies are declared by the application, not the facade modules. A top-level `comptime flags -lraylib ...;` declaration is forwarded by `cpc compile`, `run`, and `test`; the game examples currently list Linux/X11 dependencies and require different flags on other platforms.
+
 Raylib also distributes `raymath.h` and `rlgl.h`. Standalone `rcamera.h` and `rgestures.h` are not staged consistently across targets, so the domain modules use declarations from `raylib.h` instead. The payload does not include raygui/ImGui, networking, or a TUI.
 
 ## Build and Test
 
 Import only the domain needed, or use `stdlib:/graphics/raylib.cp`. The native headers and library must exist in the selected TinyCC payload or external compiler environment. When using an embedded target payload without a custom `--sysroot`, C-plus adds that target's bundled Raylib headers and resolves `-lraylib` to its bundled archive. An explicit `--sysroot` remains authoritative. Raylib and platform dependencies are not linked automatically.
 
-The Linux example link command is:
+For a directly runnable Linux desktop executable, transcode and link with the host compiler and host Raylib development package:
 
 ```sh
-cpc compile stdlib/examples/raylib_hello.cp -o raylib-hello -dynamic \
+cpc transcode stdlib/examples/raylib_hello.cp -o raylib-hello.c
+cc raylib-hello.c -o raylib-hello \
   -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXinerama -lXcursor -lXi
 ```
 
-Run `cpc test stdlib/tests/raylib_math.cp` for headless checks of native `raymath.h` operations. `./gradlew :cli:test` also checks umbrella expansion and links the example against the bundled Linux archive when running on Linux x86-64. It does not open a window or initialize audio. macOS SDK and display/device runtime requirements remain host responsibilities.
+The embedded Linux TinyCC payload provides `libraylib.a` and headers for compilation, but its dynamic output uses a bundled musl loader and the graphics stack still has host runtime dependencies. The sysroot is not a self-contained desktop runtime: its `libGL.so` requires further Mesa/X11 runtime libraries, and `-static` cannot link `-lGL` because no `libGL.a` is bundled. For local desktop execution, use the host compiler and host graphics stack as above. `cpc test stdlib/tests/raylib_math.cp` covers headless `raymath.h` operations; `./gradlew :cli:test` checks umbrella expansion and links against the bundled Linux archive without opening a window. macOS SDK and display/device runtime requirements remain host responsibilities.

@@ -20,6 +20,8 @@ cplus --stdlib directory <subcommand> ...
 
 `run` compiles first and then executes the generated executable, inheriting its standard input, output, and error streams.
 
+Top-level `comptime flags` declarations in the source and its comptime imports are added to the compiler arguments for `compile`, `run`, and `test`. Duplicate source-declared arguments are removed in dependency-first, first-seen order. `transcode` includes the consolidated arguments as an informational comment in generated C; when compiling that C separately, provide the arguments to the C compiler explicitly. C has no portable linker-flags directive.
+
 `test` compiles and runs all `@test` blocks in the input files. Source paths must come first; any following arguments are exact, case-sensitive test-name filters. The shell may expand file globs before invoking C-plus:
 
 ```sh
