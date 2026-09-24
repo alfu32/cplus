@@ -31,11 +31,11 @@ class CPlusTranspiler {
         val input = if (testMode) {
             logger.pass("collect-tests") { testProgram(comptime.runtime, comptime.tests) }
         } else {
-            comptime.runtime to emptyList()
+            TestProgram(comptime.runtime, emptyList())
         }
 
         val deferred = logger.pass("lower-defer-statements") {
-            DeferLowerer().lower(input.first)
+            DeferLowerer().lower(input.source)
         }
 
         val typeNames = logger.pass("collect-struct-types") {
@@ -53,18 +53,20 @@ class CPlusTranspiler {
         val emitted = logger.pass("emit-mapped-c") {
             MappedEmitter(sourceFile).emit(structs, CPlusPreamble.text, allocationAnalysis)
         }
-        return TranscodedTestSource(emitted, input.second)
+        return TranscodedTestSource(emitted, input.fixtures.map { it.name }, input.fixtures)
     }
 
     private fun testProgram(
         runtime: MappedText,
         tests: List<ComptimeTestBlock>
-    ): Pair<MappedText, List<String>> {
-        if (tests.isEmpty()) return runtime to emptyList()
+    ): TestProgram {
+        if (tests.isEmpty()) return TestProgram(runtime, emptyList())
 
         val assertions = tests.map { test -> testAssertions(test.body) }
         val assertionTotal = assertions.sumOf { it.size }
-        var nextAssertionNumber = 1
+        val fixtures = tests.mapIndexed { index, test ->
+            TranscodedTestFixture(test.name, assertions[index].size)
+        }
 
         val output = MappedTextBuilder()
         output.appendGenerated("#define main cplus_test_original_main\n")
@@ -73,8 +75,10 @@ class CPlusTranspiler {
         output.appendGenerated(
             """
             #undef main
+            #include <limits.h>
             #include <stddef.h>
             #include <stdio.h>
+            #include <stdlib.h>
             #include <string.h>
             enum {
                 CPLUS_TEST_VALUE_BYTES,
@@ -144,12 +148,26 @@ class CPlusTranspiler {
                     default: cplus_test_print_bytes(stream, value, size); return;
                 }
             }
+            static int cplus_test_assertion_offset = 0;
+            static int cplus_test_assertion_total = 0;
+            static int cplus_test_fixture_offset = 0;
+            static int cplus_test_fixture_total = 0;
+            static int cplus_test_environment_int(const char* name, int fallback) {
+                const char* value = getenv(name);
+                if (value == NULL || *value == '\0') return fallback;
+                char* end = NULL;
+                long parsed = strtol(value, &end, 10);
+                if (end == value || *end != '\0' || parsed < 0 || parsed > INT_MAX) return fallback;
+                return (int)parsed;
+            }
             static void cplus_test_print_assert_status(int number, int total, const char* name, const char* input, int passed) {
                 fprintf(stdout, "%s%s [%d/%d] %s [%s]\033[0m\n",
                     passed ? "\033[1;32m" : "\033[1;31m", name, number, total, input, passed ? "PASS" : "FAIL");
             }
             static void cplus_test_report_assert(int number, int total, const char* expression, _Bool given, const char* file, int line) {
-                cplus_test_print_assert_status(number, total, "@assert", expression, given);
+                cplus_test_print_assert_status(number + cplus_test_assertion_offset,
+                    cplus_test_assertion_total > 0 ? cplus_test_assertion_total : total,
+                    "@assert", expression, given);
                 fputs("    given: ", stdout);
                 cplus_test_print_value(stdout, &given, sizeof given, CPLUS_TEST_VALUE_KIND(given));
                 fputs("\n    expected: true\n", stdout);
@@ -172,7 +190,9 @@ class CPlusTranspiler {
                 int passed, const char* file, int line) {
                 char input[1024];
                 snprintf(input, sizeof input, "%s, %s", expected_expression, given_expression);
-                cplus_test_print_assert_status(number, total, "@assertEquals", input, passed);
+                cplus_test_print_assert_status(number + cplus_test_assertion_offset,
+                    cplus_test_assertion_total > 0 ? cplus_test_assertion_total : total,
+                    "@assertEquals", input, passed);
                 fputs("    given: ", stdout);
                 cplus_test_print_value(stdout, given, given_size, given_kind);
                 fputs("\n    expected: ", stdout);
@@ -199,8 +219,7 @@ class CPlusTranspiler {
 
         tests.forEachIndexed { index, test ->
             output.appendGenerated("static int cplus_test_$index(void) {\n")
-            output.append(lowerTestAssertions(test.body, assertions[index], nextAssertionNumber, assertionTotal))
-            nextAssertionNumber += assertions[index].size
+            output.append(lowerTestAssertions(test.body, assertions[index], 1, assertions[index].size))
             if (test.body.text.isNotEmpty() && !test.body.text.endsWith('\n')) output.appendGenerated("\n")
             output.appendGenerated("    return 0;\n}\n\n")
         }
@@ -218,6 +237,12 @@ class CPlusTranspiler {
             int main(int argc, char** argv) {
                 int selected = 0;
                 int failed = 0;
+                int assertions_before_selected = 0;
+                int file_assertion_offset = cplus_test_environment_int("CPLUS_TEST_ASSERTION_OFFSET", 0);
+                cplus_test_assertion_offset = file_assertion_offset;
+                cplus_test_assertion_total = cplus_test_environment_int("CPLUS_TEST_ASSERTION_TOTAL", $assertionTotal);
+                cplus_test_fixture_offset = cplus_test_environment_int("CPLUS_TEST_FIXTURE_OFFSET", 0);
+                cplus_test_fixture_total = cplus_test_environment_int("CPLUS_TEST_FIXTURE_TOTAL", ${tests.size});
             """.trimIndent() + "\n"
         )
         tests.forEachIndexed { index, test ->
@@ -226,11 +251,14 @@ class CPlusTranspiler {
                 """
                 if (cplus_test_requested($literal, argc, argv)) {
                     selected++;
-                    printf("\n\033[1;33m========== BEGIN TEST ${index + 1}/${tests.size}: %s ==========\033[0m\n", $literal);
+                    int fixture_number = cplus_test_fixture_offset + selected;
+                    cplus_test_assertion_offset = file_assertion_offset + assertions_before_selected;
+                    printf("\n\033[1;33m========== BEGIN TEST %d/%d: %s ==========\033[0m\n", fixture_number, cplus_test_fixture_total, $literal);
                     fflush(stdout);
                     int result = cplus_test_$index();
-                    printf("========== END TEST ${index + 1}/${tests.size}: %s [%s%s\033[0m] ==========\n", $literal, result == 0 ? "\033[1;32m" : "\033[1;31m", result == 0 ? "PASS" : "FAIL");
+                    printf("========== END TEST %d/%d: %s [%s%s\033[0m] ==========\n", fixture_number, cplus_test_fixture_total, $literal, result == 0 ? "\033[1;32m" : "\033[1;31m", result == 0 ? "PASS" : "FAIL");
                     if (result != 0) failed++;
+                    assertions_before_selected += ${assertions[index].size};
                 }
                 """.trimIndent() + "\n"
             )
@@ -246,8 +274,10 @@ class CPlusTranspiler {
             }
             """.trimIndent() + "\n"
         )
-        return output.build() to tests.map { it.name }
+        return TestProgram(output.build(), fixtures)
     }
+
+    private data class TestProgram(val source: MappedText, val fixtures: List<TranscodedTestFixture>)
 
     private fun testAssertions(body: MappedText): List<TestAssertionInvocation> {
         val masked = SourceMasker.mask(body.text)
@@ -373,7 +403,13 @@ class CPlusTranspiler {
     }
 }
 
-data class TranscodedTestSource(val source: TranscodedSource, val testNames: List<String>)
+data class TranscodedTestSource(
+    val source: TranscodedSource,
+    val testNames: List<String>,
+    val fixtures: List<TranscodedTestFixture>
+)
+
+data class TranscodedTestFixture(val name: String, val assertionCount: Int)
 
 class CPlusSyntaxException(
     message: String,

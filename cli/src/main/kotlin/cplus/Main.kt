@@ -139,13 +139,27 @@ class CPlusCli(
             return 2
         }
 
+        val selectedFixtures = compiledSources.map { compiled ->
+            compiled.transcoded.fixtures.filter { requestedNames.isEmpty() || it.name in requestedNames }
+        }
+        val totalFixtures = selectedFixtures.sumOf { it.size }
+        val totalAssertions = selectedFixtures.sumOf { fixtures -> fixtures.sumOf { it.assertionCount } }
         val temporaryDirectory = Files.createTempDirectory("cplus-tests-")
         var failed = 0
+        val reports = mutableListOf<TestFileReport>()
+        var fixtureOffset = 0
+        var assertionOffset = 0
         try {
             compiledSources.forEachIndexed { index, compiled ->
-                if (requestedNames.isNotEmpty() && compiled.transcoded.testNames.none { it in requestedNames }) {
+                val fixtures = selectedFixtures[index]
+                if (fixtures.isEmpty()) {
                     return@forEachIndexed
                 }
+                val currentFixtureOffset = fixtureOffset
+                val currentAssertionOffset = assertionOffset
+                fixtureOffset += fixtures.size
+                assertionOffset += fixtures.sumOf { it.assertionCount }
+
                 val executable = temporaryDirectory.resolve("test-$index")
                 val options = buildList {
                     compiled.path.parent?.let { add("-I$it") }
@@ -157,6 +171,7 @@ class CPlusCli(
                 result.diagnostics.forEach(::printDiagnostic)
                 if (result.exitCode != 0) {
                     failed++
+                    reports += TestFileReport(compiled.path, fixtures.size, fixtures.sumOf { it.assertionCount }, "COMPILE FAIL")
                     return@forEachIndexed
                 }
 
@@ -164,9 +179,18 @@ class CPlusCli(
                     add(executable.toAbsolutePath().normalize().toString())
                     addAll(requestedNames)
                 }
-                val exitCode = logger.pass("run-tests") {
-                    ProcessBuilder(command).inheritIO().start().waitFor()
+                val processBuilder = ProcessBuilder(command).inheritIO()
+                processBuilder.environment().apply {
+                    put("CPLUS_TEST_FIXTURE_OFFSET", currentFixtureOffset.toString())
+                    put("CPLUS_TEST_FIXTURE_TOTAL", totalFixtures.toString())
+                    put("CPLUS_TEST_ASSERTION_OFFSET", currentAssertionOffset.toString())
+                    put("CPLUS_TEST_ASSERTION_TOTAL", totalAssertions.toString())
                 }
+                val exitCode = logger.pass("run-tests") {
+                    processBuilder.start().waitFor()
+                }
+                val fileStatus = if (exitCode == 0) "PASS" else "FAIL"
+                reports += TestFileReport(compiled.path, fixtures.size, fixtures.sumOf { it.assertionCount }, fileStatus)
                 if (exitCode != 0) failed++
             }
         } finally {
@@ -174,7 +198,37 @@ class CPlusCli(
                 paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
             }
         }
+        printTestAggregateReport(reports, totalFixtures, totalAssertions, failed)
         return if (failed == 0) 0 else 1
+    }
+
+    private fun printTestAggregateReport(
+        reports: List<TestFileReport>,
+        totalFixtures: Int,
+        totalAssertions: Int,
+        failedFiles: Int
+    ) {
+        output.append("\n========== AGGREGATE TEST REPORT ==========\n")
+        output.append("FILE | FIXTURES | ASSERTS | RESULT\n")
+        reports.forEach { report ->
+            val path = displayTestPath(report.path)
+            val result = if (report.status == "PASS") {
+                "\u001B[1;32mPASS\u001B[0m"
+            } else {
+                "\u001B[1;31m${report.status}\u001B[0m"
+            }
+            output.append("$path | ${report.fixtureCount} | ${report.assertionCount} | $result\n")
+        }
+        val overallStatus = if (failedFiles == 0) "\u001B[1;32mPASS\u001B[0m" else "\u001B[1;31mFAIL\u001B[0m"
+        output.append(
+            "$overallStatus TOTAL: ${reports.size} files, $totalFixtures fixtures, " +
+                "$totalAssertions asserts, $failedFiles failed files\n"
+        )
+    }
+
+    private fun displayTestPath(path: Path): String {
+        val workingDirectory = Path("").toAbsolutePath().normalize()
+        return if (path.startsWith(workingDirectory)) workingDirectory.relativize(path).toString() else path.toString()
     }
 
     private fun isCPlusSource(argument: String): Boolean =
@@ -311,5 +365,12 @@ empty macros: pub, priv, mut, borrowed, owned, and stat.
         val path: Path,
         val transcoded: TranscodedTestSource,
         val importPaths: CPlusImportPaths
+    )
+
+    private data class TestFileReport(
+        val path: Path,
+        val fixtureCount: Int,
+        val assertionCount: Int,
+        val status: String
     )
 }

@@ -116,6 +116,49 @@ class TranspilerTest {
     }
 
     @Test
+    fun cliTestAggregatesSelectedFixturesAndAssertionsAcrossFiles() {
+        val directory = Files.createTempDirectory("cplus-test-aggregate")
+        try {
+            val first = directory.resolve("first.cp")
+            val second = directory.resolve("second.cp")
+            Files.writeString(
+                first,
+                """
+                    @test "not selected" {
+                        @assert(0);
+                    }
+                    @test "alpha" {
+                        @assert(1 == 1);
+                        @assertEquals(2, 2);
+                    }
+                """.trimIndent()
+            )
+            Files.writeString(
+                second,
+                """
+                    @test "beta" {
+                        @assertEquals(3, 3);
+                    }
+                """.trimIndent()
+            )
+            val output = StringBuilder()
+            val errors = StringBuilder()
+            val status = CPlusCli(output = output, errors = errors).run(
+                listOf("test", first.toString(), second.toString(), "alpha", "beta")
+            )
+
+            assertEquals(0, status, errors.toString())
+            assertTrue("first.cp | 1 | 2 |" in output, output.toString())
+            assertTrue("second.cp | 1 | 1 |" in output, output.toString())
+            assertTrue("TOTAL: 2 files, 2 fixtures, 3 asserts, 0 failed files" in output, output.toString())
+        } finally {
+            Files.walk(directory).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+    }
+
+    @Test
     fun cliResolvesProjectAndStandardLibraryImportsFromManifest() {
         val directory = Files.createTempDirectory("cplus-project-imports")
         try {
@@ -211,7 +254,9 @@ class TranspilerTest {
         assertTrue("cplus_test_print_value(stdout" in generated, generated)
         assertTrue("CPLUS_TEST_ASSERT_EQUALS_AT(number, total, expected, given)" in generated, generated)
         assertTrue("passed ? \"\\033[1;32m\" : \"\\033[1;31m\"" in generated, generated)
-        assertTrue("BEGIN TEST 1/1: %s" in generated, generated)
+        assertTrue("CPLUS_TEST_FIXTURE_OFFSET" in generated, generated)
+        assertTrue("CPLUS_TEST_ASSERTION_OFFSET" in generated, generated)
+        assertTrue("BEGIN TEST %d/%d: %s" in generated, generated)
         assertTrue("\\033[1;33m========== BEGIN TEST" in generated, generated)
         assertTrue("\\033[1;32m" in generated, generated)
         assertTrue("\\033[1;31m" in generated, generated)
