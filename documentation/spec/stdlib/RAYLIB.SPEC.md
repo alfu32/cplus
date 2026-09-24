@@ -58,7 +58,7 @@ This is an inventory, not a second C-plus type system. The imported headers rema
 
 Raylib's matching `Unload*` functions define resource lifetimes. In particular, release sound aliases with `UnloadSoundAlias`; model-owned meshes/materials must not be unloaded separately; and `VrStereoConfig` has its own unload function. C-plus ownership annotations are hints, not enforced move semantics.
 
-Raylib link dependencies are declared by the application, not the facade modules. A top-level `comptime flags -lraylib ...;` declaration is forwarded by `cpc compile`, `run`, and `test`; the game examples currently list Linux/X11 dependencies and require different flags on other platforms.
+Raylib link dependencies are declared by the application, not the facade modules. `comptime flags` declarations are forwarded by `cpc compile`, `run`, and `test`; the game examples use the comptime `os` value with `@if`/`@else if` to select Linux/X11, Windows, or macOS dependencies. The target compiler/sysroot still needs to provide the selected Raylib library and platform dependencies.
 
 Raylib also distributes `raymath.h` and `rlgl.h`. Standalone `rcamera.h` and `rgestures.h` are not staged consistently across targets, so the domain modules use declarations from `raylib.h` instead. The payload does not include raygui/ImGui, networking, or a TUI.
 

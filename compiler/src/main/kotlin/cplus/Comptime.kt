@@ -27,7 +27,8 @@ private val primitiveTypes = primitiveSizes.keys + setOf("void", "bool", "size_t
 internal class ComptimeCompiler(
     private val root: SourceFile,
     private val logger: CompilationLogger,
-    private val importPaths: CPlusImportPaths = CPlusImportPaths()
+    private val importPaths: CPlusImportPaths = CPlusImportPaths(),
+    private val targetOs: String = CPlusTarget.hostOs()
 ) {
     private companion object {
         const val MAX_IMPORT_MODULES = 256
@@ -85,7 +86,9 @@ internal class ComptimeCompiler(
             stack.addLast(key)
         }
         try {
-            val environment = ComptimeEnvironment()
+            val environment = ComptimeEnvironment().apply {
+                values["os"] = CtString(CPlusTarget.normalizeOs(targetOs))
+            }
             val importedModules = linkedMapOf<String, ComptimeModuleResult>()
             val compilerOptions = mutableListOf<String>()
             val seenSources = mutableSetOf<String>()
@@ -155,7 +158,7 @@ internal class ComptimeCompiler(
                             next,
                             key?.toString() ?: "<input:${source.name}>",
                             importedModules.values.toList(),
-                            compilerOptions.distinct()
+                            CompilerOptions.distinct(compilerOptions)
                         )
                         if (key != null) modules[key] = result
                         return result
@@ -367,12 +370,14 @@ internal class ComptimeCompiler(
         val masked = SourceMasker.mask(body)
         var cursor = 0
         splitTopLevelStatements(body, masked).forEach { range ->
-            val statement = body.substring(range.first, range.last + 1).trim()
+            val rawStatement = body.substring(range.first, range.last + 1)
+            val leadingWhitespace = rawStatement.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0)
+            val statement = rawStatement.trim()
             if (statement.isEmpty()) return@forEach
-            val statementOffset = block.bodyStart + range.first
+            val statementOffset = block.bodyStart + range.first + leadingWhitespace
             if (statement.startsWith("@for ")) {
                 output.append(evaluateFor(statement, block.source, statementOffset, environment))
-            } else if (statement.startsWith("@if ")) {
+            } else if (Regex("^@if(?:\\s|\\()").containsMatchIn(statement)) {
                 output.append(evaluateIf(statement, block.source, statementOffset, environment))
             } else {
                 val expression = statement.removeSuffix(";").trim()
@@ -414,15 +419,100 @@ internal class ComptimeCompiler(
         offset: Int,
         environment: ComptimeEnvironment
     ): MappedText {
-        val match = Regex("@if\\s*\\((.*?)\\)\\s*\\{([\\s\\S]*)\\}(?:\\s*@else\\s*\\{([\\s\\S]*)\\})?\\s*;?")
-            .matchEntire(statement)
-            ?: throw syntax("malformed comptime @if", source, offset)
-        val condition = evaluateExpression(match.groupValues[1], environment, source, offset)
-        val selected = if (condition.asBoolean()) match.groupValues[2] else match.groupValues[3]
-        val expression = selected.trim().removeSuffix(";").trim()
+        val branches = parseConditionalBranches(statement, source, offset)
+        val selected = branches.firstOrNull { branch ->
+            branch.condition == null || evaluateExpression(
+                branch.condition,
+                environment,
+                source,
+                branch.conditionOffset
+            ).asBoolean()
+        } ?: return MappedText.generated("")
+
+        val selectedSource = statement.substring(selected.bodyStart, selected.bodyEnd)
+        val maskedBody = SourceMasker.mask(selectedSource).trim()
+        if (Regex("\\bcomptime\\s+flags\\b").containsMatchIn(maskedBody)) {
+            return MappedText.identity(source).slice(offset + selected.bodyStart, offset + selected.bodyEnd)
+        }
+
+        val expression = selectedSource.trim().removeSuffix(";").trim()
         if (expression.isEmpty()) return MappedText.generated("")
-        val value = evaluateExpression(expression, environment, source, offset)
+        val value = evaluateExpression(expression, environment, source, offset + selected.bodyStart)
         return if (value is CtEntity) value.text else MappedText.generated("")
+    }
+
+    private fun parseConditionalBranches(
+        statement: String,
+        source: SourceFile,
+        offset: Int
+    ): List<ComptimeIfBranch> {
+        val masked = SourceMasker.mask(statement)
+        var cursor = skipWhitespace(masked, 0)
+        if (!isKeywordAt(masked, cursor, "@if")) throw syntax("malformed comptime @if", source, offset)
+        cursor += "@if".length
+        val branches = mutableListOf<ComptimeIfBranch>()
+
+        fun parseConditionAndBody(afterIf: Int): Pair<ComptimeIfBranch, Int> {
+            val openParen = skipWhitespace(masked, afterIf)
+            if (openParen >= masked.length || masked[openParen] != '(') {
+                throw syntax("expected '(' after comptime if", source, offset + openParen)
+            }
+            val closeParen = Delimiters.match(masked, openParen, '(', ')')
+            if (closeParen < 0) throw syntax("unclosed comptime if condition", source, offset + openParen)
+            val openBrace = skipWhitespace(masked, closeParen + 1)
+            if (openBrace >= masked.length || masked[openBrace] != '{') {
+                throw syntax("expected '{' after comptime if condition", source, offset + openBrace)
+            }
+            val closeBrace = Delimiters.match(masked, openBrace, '{', '}')
+            if (closeBrace < 0) throw syntax("unclosed comptime if branch", source, offset + openBrace)
+            return ComptimeIfBranch(
+                statement.substring(openParen + 1, closeParen),
+                offset + openParen + 1,
+                openBrace + 1,
+                closeBrace
+            ) to closeBrace + 1
+        }
+
+        val (first, firstEnd) = parseConditionAndBody(cursor)
+        branches += first
+        cursor = firstEnd
+        while (true) {
+            cursor = skipWhitespace(masked, cursor)
+            if (cursor == masked.length) return branches
+            if (masked[cursor] == ';') {
+                cursor = skipWhitespace(masked, cursor + 1)
+                if (cursor == masked.length) return branches
+            }
+            if (!isKeywordAt(masked, cursor, "@else")) {
+                throw syntax("expected @else or end of comptime if chain", source, offset + cursor)
+            }
+            cursor = skipWhitespace(masked, cursor + "@else".length)
+            if (isKeywordAt(masked, cursor, "if")) {
+                cursor += "if".length
+                val (branch, end) = parseConditionAndBody(cursor)
+                branches += branch
+                cursor = end
+                continue
+            }
+            if (isKeywordAt(masked, cursor, "@if")) {
+                cursor += "@if".length
+                val (branch, end) = parseConditionAndBody(cursor)
+                branches += branch
+                cursor = end
+                continue
+            }
+            val openBrace = cursor
+            if (openBrace >= masked.length || masked[openBrace] != '{') {
+                throw syntax("expected if condition or '{' after @else", source, offset + openBrace)
+            }
+            val closeBrace = Delimiters.match(masked, openBrace, '{', '}')
+            if (closeBrace < 0) throw syntax("unclosed comptime else branch", source, offset + openBrace)
+            branches += ComptimeIfBranch(null, offset + openBrace, openBrace + 1, closeBrace)
+            cursor = skipWhitespace(masked, closeBrace + 1)
+            if (cursor < masked.length && masked[cursor] == ';') cursor = skipWhitespace(masked, cursor + 1)
+            if (cursor != masked.length) throw syntax("unexpected text after comptime else branch", source, offset + cursor)
+            return branches
+        }
     }
 
     private fun evaluateInvocation(item: ComptimeInvocation, environment: ComptimeEnvironment, offset: Int): MappedText {
@@ -965,6 +1055,13 @@ internal data class ComptimeTestBlock(
     val bodyStart: Int
 )
 
+private data class ComptimeIfBranch(
+    val condition: String?,
+    val conditionOffset: Int,
+    val bodyStart: Int,
+    val bodyEnd: Int
+)
+
 private data class ComptimeModuleResult(
     val environment: ComptimeEnvironment,
     val runtime: MappedText,
@@ -982,7 +1079,7 @@ private data class ComptimeModuleResult(
                 result += module.ownCompilerOptions
             }
             collect(this)
-            return result.distinct()
+            return CompilerOptions.distinct(result)
         }
 
     fun emitInto(output: MappedTextBuilder, emitted: MutableSet<String>) {

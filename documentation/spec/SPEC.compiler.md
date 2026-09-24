@@ -8,7 +8,7 @@ The executable is named `cplus` and accepts these subcommands:
 
 ```text
 cplus help
-cplus transcode filename.cp [-o some_file_name.c]
+cplus transcode filename.cp [-o some_file_name.c] [--target=TRIPLE]
 cplus compile filename.cp [-o executable] [passthrough tcc parameters]
 cplus run filename.cp [-o executable] [passthrough tcc parameters]
 cplus test filename.cp [filename2.cp ...] [exact test name ...]
@@ -16,11 +16,13 @@ cplus new project_name|.
 cplus --stdlib directory <subcommand> ...
 ```
 
-`transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. Additional arguments for `compile` and `run` are passed to TinyCC; for example, `-DFLAG=1` or `-Iinclude`. A CLI jar with a matching embedded TinyCC target uses it; a jar without that target invokes external `tcc` from `PATH`, or the executable specified by `TCC`.
+`transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. `transcode` accepts only `--target` among compiler options; it uses the option to choose comptime branches but does not compile. Additional arguments for `compile` and `run` are passed to TinyCC; for example, `-DFLAG=1` or `-Iinclude`. A CLI jar with a matching embedded TinyCC target uses it; a jar without that target invokes external `tcc` from `PATH`, or the executable specified by `TCC`.
 
 `run` compiles first and then executes the generated executable, inheriting its standard input, output, and error streams.
 
-Top-level `comptime flags` declarations in the source and its comptime imports are added to the compiler arguments for `compile`, `run`, and `test`. Duplicate source-declared arguments are removed in dependency-first, first-seen order. `transcode` includes the consolidated arguments as an informational comment in generated C; when compiling that C separately, provide the arguments to the C compiler explicitly. C has no portable linker-flags directive.
+Top-level `comptime flags` declarations in the source and its comptime imports are added to the compiler arguments for `compile`, `run`, and `test`. Duplicate logical source-declared options are removed in dependency-first, first-seen order, preserving required option/value pairs such as `-framework Cocoa`. `transcode` includes the consolidated arguments as an informational comment in generated C; when compiling that C separately, provide the arguments to the C compiler explicitly. C has no portable linker-flags directive.
+
+Comptime exposes `os` as the normalized operating system of the selected target. `compile` and `run` derive it from TinyCC's `--target` option (or the local host when omitted); `transcode` can be given `--target` for the same selection. The current supported spellings include `linux`, `windows`, and `macos`. This only selects source branches: the target compiler/sysroot must still contain the requested libraries.
 
 `test` compiles and runs all `@test` blocks in the input files. Source paths must come first; any following arguments are exact, case-sensitive test-name filters. The shell may expand file globs before invoking C-plus:
 

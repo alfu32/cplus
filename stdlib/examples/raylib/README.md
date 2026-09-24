@@ -13,7 +13,7 @@ Each loop drains Raylib's queued keyboard presses with `GetKeyPressed()`, sample
 
 For a directly runnable Linux desktop executable, transcode to C and link with the host C compiler and host Raylib development package (the link flags below are for Linux):
 
-The `.cp` examples declare their Linux link dependencies with `comptime flags`, so `cpc compile` and `cpc run` consume them automatically. The generated C also displays their consolidated flags in a comment for manual builds. This Linux-specific list is not suitable for other host platforms; use the platform's native Raylib dependencies there.
+The `.cp` examples select Linux, Windows, or macOS link dependencies with `@if (os == ...)` and `comptime flags`; `cpc compile` and `cpc run` consume the matching branch automatically. The generated C displays the selected flags in a comment for manual builds. The direct `cc` command below is specifically for Linux.
 
 ```sh
 cpc transcode stdlib/examples/raylib/tetris.cp -o build/tetris.c

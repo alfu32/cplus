@@ -339,6 +339,80 @@ class TranspilerTest {
     }
 
     @Test
+    fun comptimeOsBranchesSelectPlatformFlagsAndTranscodeTarget() {
+        val directory = Files.createTempDirectory("cplus-platform-flags")
+        try {
+            val sourceText = """comptime {
+                |    @if(os == "linux") {
+                |        comptime flags -lraylib -lGL;
+                |    } @else if (os == "windows") {
+                |        comptime flags -lraylib -lopengl32 -lgdi32 -lwinmm;
+                |    } @else if (os == "macos") {
+                |        comptime flags -lraylib -framework Cocoa;
+                |    } @else {
+                |        comptime flags -lportable;
+                |    }
+                |}
+                |int main(void) { return 0; }
+            """.trimMargin()
+            val expected = mapOf(
+                "linux" to listOf("-lraylib", "-lGL"),
+                "windows" to listOf("-lraylib", "-lopengl32", "-lgdi32", "-lwinmm"),
+                "macos" to listOf("-lraylib", "-framework", "Cocoa"),
+                "freebsd" to listOf("-lportable")
+            )
+            expected.forEach { (targetOs, flags) ->
+                val transcoded = CPlusTranspiler().transpile(
+                    sourceText,
+                    "platform-flags.cp",
+                    targetOs = targetOs
+                )
+                assertEquals(flags, transcoded.compilerOptions, targetOs)
+            }
+
+            val raylibExample = findRepositoryFile("stdlib/examples/raylib/tetris.cp")
+            val stdlibRoot = findRepositoryFile("stdlib/README.md").parent.toAbsolutePath().normalize()
+            val raylibFlags = mapOf(
+                "linux" to listOf(
+                    "-lraylib", "-lGL", "-lm", "-lpthread", "-ldl", "-lrt", "-lX11", "-lXrandr", "-lXinerama",
+                    "-lXcursor", "-lXi"
+                ),
+                "windows" to listOf("-lraylib", "-lopengl32", "-lgdi32", "-lwinmm", "-lshcore"),
+                "macos" to listOf(
+                    "-lraylib", "-framework", "Foundation", "-framework", "AppKit", "-framework", "IOKit",
+                    "-framework", "OpenGL", "-framework", "CoreVideo", "-framework", "QuartzCore"
+                )
+            )
+            raylibFlags.forEach { (targetOs, flags) ->
+                val transcoded = CPlusTranspiler().transpile(
+                    Files.readString(raylibExample),
+                    raylibExample.toString(),
+                    importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot)),
+                    targetOs = targetOs
+                )
+                assertEquals(flags, transcoded.compilerOptions, "Raylib flags for $targetOs")
+            }
+
+            val source = directory.resolve("platform.cp")
+            val output = directory.resolve("platform.c")
+            Files.writeString(source, sourceText)
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf("transcode", source.toString(), "-o", output.toString(), "--target=windows-x86_64")
+            )
+            assertEquals(0, status, errors.toString())
+            assertTrue(
+                "/* cplus compiler flags: \"-lraylib\" \"-lopengl32\" \"-lgdi32\" \"-lwinmm\" */" in
+                    Files.readString(output)
+            )
+        } finally {
+            Files.walk(directory).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+    }
+
+    @Test
     fun cliNewScaffoldsAProjectWithoutOverwritingExistingFiles() {
         val directory = Files.createTempDirectory("cplus-new-project")
         try {

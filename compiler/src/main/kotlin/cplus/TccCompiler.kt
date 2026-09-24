@@ -36,10 +36,7 @@ class TccCompiler {
         options: List<String>,
         logger: CompilationLogger = SilentCompilationLogger
     ): TccCompilationResult = logger.pass("tcc-compile") {
-        val effectiveOptions = buildList {
-            addAll(options)
-            source.compilerOptions.forEach { option -> if (option !in this) add(option) }
-        }
+        val effectiveOptions = CompilerOptions.merge(options, source.compilerOptions)
         output.toAbsolutePath().parent?.let(Files::createDirectories)
         if (!hasEmbeddedRuntimeForCurrentPlatform()) {
             return@pass compileWithExternalTcc(source, output, effectiveOptions)

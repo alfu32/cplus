@@ -1,5 +1,13 @@
 comptime import "stdlib:/graphics/raylib.cp";
-comptime flags -lGL -lm -lpthread -ldl -lrt -lXrandr -lXinerama -lXcursor -lXi -lraylib;
+comptime {
+    @if (os == "linux") {
+        comptime flags -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -lXrandr -lXinerama -lXcursor -lXi;
+    } @else if (os == "windows") {
+        comptime flags -lraylib -lopengl32 -lgdi32 -lwinmm -lshcore;
+    } @else if (os == "macos") {
+        comptime flags -lraylib -framework Foundation -framework AppKit -framework IOKit -framework OpenGL -framework CoreVideo -framework QuartzCore;
+    }
+}
 
 #include <stdbool.h>
 #include <stdint.h>

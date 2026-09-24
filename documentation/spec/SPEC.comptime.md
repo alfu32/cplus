@@ -151,7 +151,7 @@ comptime {
 
 Scalar expression statements are discarded unless returned by a comptime function and used by another expression. Blocks cannot contain runtime control flow that executes after compilation.
 
-Comptime control flow currently uses the legacy `@` forms and operates only on comptime values. The supported forms are `@if`, `@else`, and `@for name in value`; a `@for` over `T.fields` visits fields in declaration order. A comptime loop must have a statically bounded iterable or hit the implementation expansion limit.
+Comptime control flow uses the `@` forms and operates only on comptime values. `@if` supports `@else if` chains and an optional final `@else`; `@for name in value` visits `T.fields` in declaration order. Conditional branches can return comptime entities, and can materialize `comptime flags` declarations for the selected target OS. A comptime loop must have a statically bounded iterable or hit the implementation expansion limit.
 
 ### Imports
 
@@ -172,7 +172,23 @@ comptime import "stdlib:/graphics/raylib.cp";
 comptime flags -lGL -lm -lpthread -ldl -lrt -lXrandr -lXinerama -lXcursor -lXi -lraylib;
 ```
 
-Arguments are split into tokens (quoted arguments may contain spaces); the directive ends at a semicolon or line ending. C comments and backslash-newline continuation are supported. Flags from imported C-plus modules are collected before the importing file's flags, then exact duplicate tokens are removed while retaining first-seen order. `compile`, `run`, and `test` pass the collected tokens to TinyCC, whether embedded or externally installed. `transcode` writes one informational `/* cplus compiler flags: ... */` line into generated C; a separate C compiler does not interpret that comment, so pass those flags to it yourself. C has no portable source directive for requesting linker arguments; `#pragma comment(lib, ...)` is a compiler-specific alternative, not C-plus behavior. Choose platform-appropriate flags explicitly.
+Arguments are split into tokens (quoted arguments may contain spaces); the directive ends at a semicolon or line ending. C comments and backslash-newline continuation are supported. Flags from imported C-plus modules are collected before the importing file's flags, then duplicate logical options are removed while retaining first-seen order; paired arguments such as `-framework Cocoa` remain intact. `compile`, `run`, and `test` pass the collected tokens to TinyCC, whether embedded or externally installed. `transcode` writes one informational `/* cplus compiler flags: ... */` line into generated C; a separate C compiler does not interpret that comment, so pass those flags to it yourself. C has no portable source directive for requesting linker arguments; `#pragma comment(lib, ...)` is a compiler-specific alternative, not C-plus behavior.
+
+The comptime string `os` identifies the selected compile target (`linux`, `windows`, `macos`, other recognized OS names, or `unknown`). It defaults to the machine running C-plus; `compile`/`run` derive it from the passed `--target` option, and `transcode` accepts `--target` to select it without compiling. A target triple such as `windows-x86_64` or `aarch64-apple-darwin` is normalized to its OS. Use conditional branches to select platform-specific flags:
+
+```c
+comptime {
+    @if (os == "linux") {
+        comptime flags -lraylib -lGL -lm -lpthread -ldl -lrt -lX11;
+    } @else if (os == "windows") {
+        comptime flags -lraylib -lopengl32 -lgdi32 -lwinmm -lshcore;
+    } @else if (os == "macos") {
+        comptime flags -lraylib -framework Cocoa -framework OpenGL -framework IOKit;
+    }
+}
+```
+
+Only the selected branch is materialized; its flags are collected on the next comptime pass. `os` is compile-time metadata, not runtime detection. The selected compiler/sysroot must still provide the named libraries and frameworks.
 
 ### Types, generics, and reflection
 

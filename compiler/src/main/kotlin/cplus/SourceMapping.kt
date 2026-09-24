@@ -210,7 +210,7 @@ class MappedEmitter(private val sourceFile: SourceFile) {
         compilerOptions: List<String> = emptyList()
     ): TranscodedSource {
         val output = StringBuilder(prelude)
-        val uniqueCompilerOptions = compilerOptions.distinct()
+        val uniqueCompilerOptions = CompilerOptions.distinct(compilerOptions)
         if (uniqueCompilerOptions.isNotEmpty()) {
             output.append("/* cplus compiler flags: ")
                 .append(uniqueCompilerOptions.joinToString(" ", transform = ::commentSafeOption))

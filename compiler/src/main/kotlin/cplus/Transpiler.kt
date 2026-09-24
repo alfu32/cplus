@@ -6,27 +6,30 @@ class CPlusTranspiler {
         source: String,
         sourceName: String? = null,
         logger: CompilationLogger = SilentCompilationLogger,
-        importPaths: CPlusImportPaths = CPlusImportPaths()
-    ): TranscodedSource = transpileInternal(source, sourceName, logger, testMode = false, importPaths).source
+        importPaths: CPlusImportPaths = CPlusImportPaths(),
+        targetOs: String = CPlusTarget.hostOs()
+    ): TranscodedSource = transpileInternal(source, sourceName, logger, testMode = false, importPaths, targetOs).source
 
     /** Transcodes a source file and its named `@test` blocks into a runnable test program. */
     fun transpileTests(
         source: String,
         sourceName: String? = null,
         logger: CompilationLogger = SilentCompilationLogger,
-        importPaths: CPlusImportPaths = CPlusImportPaths()
-    ): TranscodedTestSource = transpileInternal(source, sourceName, logger, testMode = true, importPaths)
+        importPaths: CPlusImportPaths = CPlusImportPaths(),
+        targetOs: String = CPlusTarget.hostOs()
+    ): TranscodedTestSource = transpileInternal(source, sourceName, logger, testMode = true, importPaths, targetOs)
 
     private fun transpileInternal(
         source: String,
         sourceName: String?,
         logger: CompilationLogger,
         testMode: Boolean,
-        importPaths: CPlusImportPaths
+        importPaths: CPlusImportPaths,
+        targetOs: String
     ): TranscodedTestSource {
         val sourceFile = SourceFile(source, sourceName)
         val comptime = logger.pass("comptime-resolve") {
-            ComptimeCompiler(sourceFile, logger, importPaths).compile(resolveTestBodies = testMode)
+            ComptimeCompiler(sourceFile, logger, importPaths, targetOs).compile(resolveTestBodies = testMode)
         }
         val input = if (testMode) {
             logger.pass("collect-tests") { testProgram(comptime.runtime, comptime.tests) }

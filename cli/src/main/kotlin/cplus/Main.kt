@@ -72,12 +72,19 @@ class CPlusCli(
     }
 
     private fun transcode(arguments: List<String>): Int {
-        val parsed = parseFileCommand(arguments, allowTccOptions = false)
+        val parsed = parseFileCommand(arguments, allowTccOptions = true)
+        validateTranscodeTargetOptions(parsed.passthrough)
         val destination = parsed.output ?: defaultTranscodedPath(parsed.source)
         val sourcePath = parsed.source.toAbsolutePath().normalize()
         val importPaths = importPathsFor(sourcePath)
         val source = logger.pass("read-source") { readSource(sourcePath) }
-        val transcoded = transpiler.transpile(source, sourcePath.toString(), logger, importPaths)
+        val transcoded = transpiler.transpile(
+            source,
+            sourcePath.toString(),
+            logger,
+            importPaths,
+            CPlusTarget.osFromCompilerOptions(parsed.passthrough)
+        )
         printAllocationDiagnostics(transcoded)
         logger.pass("write-c") { writeText(destination, transcoded.code) }
         return 0
@@ -89,7 +96,13 @@ class CPlusCli(
         val sourcePath = parsed.source.toAbsolutePath().normalize()
         val importPaths = importPathsFor(sourcePath)
         val source = logger.pass("read-source") { readSource(sourcePath) }
-        val transcoded = transpiler.transpile(source, sourcePath.toString(), logger, importPaths)
+        val transcoded = transpiler.transpile(
+            source,
+            sourcePath.toString(),
+            logger,
+            importPaths,
+            CPlusTarget.osFromCompilerOptions(parsed.passthrough)
+        )
         printAllocationDiagnostics(transcoded)
         val options = buildList {
             sourcePath.parent?.let { add("-I${it}") }
@@ -259,6 +272,27 @@ class CPlusCli(
         return ParsedCommand(source, outputPath, passthrough)
     }
 
+    private fun validateTranscodeTargetOptions(options: List<String>) {
+        var index = 0
+        while (index < options.size) {
+            when {
+                options[index] == "--target" -> {
+                    if (options.getOrNull(index + 1).isNullOrBlank()) {
+                        throw IllegalArgumentException("--target requires a target triple")
+                    }
+                    index += 2
+                }
+                options[index].startsWith("--target=") -> {
+                    if (options[index].substringAfter('=').isBlank()) {
+                        throw IllegalArgumentException("--target requires a target triple")
+                    }
+                    index++
+                }
+                else -> throw IllegalArgumentException("transcode accepts only --target compiler options")
+            }
+        }
+    }
+
     private fun readSource(path: Path): String = path.readText()
 
     private fun importPathsFor(source: Path): CPlusImportPaths {
@@ -328,7 +362,7 @@ class CPlusCli(
 usage:
   cplus help
   cplus version
-  cplus transcode filename.cp [-o some_file_name.c]
+  cplus transcode filename.cp [-o some_file_name.c] [--target=TRIPLE]
   cplus compile filename.cp [-o executable] [passthrough tcc parameters]
   cplus run filename.cp [-o executable] [passthrough tcc parameters]
   cplus test filename.cp [filename2.cp ...] [test name ...]
