@@ -13,6 +13,7 @@ comptime {
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
 
 #define GAME_2048_BOARD_SIZE 4
@@ -62,54 +63,52 @@ typedef struct game_2048_app_t {
     uint32_t random_state;
     Vector2 mouse_start;
     bool mouse_dragging;
-} game_2048_app_t;
 
-static uint32_t game_2048_random(game_2048_app_t* app) {
-    uint32_t value = app->random_state;
+pub uint32_t random(borrowed mut *self) {
+    uint32_t value = self->random_state;
     if (value == 0) value = 0x27d4eb2du;
     value ^= value << 13;
     value ^= value >> 17;
     value ^= value << 5;
-    app->random_state = value;
+    self->random_state = value;
     return value;
 }
 
-static int game_2048_spawn(game_2048_app_t* app);
+pub int spawn(borrowed mut *self);
 
-static void game_2048_init(game_2048_app_t* app, uint32_t seed) {
-    memset(app, 0, sizeof(*app));
-    app->state = GAME_2048_PLAYING;
-    app->random_state = seed;
-    game_2048_spawn(app);
-    game_2048_spawn(app);
+pub void init(borrowed mut *self, uint32_t seed) {
+    memset(self, 0, sizeof(*self));
+    self->state = GAME_2048_PLAYING;
+    self->random_state = seed;
+    game_2048_app_t.spawn(self);
+    game_2048_app_t.spawn(self);
 }
 
-static uint32_t game_2048_value(unsigned char exponent) {
+static pub uint32_t value(unsigned char exponent) {
     if (exponent == 0 || exponent > 31) return 0;
     return (uint32_t)1u << exponent;
 }
 
-static int game_2048_spawn(game_2048_app_t* app) {
+pub int spawn(borrowed mut *self) {
     int empty_count = 0;
     for (int row = 0; row < GAME_2048_BOARD_SIZE; row++)
         for (int column = 0; column < GAME_2048_BOARD_SIZE; column++)
-            empty_count += app->board.cells[row][column] == 0 ? 1 : 0;
+            empty_count += self->board.cells[row][column] == 0 ? 1 : 0;
     if (empty_count == 0) return 0;
 
-    int selected = (int)(game_2048_random(app) % (uint32_t)empty_count);
+    int selected = (int)(game_2048_app_t.random(self) % (uint32_t)empty_count);
     for (int row = 0; row < GAME_2048_BOARD_SIZE; row++) {
         for (int column = 0; column < GAME_2048_BOARD_SIZE; column++) {
-            if (app->board.cells[row][column] != 0) continue;
+            if (self->board.cells[row][column] != 0) continue;
             if (selected-- != 0) continue;
-            app->board.cells[row][column] = game_2048_random(app) % 10u == 0u ? 2 : 1;
+            self->board.cells[row][column] = game_2048_app_t.random(self) % 10u == 0u ? 2 : 1;
             return 1;
         }
     }
     return 0;
 }
 
-static void game_2048_get_cell(const game_2048_app_t* app, game_2048_direction_t direction,
-                               int line, int offset, int* out_row, int* out_column) {
+pub void get_cell(borrowed const *self, game_2048_direction_t direction, int line, int offset, int* out_row, int* out_column) {
     if (direction == GAME_2048_LEFT) {
         *out_row = line;
         *out_column = offset;
@@ -123,10 +122,10 @@ static void game_2048_get_cell(const game_2048_app_t* app, game_2048_direction_t
         *out_row = GAME_2048_BOARD_SIZE - 1 - offset;
         *out_column = line;
     }
-    (void)app;
+    (void)self;
 }
 
-static bool game_2048_slide(game_2048_app_t* app, game_2048_direction_t direction) {
+pub bool slide(borrowed mut *self, game_2048_direction_t direction) {
     bool changed = false;
     for (int line = 0; line < GAME_2048_BOARD_SIZE; line++) {
         unsigned char source[GAME_2048_BOARD_SIZE] = {0};
@@ -135,8 +134,8 @@ static bool game_2048_slide(game_2048_app_t* app, game_2048_direction_t directio
         for (int offset = 0; offset < GAME_2048_BOARD_SIZE; offset++) {
             int row;
             int column;
-            game_2048_get_cell(app, direction, line, offset, &row, &column);
-            unsigned char value = app->board.cells[row][column];
+            game_2048_app_t.get_cell(self, direction, line, offset, &row, &column);
+            unsigned char value = self->board.cells[row][column];
             if (value != 0) source[count++] = value;
         }
 
@@ -145,7 +144,7 @@ static bool game_2048_slide(game_2048_app_t* app, game_2048_direction_t directio
             if (index + 1 < count && source[index] == source[index + 1] && source[index] < 31) {
                 unsigned char merged = source[index] + 1;
                 result[written++] = merged;
-                app->score += game_2048_value(merged);
+                self->score += game_2048_app_t.value(merged);
                 index++;
             } else {
                 result[written++] = source[index];
@@ -155,75 +154,75 @@ static bool game_2048_slide(game_2048_app_t* app, game_2048_direction_t directio
         for (int offset = 0; offset < GAME_2048_BOARD_SIZE; offset++) {
             int row;
             int column;
-            game_2048_get_cell(app, direction, line, offset, &row, &column);
-            if (app->board.cells[row][column] != result[offset]) changed = true;
-            app->board.cells[row][column] = result[offset];
+            game_2048_app_t.get_cell(self, direction, line, offset, &row, &column);
+            if (self->board.cells[row][column] != result[offset]) changed = true;
+            self->board.cells[row][column] = result[offset];
         }
     }
     return changed;
 }
 
-static bool game_2048_has_moves(const game_2048_app_t* app) {
+pub bool has_moves(borrowed const *self) {
     for (int row = 0; row < GAME_2048_BOARD_SIZE; row++) {
         for (int column = 0; column < GAME_2048_BOARD_SIZE; column++) {
-            unsigned char value = app->board.cells[row][column];
+            unsigned char value = self->board.cells[row][column];
             if (value == 0) return true;
-            if (column + 1 < GAME_2048_BOARD_SIZE && value == app->board.cells[row][column + 1]) return true;
-            if (row + 1 < GAME_2048_BOARD_SIZE && value == app->board.cells[row + 1][column]) return true;
+            if (column + 1 < GAME_2048_BOARD_SIZE && value == self->board.cells[row][column + 1]) return true;
+            if (row + 1 < GAME_2048_BOARD_SIZE && value == self->board.cells[row + 1][column]) return true;
         }
     }
     return false;
 }
 
-static bool game_2048_has_won(const game_2048_app_t* app) {
+pub bool has_won(borrowed const *self) {
     for (int row = 0; row < GAME_2048_BOARD_SIZE; row++)
         for (int column = 0; column < GAME_2048_BOARD_SIZE; column++)
-            if (app->board.cells[row][column] >= 11) return true;
+            if (self->board.cells[row][column] >= 11) return true;
     return false;
 }
 
-static void game_2048_move(game_2048_app_t* app, game_2048_direction_t direction) {
-    if (app->state == GAME_2048_GAME_OVER) return;
-    if (!game_2048_slide(app, direction)) return;
-    game_2048_spawn(app);
-    if (game_2048_has_won(app)) app->state = GAME_2048_WON;
-    else if (!game_2048_has_moves(app)) app->state = GAME_2048_GAME_OVER;
+pub void move(borrowed mut *self, game_2048_direction_t direction) {
+    if (self->state == GAME_2048_GAME_OVER) return;
+    if (!game_2048_app_t.slide(self, direction)) return;
+    game_2048_app_t.spawn(self);
+    if (game_2048_app_t.has_won(self)) self->state = GAME_2048_WON;
+    else if (!game_2048_app_t.has_moves(self)) self->state = GAME_2048_GAME_OVER;
 }
 
-static void game_2048_key(game_2048_app_t* app, int key) {
+pub void key(borrowed mut *self, int key) {
     if (key == KEY_R) {
-        game_2048_init(app, app->random_state + 1u);
+        game_2048_app_t.init(self, self->random_state + 1u);
         return;
     }
-    if (key == KEY_LEFT || key == KEY_A) game_2048_move(app, GAME_2048_LEFT);
-    else if (key == KEY_RIGHT || key == KEY_D) game_2048_move(app, GAME_2048_RIGHT);
-    else if (key == KEY_UP || key == KEY_W) game_2048_move(app, GAME_2048_UP);
-    else if (key == KEY_DOWN || key == KEY_S) game_2048_move(app, GAME_2048_DOWN);
+    if (key == KEY_LEFT || key == KEY_A) game_2048_app_t.move(self, GAME_2048_LEFT);
+    else if (key == KEY_RIGHT || key == KEY_D) game_2048_app_t.move(self, GAME_2048_RIGHT);
+    else if (key == KEY_UP || key == KEY_W) game_2048_app_t.move(self, GAME_2048_UP);
+    else if (key == KEY_DOWN || key == KEY_S) game_2048_app_t.move(self, GAME_2048_DOWN);
 }
 
-static void game_2048_mouse(game_2048_app_t* app, const game_2048_event_t* event) {
+pub void mouse(borrowed mut *self, const game_2048_event_t* event) {
     if (event->mouse_button != MOUSE_BUTTON_LEFT) return;
     if (event->pressed) {
-        app->mouse_start = event->position;
-        app->mouse_dragging = true;
+        self->mouse_start = event->position;
+        self->mouse_dragging = true;
         return;
     }
-    if (!app->mouse_dragging) return;
-    app->mouse_dragging = false;
-    float dx = event->position.x - app->mouse_start.x;
-    float dy = event->position.y - app->mouse_start.y;
+    if (!self->mouse_dragging) return;
+    self->mouse_dragging = false;
+    float dx = event->position.x - self->mouse_start.x;
+    float dy = event->position.y - self->mouse_start.y;
     if (fabsf(dx) < 35.0f && fabsf(dy) < 35.0f) return;
-    if (fabsf(dx) > fabsf(dy)) game_2048_move(app, dx < 0 ? GAME_2048_LEFT : GAME_2048_RIGHT);
-    else game_2048_move(app, dy < 0 ? GAME_2048_UP : GAME_2048_DOWN);
+    if (fabsf(dx) > fabsf(dy)) game_2048_app_t.move(self, dx < 0 ? GAME_2048_LEFT : GAME_2048_RIGHT);
+    else game_2048_app_t.move(self, dy < 0 ? GAME_2048_UP : GAME_2048_DOWN);
 }
 
-static void game_2048_event(game_2048_app_t* app, const game_2048_event_t* event) {
-    if (event->type == GAME_2048_EVENT_KEYBOARD) game_2048_key(app, event->key);
-    else if (event->type == GAME_2048_EVENT_MOUSE) game_2048_mouse(app, event);
+pub void event(borrowed mut *self, const game_2048_event_t* event) {
+    if (event->type == GAME_2048_EVENT_KEYBOARD) game_2048_app_t.key(self, event->key);
+    else if (event->type == GAME_2048_EVENT_MOUSE) game_2048_app_t.mouse(self, event);
     else (void)event->delta_seconds;
 }
 
-static Color game_2048_color(unsigned char exponent) {
+static pub Color color(unsigned char exponent) {
     static const Color colors[] = {
         {205, 193, 180, 255}, {238, 228, 218, 255}, {237, 224, 200, 255},
         {242, 177, 121, 255}, {245, 149, 99, 255}, {246, 124, 95, 255},
@@ -235,10 +234,10 @@ static Color game_2048_color(unsigned char exponent) {
     return GOLD;
 }
 
-static void game_2048_render(const game_2048_app_t* app) {
+pub void render(borrowed const *self) {
     ClearBackground((Color){250, 248, 239, 255});
     DrawText("2048", 62, 38, 48, (Color){75, 67, 58, 255});
-    DrawText(TextFormat("SCORE %llu", (unsigned long long)app->score), 65, 100, 22, (Color){75, 67, 58, 255});
+    DrawText(TextFormat("SCORE %llu", (unsigned long long)self->score), 65, 100, 22, (Color){75, 67, 58, 255});
     DrawText("ARROWS / WASD / SWIPE", 352, 54, 17, (Color){119, 110, 101, 255});
     DrawText("R RESTARTS", 352, 82, 17, (Color){119, 110, 101, 255});
 
@@ -248,13 +247,13 @@ static void game_2048_render(const game_2048_app_t* app) {
                   (Color){187, 173, 160, 255});
     for (int row = 0; row < GAME_2048_BOARD_SIZE; row++) {
         for (int column = 0; column < GAME_2048_BOARD_SIZE; column++) {
-            unsigned char exponent = app->board.cells[row][column];
+            unsigned char exponent = self->board.cells[row][column];
             int x = GAME_2048_BOARD_X + column * (GAME_2048_CELL_SIZE + GAME_2048_GAP);
             int y = GAME_2048_BOARD_Y + row * (GAME_2048_CELL_SIZE + GAME_2048_GAP);
             DrawRectangleRounded((Rectangle){(float)x, (float)y, GAME_2048_CELL_SIZE, GAME_2048_CELL_SIZE}, 0.08f, 6,
-                                 game_2048_color(exponent));
+                                 game_2048_app_t.color(exponent));
             if (exponent == 0) continue;
-            uint32_t value = game_2048_value(exponent);
+            uint32_t value = game_2048_app_t.value(exponent);
             const char* label = TextFormat("%u", value);
             int font_size = exponent < 3 ? 42 : exponent < 6 ? 36 : 29;
             Color text_color = exponent <= 2 ? (Color){104, 94, 83, 255} : RAYWHITE;
@@ -262,55 +261,57 @@ static void game_2048_render(const game_2048_app_t* app) {
                      y + (GAME_2048_CELL_SIZE - font_size) / 2, font_size, text_color);
         }
     }
-    if (app->state == GAME_2048_WON) {
+    if (self->state == GAME_2048_WON) {
         DrawRectangle(62, 720, 570, 34, (Color){237, 194, 46, 240});
         DrawText("2048! KEEP PLAYING OR PRESS R", 96, 727, 18, RAYWHITE);
-    } else if (app->state == GAME_2048_GAME_OVER) {
+    } else if (self->state == GAME_2048_GAME_OVER) {
         DrawRectangle(62, 720, 570, 34, (Color){110, 96, 82, 245});
         DrawText("NO MOVES LEFT - PRESS R", 140, 727, 18, RAYWHITE);
     }
 }
 
-static int game_2048_count_tiles(const game_2048_app_t* app) {
+pub int count_tiles(borrowed const *self) {
     int count = 0;
     for (int row = 0; row < GAME_2048_BOARD_SIZE; row++)
         for (int column = 0; column < GAME_2048_BOARD_SIZE; column++)
-            count += app->board.cells[row][column] != 0 ? 1 : 0;
+            count += self->board.cells[row][column] != 0 ? 1 : 0;
     return count;
 }
 
-static int game_2048_self_test(void) {
+} game_2048_app_t;
+
+@test "game 2048 model and render" {
     game_2048_app_t app;
-    game_2048_init(&app, 97531u);
-    if (game_2048_count_tiles(&app) != 2) return 1;
+    app.init(97531u);
+    @assert(!(app.count_tiles() != 2));
 
     memset(app.board.cells, 0, sizeof(app.board.cells));
     app.board.cells[0][0] = 1;
     app.board.cells[0][1] = 1;
     app.board.cells[0][2] = 2;
     app.board.cells[0][3] = 2;
-    if (!game_2048_slide(&app, GAME_2048_LEFT)) return 2;
-    if (app.board.cells[0][0] != 2 || app.board.cells[0][1] != 3 ||
-        app.board.cells[0][2] != 0 || app.board.cells[0][3] != 0) return 3;
-    if (app.score != 12) return 4;
+    @assert(!(!app.slide(GAME_2048_LEFT)));
+    @assert(!(app.board.cells[0][0] != 2 || app.board.cells[0][1] != 3 ||
+        app.board.cells[0][2] != 0 || app.board.cells[0][3] != 0));
+    @assert(!(app.score != 12));
 
     memset(app.board.cells, 0, sizeof(app.board.cells));
     app.board.cells[0][0] = 1;
     app.board.cells[0][1] = 1;
-    if (!game_2048_slide(&app, GAME_2048_RIGHT) || app.board.cells[0][3] != 2 ||
-        app.board.cells[0][0] != 0 || app.board.cells[0][1] != 0) return 5;
+    @assert(!(!app.slide(GAME_2048_RIGHT) || app.board.cells[0][3] != 2 ||
+        app.board.cells[0][0] != 0 || app.board.cells[0][1] != 0));
 
     memset(app.board.cells, 0, sizeof(app.board.cells));
     app.board.cells[0][2] = 1;
     app.board.cells[1][2] = 1;
-    if (!game_2048_slide(&app, GAME_2048_DOWN) || app.board.cells[3][2] != 2 ||
-        app.board.cells[0][2] != 0 || app.board.cells[1][2] != 0) return 6;
+    @assert(!(!app.slide(GAME_2048_DOWN) || app.board.cells[3][2] != 2 ||
+        app.board.cells[0][2] != 0 || app.board.cells[1][2] != 0));
 
     memset(app.board.cells, 0, sizeof(app.board.cells));
     app.board.cells[1][0] = 1;
     app.board.cells[2][0] = 1;
-    if (!game_2048_slide(&app, GAME_2048_UP) || app.board.cells[0][0] != 2 ||
-        app.board.cells[1][0] != 0 || app.board.cells[2][0] != 0) return 7;
+    @assert(!(!app.slide(GAME_2048_UP) || app.board.cells[0][0] != 2 ||
+        app.board.cells[1][0] != 0 || app.board.cells[2][0] != 0));
 
     memset(app.board.cells, 0, sizeof(app.board.cells));
     app.board.cells[0][0] = 1;
@@ -318,37 +319,55 @@ static int game_2048_self_test(void) {
     app.board.cells[0][2] = 1;
     app.board.cells[0][3] = 1;
     app.score = 0;
-    if (!game_2048_slide(&app, GAME_2048_LEFT)) return 8;
-    if (app.board.cells[0][0] != 2 || app.board.cells[0][1] != 2 || app.score != 8) return 9;
+    @assert(!(!app.slide(GAME_2048_LEFT)));
+    @assert(!(app.board.cells[0][0] != 2 || app.board.cells[0][1] != 2 || app.score != 8));
 
     memset(app.board.cells, 0, sizeof(app.board.cells));
     app.board.cells[2][1] = 1;
     app.board.cells[2][2] = 1;
     app.score = 0;
-    game_2048_move(&app, GAME_2048_LEFT);
-    if (game_2048_count_tiles(&app) != 2 || app.score != 4) return 10;
-    return 0;
-}
+    app.move(GAME_2048_LEFT);
+    @assert(!(app.count_tiles() != 2 || app.score != 4));
 
-int main(int argc, char** argv) {
-    if (argc > 1 && strcmp(argv[1], "--self-test") == 0) {
-        int result = game_2048_self_test();
-        if (result == 0) puts("2048 self-test: PASS");
-        return result;
+
+    const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
+    if (screenshot_directory != NULL) {
+        SetConfigFlags(FLAG_WINDOW_HIDDEN);
+        InitWindow(GAME_2048_SCREEN_WIDTH, GAME_2048_SCREEN_HEIGHT, "C-plus test render");
+        @assert(IsWindowReady());
+        if (IsWindowReady()) {
+            defer CloseWindow();
+            BeginDrawing();
+            app.render();
+            EndDrawing();
+            Image screenshot = LoadImageFromScreen();
+            @assert(screenshot.data != NULL);
+            if (screenshot.data != NULL) {
+                char screenshot_path[1024];
+                snprintf(screenshot_path, sizeof(screenshot_path), "%s/game-2048.png", screenshot_directory);
+                @assert(ExportImage(screenshot, screenshot_path));
+                UnloadImage(screenshot);
+            }
+        }
     }
 
-    InitWindow(GAME_2048_SCREEN_WIDTH, GAME_2048_SCREEN_HEIGHT, "C-plus | 2048");
+}
+
+
+
+int main(int argc, char** argv) {
+        InitWindow(GAME_2048_SCREEN_WIDTH, GAME_2048_SCREEN_HEIGHT, "C-plus | 2048");
     defer CloseWindow();
     SetTargetFPS(60);
     game_2048_app_t app;
-    game_2048_init(&app, (uint32_t)(GetTime() * 100000.0) + 7u);
+    app.init((uint32_t)(GetTime() * 100000.0) + 7u);
     while (!WindowShouldClose()) {
         int key;
         while ((key = GetKeyPressed()) != 0) {
             game_2048_event_t event = {0};
             event.type = GAME_2048_EVENT_KEYBOARD;
             event.key = key;
-            game_2048_event(&app, &event);
+            app.event(&event);
         }
         Vector2 mouse = GetMousePosition();
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
@@ -357,15 +376,15 @@ int main(int argc, char** argv) {
             event.position = mouse;
             event.mouse_button = MOUSE_BUTTON_LEFT;
             event.pressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
-            game_2048_event(&app, &event);
+            app.event(&event);
         }
         game_2048_event_t clock = {0};
         clock.type = GAME_2048_EVENT_CLOCK;
         clock.delta_seconds = GetFrameTime();
-        game_2048_event(&app, &clock);
+        app.event(&clock);
 
         BeginDrawing();
-        game_2048_render(&app);
+        app.render();
         EndDrawing();
     }
     return 0;
