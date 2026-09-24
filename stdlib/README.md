@@ -139,9 +139,7 @@ See the [string API specification](../documentation/spec/stdlib/STRING.SPEC.md) 
 
 ## File I/O
 
-`io/file.cp` provides a thin static facade over `<stdio.h>`. Import it with `comptime import "stdlib:/io/file.cp";`, then use the C-style signatures through `file_t`: `file_t.fopen(path, mode)`, `file_t.fprintf(stream, format, ...)`, `file_t.fread(buffer, size, count, stream)`, and `file_t.fwrite(buffer, size, count, stream)`. It also exposes formatted input/output, character and line operations, stream positioning, buffering, status, and file removal/rename helpers. Variadic wrappers forward through the matching `v*` functions.
-
-This is deliberately a facade, not an owning stream abstraction: `FILE*` lifetime and buffer sizing remain the caller's responsibility. Close every successfully opened stream with `file_t.fclose`; pass valid buffers and format arguments as required by C. The unsafe/obsolete `gets` and `tmpnam` interfaces are omitted. See the [stdio facade specification](../documentation/spec/stdlib/IO.SPEC.md) and run `cpc test stdlib/tests/io.cp`.
+`io/file.cp` exposes three facades over `<stdio.h>`. `file_t.fopen(path, mode)` and `file_t.tmpfile()` return a value wrapping an owned `FILE*`; use receiver calls such as `stream.fwrite(data, 1, size)` and close it with `defer stream.fclose()`. Closing clears the stream pointer without freeing the wrapper value. `stdio_t` preserves the older static C-style API taking raw `FILE*`; `var_io_t` groups process-global console and string-buffer formatting helpers. Ownership annotations do not enforce lifetimes, and custom stream buffers remain caller-owned. See the [I/O specification](../documentation/spec/stdlib/IO.SPEC.md) and run `cpc test stdlib/tests/io.cp`.
 
 ## Examples and tests
 
