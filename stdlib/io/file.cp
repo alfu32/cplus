@@ -366,6 +366,41 @@ typedef struct stream_t {
         return fwrite(source, size, count, self->stream);
     }
 
+    /* Shared byte-stream contract; unlike fread/fwrite these count bytes. */
+    pub size_t read_bytes(borrowed mut *self, borrowed mut void* destination, size_t count) {
+        if (self == NULL || self->stream == NULL) { errno = EBADF; return 0; }
+        if (count == 0) return 0;
+        if (destination == NULL) { errno = EINVAL; return 0; }
+        return fread(destination, 1, count, self->stream);
+    }
+
+    pub size_t write_bytes(borrowed mut *self, borrowed const void* source, size_t count) {
+        if (self == NULL || self->stream == NULL) { errno = EBADF; return 0; }
+        if (count == 0) return 0;
+        if (source == NULL) { errno = EINVAL; return 0; }
+        return fwrite(source, 1, count, self->stream);
+    }
+
+    pub int seek(borrowed mut *self, long offset, int origin) {
+        if (self == NULL || self->stream == NULL) { errno = EBADF; return -1; }
+        return fseek(self->stream, offset, origin);
+    }
+
+    pub long tell(borrowed *self) {
+        if (self == NULL || self->stream == NULL) { errno = EBADF; return -1L; }
+        return ftell(self->stream);
+    }
+
+    pub int flush(borrowed mut *self) {
+        if (self == NULL || self->stream == NULL) { errno = EBADF; return EOF; }
+        return fflush(self->stream);
+    }
+
+    pub int close(borrowed mut *self) {
+        if (self == NULL || self->stream == NULL) { errno = EBADF; return EOF; }
+        return stream_t.fclose(self);
+    }
+
     pub int fgetpos(borrowed *self, borrowed mut fpos_t* position) {
         if (self == NULL || self->stream == NULL) return -1;
         return fgetpos(self->stream, position);

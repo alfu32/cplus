@@ -51,7 +51,7 @@ comptime import "stdlib:/io/file.cp";
     defer input.fclose();
     defer error.fclose();
 
-    @assertEquals(0, input.fputs("73Z"));
+    @assert(input.fputs("73Z") >= 0);
     input.rewind();
 
     var_io_t io = var_io_t.standard();
@@ -144,6 +144,22 @@ comptime import "stdlib:/io/file.cp";
 
     stream.clearerr();
     @assert(!stream.feof());
+}
+
+@test "file and memory backends share byte operation signatures" {
+    stream_t file = file_t.tmpfile();
+    @assert(file.stream != NULL);
+
+    const unsigned char input[] = { 'x', 0, 'y' };
+    @assertEquals((size_t)sizeof(input), file.write_bytes(input, sizeof(input)));
+    @assertEquals(0, file.flush());
+    @assertEquals(0, file.seek(0, SEEK_SET));
+
+    unsigned char output[sizeof(input)];
+    memset(output, 0, sizeof(output));
+    @assertEquals((size_t)sizeof(output), file.read_bytes(output, sizeof(output)));
+    @assert(memcmp(input, output, sizeof(input)) == 0);
+    @assertEquals(0, file.close());
 }
 
 @test "stream forwards formatted I/O operations" {
