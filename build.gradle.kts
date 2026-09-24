@@ -136,39 +136,56 @@ tasks.register("fatJar") {
     dependsOn(":cli:fatJar")
 }
 
-val bundleOs = providers.gradleProperty("os").orElse("none").get().trim().lowercase()
-val bundleArch = providers.gradleProperty("arch").orElse("none").get().trim().lowercase()
-if (bundleOs !in setOf("linux", "mac", "win", "all", "none")) {
-    throw GradleException("Invalid -Pos='$bundleOs'; expected linux, mac, win, all, or none.")
-}
-if (bundleArch !in setOf("x86_64", "arm64", "all", "none")) {
-    throw GradleException("Invalid -Parch='$bundleArch'; expected x86_64, arm64, all, or none.")
-}
-if ((bundleOs == "none") != (bundleArch == "none")) {
-    throw GradleException("-Pos=none and -Parch=none must be selected together.")
+val legacyTargetProperties = listOf("os", "arch").filter { providers.gradleProperty(it).isPresent }
+if (legacyTargetProperties.isNotEmpty()) {
+    throw GradleException(
+        "Use -Ptarget instead of the removed ${legacyTargetProperties.joinToString(" and ") { "-P$it" }} build properties."
+    )
 }
 
-val bundleOsLabel = if (bundleOs == "all") "all" else bundleOs
-val bundleName = "cplus-$resolvedVersion-$bundleOsLabel-$bundleArch"
+val allTccTargets = setOf(
+    "linux-x86_64", "linux-aarch64",
+    "macos-x86_64", "macos-aarch64",
+    "windows-x86_64", "windows-aarch64"
+)
+val bundleTargetOption = providers.gradleProperty("target").orElse("none").get().trim().lowercase().ifEmpty { "none" }
+val bundledTccTargets = when (bundleTargetOption) {
+    "none" -> emptySet()
+    "all", "crossbuild" -> allTccTargets
+    in allTccTargets -> setOf(bundleTargetOption)
+    else -> throw GradleException(
+        "Invalid -Ptarget='$bundleTargetOption'; expected one of ${allTccTargets.sorted().joinToString(", ")}, all, crossbuild, or none."
+    )
+}
+val artifactTargetNames = mapOf(
+    "linux-x86_64" to "linux-x86_64",
+    "linux-aarch64" to "linux-arm64",
+    "macos-x86_64" to "mac-x86_64",
+    "macos-aarch64" to "mac-arm64",
+    "windows-x86_64" to "win-x86_64",
+    "windows-aarch64" to "win-arm64"
+)
+val bundleNameSuffix = when {
+    bundledTccTargets.isEmpty() -> "none-none"
+    bundledTccTargets.size == allTccTargets.size -> "all-all"
+    else -> artifactTargetNames.getValue(bundledTccTargets.single())
+}
+val bundleName = "cplus-$resolvedVersion-$bundleNameSuffix"
 val bundleStageDirectory = layout.buildDirectory.dir("distributions/$bundleName")
 val distributionDirectory = rootProject.file("distribution")
-val bundledOperatingSystems = if (bundleOs == "all") listOf("linux", "mac", "win") else listOf(bundleOs)
-val bundleTargetList = if (bundleOs == "none") emptyList() else bundledOperatingSystems.flatMap { os ->
-    val nativeOs = when (os) {
-        "win" -> "windows"
-        "mac" -> "macos"
-        else -> os
-    }
-    val architectures = if (bundleArch == "all") listOf("x86_64", "arm64") else listOf(bundleArch)
-    architectures.map { arch -> "$nativeOs-${if (arch == "arm64") "aarch64" else arch}" }
+val bundleTargetList = bundledTccTargets.sorted()
+val bundleOs = when (bundledTccTargets.singleOrNull()?.substringBefore('-')) {
+    "linux" -> "linux"
+    "macos" -> "mac"
+    "windows" -> "win"
+    else -> if (bundledTccTargets.isEmpty()) "none" else "all"
 }
 
 val stageBundleDist = tasks.register<Sync>("stageBundleDist") {
     group = "distribution"
     description = "Stages the C-plus CLI, standard library, documentation, launchers, and installers."
     dependsOn(":cli:fatJar")
-    inputs.property("bundleOs", bundleOs)
-    inputs.property("bundleArch", bundleArch)
+    inputs.property("bundleTarget", bundleTargetOption)
     into(bundleStageDirectory)
 
     from(rootProject.file("cli/build/libs/c-plus.jar")) {
@@ -234,7 +251,7 @@ val stageBundleDist = tasks.register<Sync>("stageBundleDist") {
 
 tasks.register<Zip>("bundleDist") {
     group = "distribution"
-    description = "Builds a versioned C-plus distribution bundle for -Pos and -Parch."
+    description = "Builds a versioned C-plus distribution bundle for -Ptarget."
     dependsOn(stageBundleDist)
     from(bundleStageDirectory)
     eachFile {

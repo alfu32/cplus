@@ -47,37 +47,20 @@ tasks.jar {
     }
 }
 
-val tccArchOption = providers.gradleProperty("arch").orElse("none").get().trim().lowercase()
-val tccOsOption = providers.gradleProperty("os").orElse("none").get().trim().lowercase()
-
-val tccArchitectures = when (tccArchOption) {
-    "x86_64" -> setOf("x86_64")
-    "arm64" -> setOf("aarch64")
-    "all" -> setOf("x86_64", "aarch64")
-    "none" -> emptySet()
-    else -> throw GradleException("Invalid -Parch='$tccArchOption'; expected x86_64, arm64, all, or none.")
-}
-
-val tccOperatingSystems = when (tccOsOption) {
-    "win" -> setOf("windows")
-    "mac" -> setOf("macos")
-    "linux" -> setOf("linux")
-    "all" -> setOf("windows", "macos", "linux")
-    "none" -> emptySet()
-    else -> throw GradleException("Invalid -Pos='$tccOsOption'; expected win, mac, linux, all, or none.")
-}
-if ((tccArchOption == "none") != (tccOsOption == "none")) {
-    throw GradleException("-Pos=none and -Parch=none must be selected together.")
-}
-
 val allTccTargets = setOf(
     "linux-x86_64", "linux-aarch64",
     "macos-x86_64", "macos-aarch64",
     "windows-x86_64", "windows-aarch64"
 )
-val selectedTccTargets = tccOperatingSystems
-    .flatMap { os -> tccArchitectures.map { arch -> "$os-$arch" } }
-    .toSet()
+val tccTargetOption = providers.gradleProperty("target").orElse("none").get().trim().lowercase().ifEmpty { "none" }
+val selectedTccTargets = when (tccTargetOption) {
+    "none" -> emptySet()
+    "all", "crossbuild" -> allTccTargets
+    in allTccTargets -> setOf(tccTargetOption)
+    else -> throw GradleException(
+        "Invalid -Ptarget='$tccTargetOption'; expected one of ${allTccTargets.sorted().joinToString(", ")}, all, crossbuild, or none."
+    )
+}
 val tinyccCliJar = rootProject.file("lib/tinycc-cli.jar").canonicalFile
 
 tasks.register<Jar>("fatJar") {
@@ -87,8 +70,7 @@ tasks.register<Jar>("fatJar") {
     archiveVersion.set(providers.gradleProperty("release").orElse("0.1.0-SNAPSHOT"))
     archiveClassifier.set("")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    inputs.property("tccArch", tccArchOption)
-    inputs.property("tccOs", tccOsOption)
+    inputs.property("tccTarget", tccTargetOption)
 
     dependsOn(tasks.named("classes"))
     from(sourceSets.main.get().output)
@@ -105,16 +87,9 @@ tasks.register<Jar>("fatJar") {
                 .takeIf { it.startsWith("native/") }
                 ?.removePrefix("native/")
                 ?.substringBefore('/')
-            val normalizedPath = path.trimEnd('/')
-            val isTargetSysrootPayload = target != null && (
-                normalizedPath == "native/$target/files.list" ||
-                    normalizedPath == "native/$target/tinycc/sysroot" ||
-                    normalizedPath.startsWith("native/$target/tinycc/sysroot/")
-                )
             path.trimEnd('/') == "native" || (
-                target != null && target in allTccTargets && target !in selectedTccTargets &&
-                    !(selectedTccTargets.isNotEmpty() && isTargetSysrootPayload)
-                )
+                target != null && target in allTccTargets && target !in selectedTccTargets
+            )
         }
     }
 
@@ -122,7 +97,7 @@ tasks.register<Jar>("fatJar") {
     manifest {
         attributes["Main-Class"] = "cplus.MainKt"
         attributes["Cplus-Tcc-Host-Payloads"] = selectedTccTargets.sorted().joinToString(",")
-        attributes["Cplus-Tcc-Targets"] = if (selectedTccTargets.isEmpty()) "" else allTccTargets.sorted().joinToString(",")
+        attributes["Cplus-Tcc-Targets"] = selectedTccTargets.sorted().joinToString(",")
     }
 
     doLast {
@@ -131,6 +106,6 @@ tasks.register<Jar>("fatJar") {
 
         sourceJar.copyTo(targetJar, overwrite = true)
         logger.lifecycle("Bundled TinyCC host payloads: ${selectedTccTargets.sorted().joinToString(", ").ifEmpty { "none" }}")
-        logger.lifecycle("Bundled TinyCC target drivers: ${if (selectedTccTargets.isEmpty()) "none" else allTccTargets.sorted().joinToString(", ")}")
+        logger.lifecycle("Bundled TinyCC sysroot payloads: ${selectedTccTargets.sorted().filterNot { it.startsWith("macos-") }.joinToString(", ").ifEmpty { "none" }}")
     }
 }
