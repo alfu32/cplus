@@ -2,6 +2,7 @@ package cplus
 
 import org.tinycc.DiagnosticListener
 import org.tinycc.TinyCC
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -27,7 +28,7 @@ data class TccCompilationResult(
     val diagnostics: List<CompilerDiagnostic>
 )
 
-/** Uses the bundled TinyCC JNI API without invoking a shell or external tcc executable. */
+/** Uses an embedded TinyCC runtime when present, otherwise invokes system TinyCC. */
 class TccCompiler {
     fun compileExecutable(
         source: TranscodedSource,
@@ -36,6 +37,10 @@ class TccCompiler {
         logger: CompilationLogger = SilentCompilationLogger
     ): TccCompilationResult = logger.pass("tcc-compile") {
         output.toAbsolutePath().parent?.let(Files::createDirectories)
+        if (!hasEmbeddedRuntimeForCurrentPlatform()) {
+            return@pass compileWithExternalTcc(source, output, options)
+        }
+
         val rawDiagnostics = StringBuilder()
         val diagnostics = DiagnosticListener { message -> rawDiagnostics.append(message) }
         val optionString = options.joinToString(" ", transform = ::quoteOption)
@@ -50,6 +55,60 @@ class TccCompiler {
             exitCode = exitCode,
             diagnostics = TccDiagnosticParser.parse(rawDiagnostics.toString(), source)
         )
+    }
+
+    private fun compileWithExternalTcc(
+        source: TranscodedSource,
+        output: Path,
+        options: List<String>
+    ): TccCompilationResult {
+        val outputPath = output.toAbsolutePath().normalize()
+        val sourceFile = Files.createTempFile(outputPath.parent, "cplus-", ".c")
+        try {
+            Files.writeString(sourceFile, source.code)
+            val tcc = System.getenv("TCC")?.takeIf(String::isNotBlank) ?: "tcc"
+            val command = buildList {
+                add(tcc)
+                addAll(options)
+                add("-o")
+                add(outputPath.toString())
+                add(sourceFile.toString())
+            }
+            val process = try {
+                ProcessBuilder(command).redirectErrorStream(true).start()
+            } catch (error: IOException) {
+                throw IllegalStateException(
+                    "No embedded TinyCC runtime is available for this platform and external 'tcc' could not be started. " +
+                        "Install TinyCC and make it available on PATH, or set TCC to its executable path.",
+                    error
+                )
+            }
+            val diagnostics = process.inputStream.bufferedReader().use { it.readText() }
+            val exitCode = process.waitFor()
+            return TccCompilationResult(
+                exitCode = exitCode,
+                diagnostics = TccDiagnosticParser.parse(diagnostics, source)
+            )
+        } finally {
+            Files.deleteIfExists(sourceFile)
+        }
+    }
+
+    private fun hasEmbeddedRuntimeForCurrentPlatform(): Boolean {
+        val os = System.getProperty("os.name").lowercase()
+        val nativeOs = when {
+            "win" in os -> "windows"
+            "mac" in os || "darwin" in os -> "macos"
+            "linux" in os -> "linux"
+            else -> return false
+        }
+        val arch = when (System.getProperty("os.arch").lowercase()) {
+            "amd64", "x86_64", "x64" -> "x86_64"
+            "aarch64", "arm64" -> "aarch64"
+            else -> return false
+        }
+        val resource = "native/$nativeOs-$arch/files.list"
+        return TccCompiler::class.java.classLoader.getResource(resource) != null
     }
 
     private fun quoteOption(option: String): String {

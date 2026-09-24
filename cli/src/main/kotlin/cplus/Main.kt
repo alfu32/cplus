@@ -286,6 +286,7 @@ global options:
 defaults:
   transcode: filename.cp -> filename.c
   compile/run: filename.cp -> filename
+  compiler: matching embedded TinyCC, otherwise external tcc from PATH (or TCC)
   test: runs all @test blocks, or only the exact names supplied after the source files
   new: creates a C-plus project with cplus.toml and src/main.cp
 

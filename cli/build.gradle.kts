@@ -47,14 +47,15 @@ tasks.jar {
     }
 }
 
-val tccArchOption = providers.gradleProperty("arch").orElse("all").get().trim().lowercase()
-val tccOsOption = providers.gradleProperty("os").orElse("all").get().trim().lowercase()
+val tccArchOption = providers.gradleProperty("arch").orElse("none").get().trim().lowercase()
+val tccOsOption = providers.gradleProperty("os").orElse("none").get().trim().lowercase()
 
 val tccArchitectures = when (tccArchOption) {
     "x86_64" -> setOf("x86_64")
     "arm64" -> setOf("aarch64")
     "all" -> setOf("x86_64", "aarch64")
-    else -> throw GradleException("Invalid -Parch='$tccArchOption'; expected x86_64, arm64, or all.")
+    "none" -> emptySet()
+    else -> throw GradleException("Invalid -Parch='$tccArchOption'; expected x86_64, arm64, all, or none.")
 }
 
 val tccOperatingSystems = when (tccOsOption) {
@@ -62,7 +63,11 @@ val tccOperatingSystems = when (tccOsOption) {
     "mac" -> setOf("macos")
     "linux" -> setOf("linux")
     "all" -> setOf("windows", "macos", "linux")
-    else -> throw GradleException("Invalid -Pos='$tccOsOption'; expected win, mac, linux, or all.")
+    "none" -> emptySet()
+    else -> throw GradleException("Invalid -Pos='$tccOsOption'; expected win, mac, linux, all, or none.")
+}
+if ((tccArchOption == "none") != (tccOsOption == "none")) {
+    throw GradleException("-Pos=none and -Parch=none must be selected together.")
 }
 
 val allTccTargets = setOf(
@@ -95,11 +100,12 @@ tasks.register<Jar>("fatJar") {
     })
     from(zipTree(tinyccEmbedJar)) {
         exclude { details ->
-            val target = details.path
+            val path = details.path
+            val target = path
                 .takeIf { it.startsWith("native/") }
                 ?.removePrefix("native/")
                 ?.substringBefore('/')
-            target != null && target in allTccTargets && target !in selectedTccTargets
+            path.trimEnd('/') == "native" || (target != null && target in allTccTargets && target !in selectedTccTargets)
         }
     }
 

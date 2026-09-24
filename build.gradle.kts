@@ -136,13 +136,16 @@ tasks.register("fatJar") {
     dependsOn(":cli:fatJar")
 }
 
-val bundleOs = providers.gradleProperty("os").orElse("all").get().trim().lowercase()
-val bundleArch = providers.gradleProperty("arch").orElse("all").get().trim().lowercase()
-if (bundleOs !in setOf("linux", "mac", "win", "all")) {
-    throw GradleException("Invalid -Pos='$bundleOs'; expected linux, mac, win, or all.")
+val bundleOs = providers.gradleProperty("os").orElse("none").get().trim().lowercase()
+val bundleArch = providers.gradleProperty("arch").orElse("none").get().trim().lowercase()
+if (bundleOs !in setOf("linux", "mac", "win", "all", "none")) {
+    throw GradleException("Invalid -Pos='$bundleOs'; expected linux, mac, win, all, or none.")
 }
-if (bundleArch !in setOf("x86_64", "arm64", "all")) {
-    throw GradleException("Invalid -Parch='$bundleArch'; expected x86_64, arm64, or all.")
+if (bundleArch !in setOf("x86_64", "arm64", "all", "none")) {
+    throw GradleException("Invalid -Parch='$bundleArch'; expected x86_64, arm64, all, or none.")
+}
+if ((bundleOs == "none") != (bundleArch == "none")) {
+    throw GradleException("-Pos=none and -Parch=none must be selected together.")
 }
 
 val bundleOsLabel = if (bundleOs == "all") "all" else bundleOs
@@ -150,7 +153,7 @@ val bundleName = "cplus-$resolvedVersion-$bundleOsLabel-$bundleArch"
 val bundleStageDirectory = layout.buildDirectory.dir("distributions/$bundleName")
 val distributionDirectory = rootProject.file("distribution")
 val bundledOperatingSystems = if (bundleOs == "all") listOf("linux", "mac", "win") else listOf(bundleOs)
-val bundleTargetList = bundledOperatingSystems.flatMap { os ->
+val bundleTargetList = if (bundleOs == "none") emptyList() else bundledOperatingSystems.flatMap { os ->
     val nativeOs = when (os) {
         "win" -> "windows"
         "mac" -> "macos"
@@ -188,7 +191,7 @@ val stageBundleDist = tasks.register<Sync>("stageBundleDist") {
         include("**/*.cp", "**/*.c")
     }
 
-    if (bundleOs == "all") {
+    if (bundleOs == "all" || bundleOs == "none") {
         from(distributionDirectory.resolve("launchers"))
         from(distributionDirectory.resolve("linux"))
         from(distributionDirectory.resolve("macos"))
@@ -216,7 +219,8 @@ val stageBundleDist = tasks.register<Sync>("stageBundleDist") {
     doLast {
         val stage = bundleStageDirectory.get().asFile
         stage.resolve("VERSION").writeText("$resolvedVersion\n")
-        stage.resolve("TARGETS.txt").writeText(bundleTargetList.joinToString("\n", postfix = "\n"))
+        val targets = bundleTargetList.joinToString("\n")
+        stage.resolve("TARGETS.txt").writeText(if (targets.isEmpty()) "" else "$targets\n")
         listOf("cpc.sh", "cpc.zsh", "install.sh", "uninstall.sh", "install.zsh", "uninstall.zsh")
             .map(stage::resolve)
             .filter { it.isFile }

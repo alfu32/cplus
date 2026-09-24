@@ -16,7 +16,7 @@ cplus new project_name|.
 cplus --stdlib directory <subcommand> ...
 ```
 
-`transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. Additional arguments for `compile` and `run` are passed to the embedded TinyCC compiler; for example, `-DFLAG=1` or `-Iinclude`.
+`transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. Additional arguments for `compile` and `run` are passed to TinyCC; for example, `-DFLAG=1` or `-Iinclude`. A CLI jar with a matching embedded TinyCC target uses it; a jar without that target invokes external `tcc` from `PATH`, or the executable specified by `TCC`.
 
 `run` compiles first and then executes the generated executable, inheriting its standard input, output, and error streams.
 
@@ -82,8 +82,10 @@ java -jar cli/build/libs/c-plus-0.2.0.jar help
 
 `-Prelease=VERSION` sets the shared CLI/editor release version. The root `editorArtifacts` task passes it to VS Code, IntelliJ, and Vim packaging; standalone VS Code/IntelliJ packaging falls back to generated CLI version metadata or the latest Git tag.
 
-The fat jar embeds TinyCC together with the sysroot for each selected platform. `-Parch=x86_64|arm64|all` and `-Pos=win|mac|linux|all` select which platform bundles are included; both default to `all`. For example, `./gradlew -Parch=arm64 -Pos=linux fatJar` includes only Linux ARM64. `arm64` selects TinyCC's `aarch64` bundle; `win` and `mac` select `windows` and `macos`. A jar built with restricted targets can compile and run programs only on a matching included platform.
+By default, `fatJar` and `bundleDist` use `-Pos=none -Parch=none`: the resulting jar omits TinyCC native binaries and all sysroots. `transcode` still works normally, while `compile`, `run`, and `test` use an external `tcc` executable from `PATH` (or `TCC`). Install TinyCC and the system headers/libraries needed by the C program being compiled.
 
-`bundleDist` creates an expanded install folder and a versioned zip under `dist/`. Build one target with `-Pos=linux|mac|win -Parch=x86_64|arm64`, or all six native targets and all platform scripts with `-Pos=all -Parch=all`. Platform bundles include `cpc.sh`, `cpc.zsh`, or `cpc.cmd` and the matching install/uninstall scripts. Linux/macOS installers probe `/usr/local` and fall back to `$HOME/.local`; Windows probes `%ProgramData%`, falls back to `%USERPROFILE%\.bin`, updates the current-user `PATH`, registers `.cmdrc` through CMD's AutoRun registry value, and creates a `C+ Developer Console` shortcut.
+Set `-Pos=win|mac|linux` and `-Parch=x86_64|arm64` together to embed one matching platform's TinyCC and sysroot. `arm64` selects TinyCC's `aarch64` bundle; `win` and `mac` select `windows` and `macos`. Set both properties to `all` explicitly to embed all six targets, as the CI complete-bundle job does. `none` is valid only when selected for both properties.
+
+`bundleDist` creates an expanded install folder and a versioned zip under `dist/`. With no properties it creates the external-TinyCC `none/none` bundle with all platform launchers and installer scripts. Build one embedded target with `-Pos=linux|mac|win -Parch=x86_64|arm64`, or all six native targets and all platform scripts with `-Pos=all -Parch=all`. Platform bundles include `cpc.sh`, `cpc.zsh`, or `cpc.cmd` and the matching install/uninstall scripts. Linux/macOS installers probe `/usr/local` and fall back to `$HOME/.local`; Windows probes `%ProgramData%`, falls back to `%USERPROFILE%\.bin`, updates the current-user `PATH`, registers `.cmdrc` through CMD's AutoRun registry value, and creates a `C+ Developer Console` shortcut.
 
 The archive path is `dist/cplus-VERSION-OS-ARCH.zip`, with an expanded staging directory under `build/distributions/`. CI runs tests and a Linux bundle smoke test, packages each OS/architecture pair, validates selected native resources, checks macOS/Windows installer syntax on their respective runners, and uploads the complete all/all archive.

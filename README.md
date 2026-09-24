@@ -72,4 +72,4 @@ For local development, install a Java 21 JDK and use the Gradle wrapper:
 ./gradlew -Prelease=0.3.4 editorArtifacts
 ```
 
-The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. Platform bundle options are `-Pos=win|mac|linux|all` and `-Parch=x86_64|arm64|all`; both default to `all`.
+The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. With no platform properties, the CLI jar and distribution omit TinyCC binaries and sysroots; `compile` and `run` then use `tcc` from `PATH` (or the executable named by `TCC`). Add matching `-Pos` and `-Parch` properties to embed a target, or set both to `all` for a complete all-platform bundle. The accepted values are `linux|mac|win|all|none` and `x86_64|arm64|all|none`; `none` must be selected for both.
