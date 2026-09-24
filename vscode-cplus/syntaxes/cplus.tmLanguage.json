@@ -34,7 +34,7 @@
     },
     "comptime": {
       "patterns": [
-        {"name": "keyword.control.comptime.cplus", "match": "\\b(comptime|type|variable|function|import|code|test|var|fn)\\b"},
+        {"name": "keyword.control.comptime.cplus", "match": "\\b(comptime|type|variable|function|import|code|test|var|fn|defer)\\b"},
         {"name": "keyword.control.comptime.cplus", "match": "@(import|if|else|for|type|var|fn|test)\\b"},
         {"name": "entity.name.function.comptime.splice.cplus", "match": "@[A-Za-z_]\\w*(?=\\s*\\([^()]*\\)(?:[A-Za-z_]|\\())"},
         {"name": "entity.name.function.comptime.cplus", "match": "@[A-Za-z_]\\w*"},

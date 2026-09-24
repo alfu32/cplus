@@ -90,6 +90,21 @@ long sum_long(long accumulator, borrowed const int* item, size_t index) {
     return accumulator + *item;
 }
 
+int defer_order[3];
+size_t defer_order_length;
+
+void append_defer_order(int value) {
+    defer_order[defer_order_length++] = value;
+}
+
+void run_defer_fixture(void) {
+    defer append_defer_order(1);
+    defer {
+        append_defer_order(2);
+        append_defer_order(3);
+    }
+}
+
 int parity_key(borrowed const int* item) {
     return *item % 2;
 }
@@ -99,6 +114,15 @@ int record_rank_parity(borrowed const named_value_t* item) {
 }
 
 comptime int expected_answer = 42;
+
+@test "defer statements run in reverse order" {
+    defer_order_length = 0;
+    run_defer_fixture();
+    @assertEquals((size_t)3, defer_order_length);
+    @assertEquals(2, defer_order[0]);
+    @assertEquals(3, defer_order[1]);
+    @assertEquals(1, defer_order[2]);
+}
 
 @test "runtime assertion expressions" {
     int answer = 40 + 2;

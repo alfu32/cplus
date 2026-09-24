@@ -108,7 +108,7 @@ class CPlusLexer : LexerBase() {
 
     companion object {
         private val comptimeKeywords = setOf(
-            "comptime", "import", "type", "var", "fn", "variable", "function", "code", "test"
+            "comptime", "import", "type", "var", "fn", "variable", "function", "code", "test", "defer"
         )
         private val keywords = setOf(
             "typedef", "struct", "enum", "union", "const", "void", "char", "short", "int",

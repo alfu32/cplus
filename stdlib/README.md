@@ -138,7 +138,7 @@ See the [string API specification](../documentation/spec/stdlib/STRING.SPEC.md) 
 
 ## Examples and tests
 
-[`examples/containers.cp`](examples/containers.cp) demonstrates a struct-valued list, a map, and a generated list mapper. [`examples/allocators.cp`](examples/allocators.cp) shows allocator lifetimes; [`examples/allocator_debug.cp`](examples/allocator_debug.cp) intentionally triggers debug diagnostics. Run every standard-library suite with:
+[`examples/containers.cp`](examples/containers.cp) demonstrates a struct-valued list, a map, a generated list mapper, and `defer`-based normal-exit cleanup. [`examples/allocators.cp`](examples/allocators.cp) shows allocator lifetimes; [`examples/allocator_debug.cp`](examples/allocator_debug.cp) intentionally triggers debug diagnostics. The container suite also checks deferred statement/block ordering. Run every standard-library suite with:
 
 ```sh
 cpc test stdlib/tests/*.cp

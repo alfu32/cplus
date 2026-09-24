@@ -8,7 +8,7 @@ import { CPlusSymbol, indexText, memberContext } from "./index";
 const annotations = ["pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"];
 const comptimeKeywords = ["import", "if", "else", "for", "type", "var", "fn", "test"];
 const comptimeResultKinds = ["type", "variable", "function", "code", "string", "int", "float", "void"];
-const cKeywords = ["typedef", "struct", "enum", "union", "const", "volatile", "restrict", "return", "if", "else", "for", "while", "switch", "case", "default", "break", "continue", "static", "comptime"];
+const cKeywords = ["typedef", "struct", "enum", "union", "const", "volatile", "restrict", "return", "if", "else", "for", "while", "switch", "case", "default", "break", "continue", "static", "comptime", "defer"];
 
 function symbolKind(kind: CPlusSymbol["kind"]): vscode.SymbolKind {
     switch (kind) {

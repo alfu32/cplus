@@ -9,6 +9,61 @@ import java.nio.file.Files
 
 class TranspilerTest {
     @Test
+    fun deferMovesStatementsAndBlocksToFunctionEndInReverseOrder() {
+        val directory = Files.createTempDirectory("cplus-defer-order")
+        try {
+            val source = CPlusTranspiler().transpile(
+                """
+                    int deferred_values[4];
+                    int deferred_count;
+                    void record_deferred_value(int value) {
+                        deferred_values[deferred_count++] = value;
+                    }
+                    void run_deferred(void) {
+                        defer record_deferred_value(1);
+                        defer { record_deferred_value(2); record_deferred_value(3); }
+                        if (1) defer record_deferred_value(4);
+                    }
+                    typedef struct deferred_value_t {
+                        int value;
+                        pub void increment(borrowed mut *self) {
+                            defer self->value += 1;
+                        }
+                    } deferred_value_t;
+                    int main(void) {
+                        run_deferred();
+                        deferred_value_t item = {0};
+                        item.increment();
+                        return item.value != 1 || deferred_count != 4 || deferred_values[0] != 4 ||
+                            deferred_values[1] != 2 || deferred_values[2] != 3 || deferred_values[3] != 1;
+                    }
+                """.trimIndent(),
+                "cleanup-order.cp"
+            )
+            assertFalse(Regex("\\bdefer\\b").containsMatchIn(source.code), source.code)
+            val deferredLine = source.code.lines().indexOfFirst { "record_deferred_value(2)" in it } + 1
+            assertTrue(deferredLine > 0, source.code)
+            assertEquals(8, source.sourceMap.sourceForGeneratedLine(deferredLine)?.startLine)
+
+            val executable = directory.resolve("defer-order")
+            val compile = TccCompiler().compileExecutable(source, executable, emptyList())
+            assertEquals(0, compile.exitCode, compile.diagnostics.joinToString("\n"))
+            assertEquals(0, ProcessBuilder(executable.toString()).start().waitFor())
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun deferIsRejectedOutsideAFunctionBody() {
+        val error = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile("defer cleanup();", "outside-defer.cp")
+        }
+        assertTrue(error.message!!.contains("inside a function body"))
+        assertEquals(1, error.sourceSpan?.startLine)
+    }
+
+    @Test
     fun stripsTestBlocksFromOrdinaryCOutput() {
         val generated = CPlusTranspiler().transpile(
             """

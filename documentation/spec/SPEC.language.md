@@ -62,6 +62,34 @@ counter_t.alloc_init(0);    // counter__alloc_init(0), no receiver argument
 
 `comptime` marks compile-time declarations, invocations, blocks, and inline scalar evaluation; comptime string calls can splice validated identifiers into generated type and function declarations. Ordinary C `#define` may be used as a source-visible aliasing convention for generated function names; the compiler adds no alias syntax. The implemented forms and limitations are specified in [`SPEC.comptime.md`](SPEC.comptime.md). Runtime reflection and typed AST decorators are documented there as proposed extensions and are not accepted by the current compiler.
 
+## `defer`
+
+`defer` is a compiler-lowered statement valid inside a function or method body. It accepts either one C/C-plus statement or a braced group. The compiler removes each occurrence and appends its payload immediately before the enclosing function's closing brace, reversing the order in which the occurrences appeared. Statements within one deferred group keep their written order; the group remains braced so its local declarations stay scoped.
+
+```c
+void close_example(void) {
+    defer release_resource();
+    defer {
+        flush_output();
+        close_output();
+    }
+    work();
+}
+```
+
+The generated C-plus body ends conceptually as:
+
+```c
+    work();
+    {
+        flush_output();
+        close_output();
+    }
+    release_resource();
+```
+
+This is a source transformation, not runtime stack unwinding: in particular, an explicit `return` before the inserted tail skips the deferred statements. Put defers in functions that reach their closing brace, or arrange control flow accordingly. A defer without a complete statement/block, or outside a function/method body, is diagnosed. Moved text retains its original source-map locations.
+
 ## Source Mapping
 
 Generated C contains `#line` directives referencing the original C-plus file so compiler diagnostics point back to `.cp` source locations.

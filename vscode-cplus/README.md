@@ -4,6 +4,8 @@ This extension provides C-plus file detection for `.cp` and `.c+`, TextMate synt
 
 The highlighter gives comptime keywords and `self` dedicated scopes, and recognizes `@test` blocks and identifier splices such as `mapper__@name(T)__to__@name(R)`. Simple object-like `#define generated_name public_name` aliases are indexed as callable symbols for completion and navigation. These editor services do not evaluate comptime; use the CLI for the exact materialized C output. The C preprocessor alias is a normal C convention, not a C-plus alias directive.
 
+The compiler-lowered `defer` statement is highlighted and offered as a C-plus keyword completion.
+
 ## Development
 
 ```sh

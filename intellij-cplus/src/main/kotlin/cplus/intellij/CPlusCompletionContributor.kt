@@ -45,6 +45,7 @@ class CPlusCompletionContributor : CompletionContributor() {
                         result.addElement(LookupElementBuilder.create("@$it").withTypeText("comptime symbol"))
                     }
                 } else {
+                    result.addElement(LookupElementBuilder.create("defer").withTypeText("C-plus deferred statement"))
                     annotations.forEach { result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus annotation")) }
                     Regex("\\b[A-Za-z_]\\w*_t\\b").findAll(text).map { it.value }.distinct().forEach {
                         result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus type"))

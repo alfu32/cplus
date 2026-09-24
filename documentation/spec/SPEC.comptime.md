@@ -38,6 +38,8 @@ Comptime modules can therefore be written in C-plus and imported as compiler plu
 
 The compiler parses active declarations at module scope, registers their comptime definitions, expands their invocations, and reparses the resulting mapped C-plus. A returned fragment stays opaque while it is part of a generator body. Once a call emits that fragment into the module, its declarations become active on the next pass. Expansion repeats until no active comptime syntax remains; C-plus lowering starts afterward.
 
+After comptime materialization (and after optional test-harness generation), the compiler runs its internal `defer` lowering pass before method-call and struct-method lowering. `defer statement` and `defer { statements }` are runtime-source constructs, not comptime evaluator expressions: each is moved to the closing brace of its containing function/method, in reverse occurrence order, with mapped origins preserved. See the [`defer` language section](SPEC.language.md#defer) for syntax, examples, and the early-return limitation.
+
 Each pass carries source origins forward. Diagnostics in generated declarations resolve through every expansion to the source location that contributed the text. Imports and comptime definitions remain available to later passes. Repeated source states, passes that make no progress, more than 128 passes, and unresolved comptime or `@` forms produce source-mapped diagnostics.
 
 ## Syntax

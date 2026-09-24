@@ -34,11 +34,15 @@ class CPlusTranspiler {
             comptime.runtime to emptyList()
         }
 
+        val deferred = logger.pass("lower-defer-statements") {
+            DeferLowerer().lower(input.first)
+        }
+
         val typeNames = logger.pass("collect-struct-types") {
-            StructTypeCollector().collect(input.first.text)
+            StructTypeCollector().collect(deferred.text)
         }
         val calls = logger.pass("lower-method-calls") {
-            MethodCallLowerer(typeNames).lower(input.first)
+            MethodCallLowerer(typeNames).lower(deferred)
         }
         val structs = logger.pass("lower-struct-methods") {
             StructLowerer().lower(calls)

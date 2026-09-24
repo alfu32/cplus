@@ -41,6 +41,7 @@ function! cpluscomplete#Complete(findstart, base) abort
       call AddCandidate(symbol, '[C-plus comptime]', 'v')
     endfor
   else
+    call AddCandidate('defer', '[C-plus deferred statement]', 'k')
     for annotation in ['pub', 'priv', 'mut', 'borrowed', 'owned', 'stat', 'scratch', 'hot', 'warm', 'cold']
       call AddCandidate(annotation, '[C-plus annotation]', 'k')
     endfor
