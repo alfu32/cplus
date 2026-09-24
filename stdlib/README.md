@@ -17,7 +17,9 @@ The CLI resolves the `stdlib:/` root from the bundled or installed library, `--s
 | [`memory/xmem.cp`](memory/xmem.cp) | OS-backed scratch, hot, warm, and cold arenas |
 | [`io/file.cp`](io/file.cp) | Namespaced facade over the C `<stdio.h>` API |
 | [`strings/string.cp`](strings/string.cp) | Owning mutable string and string/memory helpers |
-| [`encodings/uchar.cp`](encodings/uchar.cp) | `char16_t`, `char32_t`/`rune_t`, and restartable conversion bindings |
+| [`encodings/rune.cp`](encodings/rune.cp) | Fixed-width `rune_t` and Unicode scalar helpers |
+| [`encodings/utf8.cp`](encodings/utf8.cp) | Locale-independent UTF-8 decode, count, and write operations |
+| [`encodings/uchar.cp`](encodings/uchar.cp) | `char16_t` and restartable C runtime conversion bindings |
 | [`encodings/wchar.cp`](encodings/wchar.cp) | Borrowed wide-string, wide-string-operation, and wide-I/O facades |
 | [`encodings/wctype.cp`](encodings/wctype.cp) | Locale-aware wide-character classification and case mapping |
 | [`containers/dynamic_list.cp`](containers/dynamic_list.cp) | Generic contiguous resizable list |
@@ -142,9 +144,22 @@ See the [string API specification](../documentation/spec/stdlib/STRING.SPEC.md) 
 
 ### C character and encoding facades
 
-The `encodings/` modules follow the C header boundaries: `uchar.cp` wraps UTF-16/UTF-32 code-unit conversions and defines `rune_t`; `wchar.cp` wraps wide strings and wide I/O; `wctype.cp` wraps wide classification and case mapping. Import only the modules you need. Keep an `encoding_state_t` per independent conversion and call `reset()` before starting one. Conversion return values preserve the C runtime's sentinel values.
+The `encodings/` modules provide two distinct layers. `rune.cp` defines `rune_t` and Unicode-scalar helpers. `utf8.cp` provides locale-independent UTF-8 `utf8_t.next`, `count`, and `print`; it strictly rejects malformed, overlong, surrogate, and out-of-range sequences. `uchar.cp` wraps the locale-sensitive C UTF-16/UTF-32 conversion functions, while `wchar.cp` and `wctype.cp` expose wide strings/I/O and wide classification. Import only what you need. Keep an `encoding_state_t` per independent libc conversion and call `reset()` before starting one.
 
-These are deliberately libc facades, not a portable UTF-8 guarantee: conversion, wide I/O, and classification follow the target runtime and locale. `wchar_t` has platform-dependent width and is not interchangeable with `rune_t`. The owning `string` remains byte-oriented; UTF-8 invariants, rune iteration/counting, and encoding-aware string operations are not yet integrated. See the [encoding specification](../documentation/spec/stdlib/ENCODINGS.SPEC.md) and run `cpc test stdlib/tests/encoding.cp`.
+```c
+comptime import "stdlib:/encodings/utf8.cp";
+
+size_t offset = 0;
+rune_t rune;
+int status = utf8_t.next(utf8_bytes, byte_count, &offset, &rune);
+size_t rune_count;
+if (utf8_t.count(utf8_bytes, byte_count, &rune_count) == UTF8_OK)
+    utf8_t.print(stdout, rune);
+```
+
+`next` advances the byte offset only on `UTF8_OK`; it returns `UTF8_END`, `UTF8_INCOMPLETE`, `UTF8_INVALID_SEQUENCE`, or `UTF8_INVALID_ARGUMENT` as appropriate. `count` writes its output only when the whole input is valid. `print` writes canonical UTF-8 bytes to a `FILE*`; terminal display still depends on the user's terminal encoding. See the [encoding specification](../documentation/spec/stdlib/ENCODINGS.SPEC.md) and run `cpc test stdlib/tests/utf8.cp stdlib/tests/encoding.cp`.
+
+The C conversion facade, wide I/O, and classification still follow the target runtime and locale. `wchar_t` has platform-dependent width and is not interchangeable with `rune_t`. The owning `string` remains byte-oriented; UTF-8 iteration/counting exists as a separate codec and is not yet integrated into string slicing or mutation.
 
 ## Streams and I/O
 

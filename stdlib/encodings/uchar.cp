@@ -7,8 +7,9 @@
 #include <uchar.h>
 #include <wchar.h>
 
+comptime import "stdlib:/encodings/rune.cp";
+
 typedef char16_t code_unit16_t;
-typedef char32_t rune_t;
 
 typedef struct encoding_state_t {
     mbstate_t value;
@@ -30,7 +31,11 @@ typedef struct encoding_t {
 
     static pub size_t decode32(borrowed mut rune_t* output, borrowed const char* input, size_t byte_count, borrowed mut encoding_state_t* state) {
         if (state == NULL) { errno = EINVAL; return (size_t)-1; }
-        return mbrtoc32(output, input, byte_count, &state->value);
+        char32_t decoded;
+        size_t result = mbrtoc32(output == NULL ? NULL : &decoded, input, byte_count, &state->value);
+        if (output != NULL && result != (size_t)-1 && result != (size_t)-2)
+            *output = (rune_t)decoded;
+        return result;
     }
 
     static pub size_t encode16(borrowed mut char* output, code_unit16_t value, borrowed mut encoding_state_t* state) {
@@ -40,16 +45,8 @@ typedef struct encoding_t {
 
     static pub size_t encode32(borrowed mut char* output, rune_t value, borrowed mut encoding_state_t* state) {
         if (state == NULL) { errno = EINVAL; return (size_t)-1; }
-        return c32rtomb(output, value, &state->value);
+        return c32rtomb(output, (char32_t)value, &state->value);
     }
 } encoding_t;
-
-pub int rune_is_scalar(rune_t value) {
-    return value <= 0x10ffff && !(value >= 0xd800 && value <= 0xdfff);
-}
-
-pub int rune_is_ascii(rune_t value) {
-    return value <= 0x7f;
-}
 
 #endif
