@@ -4,6 +4,7 @@ import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CPlusSymbol, indexText, memberContext } from "./index";
+import { CPlusTestFixture, findTestFixtures } from "./tests";
 import {
     builtinTestMacros,
     cKeywords,
@@ -304,6 +305,112 @@ function registerCommands(context: vscode.ExtensionContext, diagnostics: vscode.
     );
 }
 
+interface FixtureLocation {
+    uri: vscode.Uri;
+    fixture: CPlusTestFixture;
+    sourceItem: vscode.TestItem;
+}
+
+function registerTestSupport(context: vscode.ExtensionContext): void {
+    const controller = vscode.tests.createTestController("cplus.tests", "C-plus Tests");
+    const fixtures = new Map<string, FixtureLocation>();
+    const sourceItems = new Map<string, vscode.TestItem>();
+    const keyFor = (uri: vscode.Uri): string => uri.toString();
+
+    const discover = (document: vscode.TextDocument): void => {
+        if (document.languageId !== "cplus" || document.uri.scheme !== "file") return;
+        const key = keyFor(document.uri);
+        const previous = sourceItems.get(key);
+        if (previous) controller.items.delete(previous.id);
+        for (const [id, value] of fixtures) if (keyFor(value.uri) === key) fixtures.delete(id);
+
+        const sourceItem = controller.createTestItem("file:" + key, document.uri.fsPath, document.uri);
+        sourceItem.canResolveChildren = false;
+        sourceItems.set(key, sourceItem);
+        for (const fixture of findTestFixtures(document.getText())) {
+            const id = key + "#" + fixture.start;
+            const item = controller.createTestItem(id, fixture.name, document.uri);
+            const range = new vscode.Range(document.positionAt(fixture.start), document.positionAt(fixture.end));
+            item.range = range;
+            sourceItem.children.add(item);
+            fixtures.set(id, { uri: document.uri, fixture, sourceItem });
+        }
+        controller.items.add(sourceItem);
+    };
+
+    const runProfile = controller.createRunProfile("Run", vscode.TestRunProfileKind.Run, async (request, token) => {
+        const run = controller.createTestRun(request);
+        const selected = request.include?.length
+            ? request.include.flatMap((item) => item.children.size
+                ? [...item.children].map(([, child]) => child)
+                : [item])
+            : [...fixtures.keys()].map((id) => controller.items.get(id) ?? findChild(id));
+        const excluded = new Set((request.exclude ?? []).flatMap((item) =>
+            item.children.size ? [...item.children].map(([, child]) => child.id) : [item.id]));
+        const ids = [...new Set(selected.filter((item): item is vscode.TestItem => Boolean(item))
+            .map((item) => item.id).filter((id) => !excluded.has(id)))];
+        const jobs = ids.map((id) => ({ item: selected.find((item) => item?.id === id)!, location: fixtures.get(id) }))
+            .filter((job): job is { item: vscode.TestItem; location: FixtureLocation } => Boolean(job.location));
+
+        for (const job of jobs) {
+            if (token.isCancellationRequested) { run.skipped(job.item); continue; }
+            run.started(job.item);
+            const document = await vscode.workspace.openTextDocument(job.location.uri);
+            await document.save();
+            const configuration = vscode.workspace.getConfiguration("cplus");
+            const command = configuration.get<string>("compilerCommand", "cplus");
+            const args = ["test", ...(configuration.get<string[]>("compilerArguments", [])), job.location.uri.fsPath, job.location.fixture.name];
+            const result = await execute(command, args, token);
+            if (result.output) run.appendOutput(result.output.replace(/\r?\n/g, "\r\n"), undefined, job.item);
+            if (result.cancelled) run.skipped(job.item);
+            else if (result.code === 0) run.passed(job.item);
+            else run.failed(job.item, new vscode.TestMessage(result.output || `cplus test exited with status ${result.code}`));
+        }
+        run.end();
+    }, true);
+
+    function findChild(id: string): vscode.TestItem | undefined {
+        for (const [, parent] of controller.items) {
+            const found = parent.children.get(id);
+            if (found) return found;
+        }
+        return undefined;
+    }
+
+    const refresh = async (): Promise<void> => {
+        for (const document of vscode.workspace.textDocuments) discover(document);
+        for (const document of await vscode.workspace.findFiles("**/*.{cp,c+}", "**/{build,node_modules,.git}/**")) {
+            try { discover(await vscode.workspace.openTextDocument(document)); } catch { /* Ignore unreadable files. */ }
+        }
+    };
+
+    context.subscriptions.push(
+        controller,
+        runProfile,
+        vscode.workspace.onDidOpenTextDocument(discover),
+        vscode.workspace.onDidChangeTextDocument((event) => discover(event.document)),
+        vscode.workspace.onDidSaveTextDocument(discover),
+        vscode.workspace.onDidChangeWorkspaceFolders(() => void refresh())
+    );
+    void refresh();
+}
+
+function execute(command: string, args: string[], token: vscode.CancellationToken): Promise<{ code: number; output: string; cancelled: boolean }> {
+    return new Promise((resolve) => {
+        let child: ReturnType<typeof execFile>;
+        let cancelled = false;
+        const subscription = token.onCancellationRequested(() => { cancelled = true; child?.kill(); });
+        child = execFile(command, args, {
+            cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+            maxBuffer: 8 * 1024 * 1024
+        }, (error, stdout, stderr) => {
+            subscription.dispose();
+            const output = [stdout, stderr, error?.message].filter(Boolean).join("\n");
+            resolve({ code: error ? 1 : 0, output, cancelled });
+        });
+    });
+}
+
 export function activate(context: vscode.ExtensionContext): void {
     const diagnostics = vscode.languages.createDiagnosticCollection("cplus");
     context.subscriptions.push(
@@ -318,6 +425,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.workspace.onDidSaveTextDocument((document) => compilerDiagnostics(document, diagnostics))
     );
     registerCommands(context, diagnostics);
+    registerTestSupport(context);
     for (const document of vscode.workspace.textDocuments) {
         if (document.languageId === "cplus") diagnostics.set(document.uri, localDiagnostics(document));
     }

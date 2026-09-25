@@ -6,6 +6,25 @@ import org.junit.jupiter.api.Test
 
 class CPlusLexerTest {
     @Test
+    fun `finds named fixtures and ignores braces in comments and strings`() {
+        val source = """
+            @test "first fixture" {
+                const char *text = "}";
+                /* { ignored } */
+                if (1) { }
+            }
+            @test second fixture { // }
+                run();
+            }
+        """.trimIndent()
+        val fixtures = CPlusTestFixtures.find(source)
+        assertEquals(listOf("first fixture", "second fixture"), fixtures.map { it.name })
+        val firstBody = source.substring(fixtures[0].start, fixtures[0].end)
+        assertTrue(firstBody.startsWith("@test \"first fixture\" {"))
+        assertTrue(firstBody.contains("if (1) { }") && firstBody.endsWith("}"))
+    }
+
+    @Test
     fun `highlights comptime syntax and built-in macros distinctly`() {
         val source = """
             pub borrowed mut owned stat scratch hot warm cold

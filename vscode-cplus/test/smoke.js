@@ -3,6 +3,7 @@ const { readFileSync } = require("node:fs");
 const { indexText, memberContext } = require("../out/index.js");
 const builtins = require("../out/builtins.js");
 const { resolveVersion } = require("../scripts/package.js");
+const { findTestFixtures } = require("../out/tests.js");
 
 for (const value of ["pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"]) {
   assert.ok(builtins.cplusAnnotations.includes(value), `missing annotation completion: ${value}`);
@@ -70,3 +71,16 @@ assert.equal(memberContext(index, "counter_t.create")?.isStatic, true);
 assert.ok(index.byName.has("@answer"));
 assert.equal(index.byName.get("mapper_int_string")[0].kind, "function");
 assert.match(index.byName.get("mapper_int_string")[0].detail, /C preprocessor alias for mapper__int__to__string/);
+
+const fixtureSource = `
+@test "nested fixture" {
+  const char *brace = "}";
+  /* braces { } in comments are ignored */
+  if (1) { run(); }
+}
+@test plain C fixture { run(); }
+`;
+const fixtures = findTestFixtures(fixtureSource);
+assert.deepEqual(fixtures.map(({ name }) => name), ["nested fixture", "plain C fixture"]);
+assert.equal(fixtureSource.slice(fixtures[0].start, fixtures[0].end).includes("if (1) { run(); }"), true);
+assert.ok(fixtures[0].end < fixtures[1].start);

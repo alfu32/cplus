@@ -6,6 +6,8 @@ The highlighter gives comptime keywords, built-in comptime forms (`@if`, `@for`,
 
 The compiler-lowered `defer` statement and the `@throws`/`@try`/`@catch` error-handling forms are highlighted and offered as C-plus completions.
 
+The Testing view discovers named `@test` fixtures and places run controls in the editor gutter. Run a fixture to invoke `cplus test <file> <fixture name>`; configure `cplus.compilerCommand` and `cplus.compilerArguments` to select the CLI and any extra compiler flags.
+
 The extension contributes a **C-plus File Icons** theme for `.cp` and `.c+` files. Select it through **Preferences: File Icon Theme** (VS Code extensions cannot silently replace the user's current icon theme). The theme uses the repository logo from `documentation/c-plus-logo-v1.svg` when packaging the VSIX.
 
 ## Development

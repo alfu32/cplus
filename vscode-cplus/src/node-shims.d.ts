@@ -1,10 +1,13 @@
 declare module "node:child_process" {
+    export interface ExecFileChildProcess {
+        kill(): boolean;
+    }
     export function execFile(
         command: string,
         args: string[],
         options: { cwd?: string; maxBuffer?: number },
         callback: (error: Error | null, stdout: string, stderr: string) => void
-    ): void;
+    ): ExecFileChildProcess;
 }
 
 declare module "node:fs/promises" {

@@ -8,6 +8,8 @@ The highlighter distinguishes C-plus annotations, comptime directives and built-
 
 `@test` and identifier splices (for example, `mapper__@name(T)__to__@name(R)`) are highlighted and offered in completion. Simple object-like `#define generated_name public_name` aliases are suggested as callable names. The plugin does not evaluate comptime expansions; use the compiler for exact materialized output. Without `-Prelease`, its version uses generated CLI metadata or the repository's latest Git tag.
 
+Each `@test` fixture has a gutter run icon. Click it to execute only that fixture with `cplus test <file> "<fixture name>"`. The plugin uses `CPLUS_COMMAND` when set, otherwise it looks for `cplus` on `PATH`.
+
 Build the deployable plugin with:
 
 ```sh
