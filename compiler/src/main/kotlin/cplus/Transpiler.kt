@@ -35,7 +35,20 @@ class CPlusTranspiler {
             ?: fixtures.firstNotNullOfOrNull { it.body.firstOrigin()?.file }
             ?: SourceFile(runtime.text)
         val testBlocks = fixtures.map { fixture ->
-            ComptimeTestBlock(fixture.name, fixture.body, sourceFile, fixture.span.startOffset)
+            ComptimeTestBlock(
+                fixture.name,
+                fixture.body,
+                sourceFile,
+                fixture.span.startOffset,
+                fixture.assertions.map { assertion ->
+                    ComptimeTestAssertionInvocation(
+                        assertion.startOffset,
+                        assertion.endOffset - 1,
+                        assertion.macro,
+                        assertion.arguments
+                    )
+                }
+            )
         }
         val testProgram = logger.pass("emit-extracted-test-harness") { testProgram(runtime, testBlocks) }
         val annotated = logger.pass("collect-error-annotations") { ErrorAnnotationCollector().collect(testProgram.source) }
@@ -113,7 +126,7 @@ class CPlusTranspiler {
     ): TestProgram {
         if (tests.isEmpty()) return TestProgram(runtime, emptyList())
 
-        val assertions = tests.map { test -> testAssertions(test.body) }
+        val assertions = tests.map { test -> test.assertions ?: testAssertions(test.body) }
         val assertionTotal = assertions.sumOf { it.size }
         val fixtures = tests.mapIndexed { index, test ->
             TranscodedTestFixture(test.name, assertions[index].size)
@@ -332,9 +345,9 @@ class CPlusTranspiler {
 
     private data class TestProgram(val source: MappedText, val fixtures: List<TranscodedTestFixture>)
 
-    private fun testAssertions(body: MappedText): List<TestAssertionInvocation> {
+    private fun testAssertions(body: MappedText): List<ComptimeTestAssertionInvocation> {
         val masked = SourceMasker.mask(body.text)
-        val assertions = mutableListOf<TestAssertionInvocation>()
+        val assertions = mutableListOf<ComptimeTestAssertionInvocation>()
         var index = 0
 
         while (index < body.text.length) {
@@ -373,7 +386,7 @@ class CPlusTranspiler {
                 throw assertionSyntax("$spelling expects $expectedCount argument${if (expectedCount == 1) "" else "s"}", body, index)
             }
 
-            assertions += TestAssertionInvocation(index, close, macro, arguments)
+            assertions += ComptimeTestAssertionInvocation(index, close, macro, arguments)
             index = close + 1
         }
         return assertions
@@ -381,7 +394,7 @@ class CPlusTranspiler {
 
     private fun lowerTestAssertions(
         body: MappedText,
-        assertions: List<TestAssertionInvocation>,
+        assertions: List<ComptimeTestAssertionInvocation>,
         firstNumber: Int,
         total: Int
     ): MappedText {
@@ -407,13 +420,6 @@ class CPlusTranspiler {
         output.append(body, cursor, body.text.length)
         return output.build()
     }
-
-    private data class TestAssertionInvocation(
-        val start: Int,
-        val close: Int,
-        val macro: String,
-        val arguments: List<String>
-    )
 
     private fun splitAssertionArguments(text: String): List<String> {
         if (text.isBlank()) return emptyList()

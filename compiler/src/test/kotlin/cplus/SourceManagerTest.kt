@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 
@@ -85,6 +86,28 @@ class SourceManagerTest {
             assertEquals(snapshot.text.toByteArray(Charsets.UTF_8).size, snapshot.coordinates.utf8Length)
         } finally {
             Files.deleteIfExists(path)
+        }
+    }
+
+    @Test
+    fun `symlink aliases resolve to the same canonical source identity`() {
+        val directory = Files.createTempDirectory("cplus-source-alias")
+        val target = directory.resolve("module.cp")
+        val alias = directory.resolve("module-alias.cp")
+        try {
+            Files.writeString(target, "int value;\n")
+            try {
+                Files.createSymbolicLink(alias, target.fileName)
+            } catch (error: Exception) {
+                assumeTrue(false, "host does not permit symlink creation: ${error.message}")
+            }
+
+            assertEquals(SourceId.fromPath(target), SourceId.fromPath(alias))
+            assertEquals(target.toRealPath().toString(), SourceId.fromPath(alias).value)
+        } finally {
+            Files.deleteIfExists(alias)
+            Files.deleteIfExists(target)
+            Files.deleteIfExists(directory)
         }
     }
 

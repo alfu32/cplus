@@ -150,30 +150,39 @@ class CPlusParserShadowRunner(
         visit(root)
     }
 
-    private fun recognizedConstructs(result: CPlusParseResult): List<String> = result.root.children.mapNotNull { node ->
-        if (result.backend == ParserBackendId.LEGACY) {
-            node.kind.takeIf { it in LEGACY_RECOGNIZED }?.let { "$it@${node.span.startOffset}:${node.span.endOffset}" }
-        } else {
-            val kind = when (node.kind) {
-                "cplus_test_declaration" -> "test_declaration"
-                "cplus_at_import" -> "c_import_expression"
-                "cplus_comptime_block" -> "comptime_block"
-                "cplus_comptime_declaration" -> when (node.children.firstOrNull()?.kind) {
-                    "cplus_comptime_value" -> "comptime_value_declaration"
-                    "cplus_comptime_flags" -> "comptime_flags"
-                    "cplus_comptime_import" -> "comptime_import"
-                    "cplus_comptime_invocation" -> "comptime_invocation"
-                    "cplus_comptime_function_definition" -> when {
-                        result.source.text.substring(node.span.startOffset, node.span.endOffset)
-                            .startsWith("comptime type") -> "comptime_type_declaration"
-                        else -> "comptime_function_declaration"
+    private fun recognizedConstructs(result: CPlusParseResult): List<String> = buildList {
+        fun visit(node: CPlusSyntaxNode) {
+            val kind = if (result.backend == ParserBackendId.LEGACY) {
+                node.kind.takeIf { it in LEGACY_RECOGNIZED }
+            } else {
+                when (node.kind) {
+                    "cplus_test_declaration" -> "test_declaration"
+                    "cplus_at_import" -> "c_import_expression"
+                    "cplus_comptime_block" -> "comptime_block"
+                    "cplus_comptime_declaration" -> when (node.children.firstOrNull()?.kind) {
+                        "cplus_comptime_value" -> "comptime_value_declaration"
+                        "cplus_comptime_flags" -> "comptime_flags"
+                        "cplus_comptime_import" -> "comptime_import"
+                        "cplus_comptime_invocation" -> "comptime_invocation"
+                        "cplus_legacy_type_generator" -> "comptime_type_declaration"
+                        // The legacy parser models `comptime type @name(...)` as a function
+                        // declaration with resultKind=type; retain that normalized category.
+                        "cplus_comptime_function_definition" -> "comptime_function_declaration"
+                        else -> null
                     }
                     else -> null
                 }
-                else -> null
             }
-            kind?.takeIf { it in LEGACY_RECOGNIZED }?.let { "$it@${node.span.startOffset}:${node.span.endOffset}" }
+            kind?.takeIf { it in LEGACY_RECOGNIZED }?.let {
+                add("$it@${node.span.startOffset}:${node.span.endOffset}")
+            }
+            // The legacy frontend treats a comptime block/function body as one expansion unit;
+            // declarations inside it are not independently active top-level constructs here.
+            if (node.kind !in setOf("cplus_comptime_declaration", "cplus_comptime_block")) {
+                node.children.forEach(::visit)
+            }
         }
+        result.root.children.forEach(::visit)
     }.sorted()
 
     private companion object {

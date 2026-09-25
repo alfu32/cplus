@@ -22,7 +22,7 @@ class CPlusComptimeIndexer {
         fun collect(node: CPlusAstNode, dormant: Boolean = false) {
             nodes += node to dormant
             node.children.forEach { child ->
-                val bodyOfGenerator = node.syntaxKind == "cplus_comptime_function_definition" &&
+                val bodyOfGenerator = node.syntaxKind in setOf("cplus_comptime_function_definition", "cplus_legacy_type_generator") &&
                     (child.fieldName == "body" || child.syntaxKind == "compound_statement")
                 collect(child, dormant || bodyOfGenerator)
             }
@@ -32,7 +32,8 @@ class CPlusComptimeIndexer {
             .filter { it.first.syntaxKind in COMPTIME_NODES }
             .map { (node, dormant) ->
                 val symbolNode = when (node.syntaxKind) {
-                    "cplus_comptime_function_definition" -> node.children.firstOrNull { it.fieldName == "name" }
+                    "cplus_comptime_function_definition", "cplus_legacy_type_generator" ->
+                        node.children.firstOrNull { it.fieldName == "name" }
                     "cplus_comptime_invocation" -> node.children.firstOrNull { it.fieldName == "generator" }
                     "cplus_comptime_value" -> node.children.firstOrNull { it.fieldName == "name" }
                     else -> null
@@ -42,7 +43,7 @@ class CPlusComptimeIndexer {
                 CPlusComptimeConstruct(
                     syntaxKind = node.syntaxKind,
                     span = node.span,
-                    symbol = symbolNode?.text(ast.source.text),
+                    symbol = symbolNode?.text(ast.source.text)?.removePrefix("@"),
                     bodySpan = body?.span,
                     activeThisPass = !dormant
                 )
@@ -58,8 +59,9 @@ class CPlusComptimeIndexer {
 
     private companion object {
         val COMPTIME_NODES = setOf(
-            "cplus_comptime_function_definition", "cplus_comptime_import", "cplus_comptime_flags",
-            "cplus_comptime_invocation", "cplus_comptime_value", "cplus_comptime_block"
+            "cplus_comptime_function_definition", "cplus_legacy_type_generator", "cplus_comptime_import", "cplus_comptime_flags",
+            "cplus_comptime_invocation", "cplus_comptime_value", "cplus_comptime_block",
+            "cplus_comptime_conditional"
         )
         val IMPORT_NODES = setOf("cplus_comptime_import", "cplus_at_import")
     }

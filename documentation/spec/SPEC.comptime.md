@@ -113,6 +113,8 @@ The test command runs all test blocks by default. Exact names after the source p
 
 Inside source materialized by a `comptime type` or `comptime function` generator, a comptime scalar call embedded in an identifier, such as `list_of_@typename(T)` or `mapper__@name(T)__to__@name(R)`, is an identifier splice. The called comptime function must return a string containing one valid C identifier token; it is inserted without quotes. Other `@code` fragments do not eagerly evaluate nested declarations or embedded names; those declarations remain opaque until a later expansion pass. Outside identifier splices, strings keep their normal quoted C representation. Strings are not parsed as source by themselves; source is introduced explicitly by `@code`.
 
+The Tree-sitter shadow grammar represents these generated names as interpolated-identifier nodes, including when used as a type or declarator name. This is syntax recognition only: evaluation, identifier validation, and source materialization remain in the existing comptime implementation until the evaluator migration is complete.
+
 Parameters of a comptime function are compile-time values by context. `type T` declares a type-valued parameter. Legacy parameters such as `int @value` and `@type T` remain accepted.
 
 Legacy type-producing calls may use the C-like `typedef` form:

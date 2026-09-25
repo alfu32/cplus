@@ -63,6 +63,53 @@ class CPlusAstAdapterTest {
     }
 
     @Test
+    fun classifiesExplicitTestAssertionsInStableAst() {
+        val source = SourceManager().open(SourceId.named("assertion.cp"), "@assert(value)")
+        val assertionStart = source.text.indexOf('@')
+        val assertion = CPlusSyntaxNode(
+            "cplus_test_assertion_statement",
+            source.sourceFile.span(assertionStart, source.text.length)
+        )
+        val parsed = CPlusParseResult(
+            source,
+            ParserBackendId.TREE_SITTER,
+            ParseCoverage.STRUCTURAL,
+            CPlusSyntaxNode("translation_unit", source.sourceFile.span(0, source.text.length), listOf(assertion))
+        )
+
+        val node = CPlusAstAdapter().adapt(parsed).root.children.single()
+
+        assertEquals(CPlusAstKind.TEST_ASSERTION, node.kind)
+        assertEquals("cplus_test_assertion_statement", node.syntaxKind)
+        assertEquals(assertionStart, node.span.startOffset)
+    }
+
+    @Test
+    fun normalizesComptimeGeneratorsInvocationsExpressionsAndCodeFragments() {
+        val source = SourceManager().open(SourceId.named("comptime-shapes.cp"), "comptime type T;")
+        val wholeSpan = source.sourceFile.span(0, source.text.length)
+        val syntaxKinds = listOf(
+            "cplus_legacy_type_generator" to CPlusAstKind.COMPTIME_DECLARATION,
+            "cplus_comptime_function_definition" to CPlusAstKind.COMPTIME_DECLARATION,
+            "cplus_comptime_invocation" to CPlusAstKind.COMPTIME_INVOCATION,
+            "cplus_comptime_expression" to CPlusAstKind.COMPTIME_EXPRESSION,
+            "cplus_code_fragment" to CPlusAstKind.CODE_FRAGMENT,
+            "cplus_interpolated_identifier" to CPlusAstKind.INTERPOLATED_IDENTIFIER
+        )
+        val parsed = CPlusParseResult(
+            source,
+            ParserBackendId.TREE_SITTER,
+            ParseCoverage.STRUCTURAL,
+            CPlusSyntaxNode("translation_unit", wholeSpan, syntaxKinds.map { (kind, _) -> CPlusSyntaxNode(kind, wholeSpan) })
+        )
+
+        val normalized = CPlusAstAdapter().adapt(parsed).root.children
+
+        assertEquals(syntaxKinds.map { it.second }, normalized.map { it.kind })
+        assertEquals(syntaxKinds.map { it.first }, normalized.map { it.syntaxKind })
+    }
+
+    @Test
     fun emitsDeterministicAstDumpGolden() {
         val source = SourceManager().open(SourceId.named("golden.cp"), "x")
         val parsed = CPlusParseResult(

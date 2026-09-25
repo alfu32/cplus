@@ -21,14 +21,6 @@ class CPlusDeferLoweringPass {
 
         val diagnostics = mutableListOf<CPlusLoweringDiagnostic>()
         val byFunction = LinkedHashMap<CPlusAstNode, MutableList<Pair<CPlusAstNode, CPlusAstNode>>>()
-        val parents = mutableMapOf<CPlusAstNode, CPlusAstNode>()
-        fun indexParents(node: CPlusAstNode) {
-            node.children.forEach { child ->
-                parents[child] = node
-                indexParents(child)
-            }
-        }
-        indexParents(ast.root)
         deferred.forEach { defer ->
             val owner = functions.filter { defer.span.startOffset in it.span.startOffset until it.span.endOffset }
                 .minByOrNull { it.span.endOffset - it.span.startOffset }
@@ -37,13 +29,6 @@ class CPlusDeferLoweringPass {
                 diagnostics += CPlusLoweringDiagnostic(
                     "CPLUS_DEFER_OUTSIDE_FUNCTION",
                     "defer must appear inside a function or method body",
-                    defer.span
-                )
-            } else if (parents[defer]?.syntaxKind != "compound_statement" ||
-                parents[defer]?.fieldName != "body") {
-                diagnostics += CPlusLoweringDiagnostic(
-                    "CPLUS_DEFER_CONDITIONAL_SCOPE",
-                    "the AST defer pass currently supports only direct function-body statements; conditional/nested scopes remain handled by the legacy lowerer",
                     defer.span
                 )
             } else {

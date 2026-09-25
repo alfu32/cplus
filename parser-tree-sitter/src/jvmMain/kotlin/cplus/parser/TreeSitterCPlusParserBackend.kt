@@ -100,6 +100,7 @@ private class JniModifiedUtf8Offsets(text: String) {
             else -> 3
         }
         byteToUtf16 = IntArray(text.sumOf(::modifiedUtf8Width) + 1) { -1 }
+        byteToUtf16[0] = 0
         var byteOffset = 0
         var charOffset = 0
         while (charOffset < text.length) {

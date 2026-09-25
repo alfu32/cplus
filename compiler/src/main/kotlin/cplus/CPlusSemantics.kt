@@ -19,7 +19,16 @@ data class CPlusSymbol(
     val parameters: List<CPlusParameterSymbol>,
     val span: SourceSpan,
     val throwsParameter: String? = null,
-    val throwsMetadata: CPlusThrowsMetadata? = null
+    val throwsMetadata: CPlusThrowsMetadata? = null,
+    val functionType: CPlusFunctionType? = null
+)
+
+/** Callable signature attached to a C function-pointer typedef, kept distinct from its return type. */
+data class CPlusFunctionType(
+    val returnType: String?,
+    val parameters: List<CPlusParameterSymbol>,
+    val variadic: Boolean,
+    val declaratorSpan: SourceSpan
 )
 
 data class CPlusParameterSymbol(
@@ -27,7 +36,9 @@ data class CPlusParameterSymbol(
     val typeName: String?,
     val annotations: Set<String>,
     val receiver: Boolean,
-    val span: SourceSpan
+    val span: SourceSpan,
+    /** Original declaration spelling, retaining pointer depth and qualifiers beyond [typeName]. */
+    val declarationText: String? = null
 )
 
 data class CPlusResolvedCall(
@@ -65,29 +76,80 @@ class CPlusSemanticAnalyzer {
         val symbols = mutableListOf<CPlusSymbol>()
         val methodsByType = LinkedHashMap<String, MutableList<CPlusSymbol>>()
         val typeAliases = LinkedHashMap<String, String>()
+        val anonymousStructNames = LinkedHashMap<Int, String>()
+
+        ast.root.descendantsAndSelf()
+            .filter { it.syntaxKind == "type_definition" }
+            .forEach { typedef ->
+                val type = typedef.children.firstOrNull { it.fieldName == "type" } ?: return@forEach
+                val anonymousStruct = type.descendantsAndSelf().firstOrNull {
+                    it.syntaxKind in setOf("struct_specifier", "union_specifier") &&
+                        it.children.none { child -> child.syntaxKind == "type_identifier" }
+                } ?: return@forEach
+                val declarator = typedef.children.firstOrNull { it.fieldName == "declarator" } ?: return@forEach
+                val alias = declarator.descendantsAndSelf().firstOrNull {
+                    it.syntaxKind in setOf("identifier", "type_identifier")
+                }?.text(ast.source.text) ?: return@forEach
+                anonymousStructNames[anonymousStruct.span.startOffset] = alias
+            }
 
         fun collectDeclarations(node: CPlusAstNode) {
             if (node.syntaxKind == "type_definition") {
                 val typeNode = node.descendantsAndSelf().firstOrNull { it.fieldName == "type" }
-                val targetType = typeNode?.descendantsAndSelf()?.firstOrNull {
-                    it.syntaxKind == "type_identifier" || it.syntaxKind == "primitive_type"
+                val composite = typeNode?.descendantsAndSelf()?.firstOrNull {
+                    it.syntaxKind in setOf("struct_specifier", "union_specifier")
+                }
+                val taggedCompositeName = composite?.children?.firstOrNull {
+                    it.syntaxKind == "type_identifier"
                 }?.text(ast.source.text)
-                if (targetType != null) {
-                    node.children.filter { it.fieldName == "declarator" }.forEach { declarator ->
-                        val alias = declarator.descendantsAndSelf().firstOrNull { it.syntaxKind == "identifier" }
-                            ?.text(ast.source.text)
-                            ?: declarator.descendantsAndSelf().firstOrNull { it.syntaxKind == "type_identifier" }
-                            ?.text(ast.source.text)
-                        if (alias != null) {
-                            typeAliases[alias] = targetType
-                            symbols += CPlusSymbol(alias, CPlusSymbolKind.TYPE_ALIAS, null, targetType, null, emptySet(), emptyList(), declarator.span)
+                val primitiveTarget = if (composite == null) {
+                    typeNode?.descendantsAndSelf()?.firstOrNull {
+                        it.syntaxKind == "type_identifier" || it.syntaxKind == "primitive_type"
+                    }?.text(ast.source.text)
+                } else null
+                node.children.filter { it.fieldName == "declarator" }.forEach { declarator ->
+                    val declaredName = declarator.children.firstOrNull { it.fieldName == "declarator" }
+                        ?: declarator
+                    val parameterLists = declaredName.descendantsAndSelf()
+                        .filter { it.syntaxKind == "parameter_list" }.toList()
+                    val isParameterIdentifier: (CPlusAstNode) -> Boolean = { candidate ->
+                        parameterLists.any { it.span.startOffset <= candidate.span.startOffset && it.span.endOffset >= candidate.span.endOffset }
+                    }
+                    val alias = declaredName.descendantsAndSelf().firstOrNull {
+                        it.syntaxKind == "identifier" && !isParameterIdentifier(it)
+                    }
+                        ?.text(ast.source.text)
+                        ?: declaredName.descendantsAndSelf().firstOrNull {
+                            it.syntaxKind == "type_identifier" && !isParameterIdentifier(it)
+                        }
+                        ?.text(ast.source.text)
+                    if (alias != null) {
+                        val functionType = functionTypeOf(declarator, typeNode, ast.source.text)
+                        val resolvedTarget = taggedCompositeName
+                            ?: if (composite != null) anonymousStructNames[composite.span.startOffset] ?: alias
+                            else primitiveTarget
+                        if (resolvedTarget != null) {
+                            if (functionType == null && resolvedTarget != alias) typeAliases[alias] = resolvedTarget
+                            symbols += CPlusSymbol(
+                                alias,
+                                CPlusSymbolKind.TYPE_ALIAS,
+                                null,
+                                resolvedTarget.takeUnless { functionType != null },
+                                null,
+                                emptySet(),
+                                emptyList(),
+                                declarator.span,
+                                functionType = functionType
+                            )
                         }
                     }
                 }
             }
             if (node.syntaxKind == "struct_specifier" || node.syntaxKind == "union_specifier") {
                 val typeName = node.children.firstOrNull { it.syntaxKind == "type_identifier" }
-                    ?.text(ast.source.text).orEmpty()
+                    ?.text(ast.source.text)
+                    ?: anonymousStructNames[node.span.startOffset]
+                    ?: ""
                 if (typeName.isNotEmpty()) {
                     symbols += CPlusSymbol(typeName, CPlusSymbolKind.STRUCT, null, null, null, emptySet(), emptyList(), node.span)
                     val body = node.children.firstOrNull { it.syntaxKind == "field_declaration_list" }
@@ -295,6 +357,41 @@ class CPlusSemanticAnalyzer {
         }
         visit(ast.root, emptyMap())
         return CPlusSemanticIndex(symbols, resolvedCalls, catchBindings)
+    }
+
+    private fun functionTypeOf(
+        declarator: CPlusAstNode,
+        returnTypeNode: CPlusAstNode?,
+        source: String
+    ): CPlusFunctionType? {
+        val functionDeclarator = declarator.descendantsAndSelf()
+            .firstOrNull { it.syntaxKind == "function_declarator" } ?: return null
+        val parameterList = functionDeclarator.descendantsAndSelf()
+            .firstOrNull { it.syntaxKind == "parameter_list" }
+        val parameterNodes = parameterList?.children.orEmpty()
+            .filter { it.syntaxKind in setOf("parameter_declaration", "cplus_parameter_declaration") }
+        val parameters = parameterNodes.map { parameter ->
+            val declaredName = parameter.children.firstOrNull { it.fieldName == "declarator" }
+                ?.descendantsAndSelf()?.firstOrNull { it.syntaxKind == "identifier" }
+                ?.text(source).orEmpty()
+            val parameterType = parameter.children.firstOrNull { it.fieldName == "type" }
+                ?.text(source)
+            CPlusParameterSymbol(
+                declaredName,
+                parameterType,
+                parameter.descendants().filter { it.syntaxKind == "cplus_parameter_annotation" }
+                    .map { it.text(source) }.toSet(),
+                receiver = false,
+                span = parameter.span,
+                declarationText = parameter.text(source)
+            )
+        }
+        return CPlusFunctionType(
+            returnTypeNode?.text(source),
+            parameters,
+            parameterList?.children.orEmpty().any { it.syntaxKind == "variadic_parameter" },
+            functionDeclarator.span
+        )
     }
 
     private fun CPlusAstNode.text(source: String): String = source.substring(span.startOffset, span.endOffset)

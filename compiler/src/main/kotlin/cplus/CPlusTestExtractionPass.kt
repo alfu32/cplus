@@ -3,6 +3,16 @@ package cplus
 data class CPlusExtractedTestFixture(
     val name: String,
     val body: MappedText,
+    val span: SourceSpan,
+    val assertions: List<CPlusExtractedTestAssertion> = emptyList()
+)
+
+data class CPlusExtractedTestAssertion(
+    val macro: String,
+    val arguments: List<String>,
+    /** UTF-16 offsets relative to [CPlusExtractedTestFixture.body]. */
+    val startOffset: Int,
+    val endOffset: Int,
     val span: SourceSpan
 )
 
@@ -36,10 +46,44 @@ class CPlusTestExtractionPass {
                 )
                 continue
             }
+            val assertions = bodyNode.testNodes()
+                .filter { it.syntaxKind == "cplus_at_call_expression" || it.syntaxKind == "cplus_test_assertion_statement" }
+                .mapNotNull { call ->
+                    val name = call.children.firstOrNull { it.syntaxKind == "identifier" }
+                        ?.text(source.text)
+                        ?: Regex("^@([A-Za-z_][A-Za-z0-9_]*)").find(call.text(source.text))?.groupValues?.get(1)
+                        ?: return@mapNotNull null
+                    val macro = when (name) {
+                        "assert" -> "CPLUS_TEST_ASSERT_AT"
+                        "assertEquals" -> "CPLUS_TEST_ASSERT_EQUALS_AT"
+                        else -> return@mapNotNull null
+                    }
+                    val argumentList = call.children.firstOrNull { it.syntaxKind == "argument_list" }
+                    val arguments = argumentList?.children.orEmpty()
+                        .filter { it.named && it.syntaxKind != "comment" }
+                        .map { it.text(source.text).trim() }
+                    val expectedCount = if (macro == "CPLUS_TEST_ASSERT_AT") 1 else 2
+                    if (arguments.size != expectedCount || arguments.any(String::isBlank)) {
+                        diagnostics += CPlusLoweringDiagnostic(
+                            "CPLUS_TEST_ASSERT_ARGUMENTS",
+                            "@$name expects $expectedCount argument${if (expectedCount == 1) "" else "s"}",
+                            call.span
+                        )
+                        return@mapNotNull null
+                    }
+                    CPlusExtractedTestAssertion(
+                        macro,
+                        arguments,
+                        call.span.startOffset - bodyNode.span.startOffset,
+                        call.span.endOffset - bodyNode.span.startOffset,
+                        call.span
+                    )
+                }.toList()
             fixtures += CPlusExtractedTestFixture(
                 name = name,
                 body = source.slice(bodyNode.span.startOffset, bodyNode.span.endOffset),
-                span = test.span
+                span = test.span,
+                assertions = assertions
             )
         }
         if (diagnostics.isNotEmpty()) return CPlusTestExtractionResult(source, emptyList(), diagnostics)
@@ -51,6 +95,8 @@ class CPlusTestExtractionPass {
 
     private fun CPlusAstNode.testNodes(): Sequence<CPlusAstNode> =
         sequence { yield(this@testNodes); children.forEach { yieldAll(it.testNodes()) } }
+
+    private fun CPlusAstNode.text(source: String): String = source.substring(span.startOffset, span.endOffset)
 
     private fun decodeStringLiteral(literal: String): String {
         val content = literal.removeSurrounding("\"")

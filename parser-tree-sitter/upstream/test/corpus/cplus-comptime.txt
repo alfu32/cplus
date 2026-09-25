@@ -8,10 +8,14 @@ comptime typedef list(string_t) string_list_t;
 comptime make_helpers(int_t, string_t);
 comptime import "constants.cp";
 comptime flags -lraylib -lm;
-comptime int answer = 73;
+comptime int @answer = 73;
 comptime { comptime int local_answer = 42; }
+int runtime_answer = comptime answer;
 @test "fixture works" { return 0; }
 @import("plain.c")
+@if (os == "linux") { comptime flags -lX11; }
+@else if (os == "windows") { comptime flags -luser32; }
+@else { comptime flags -framework Cocoa; }
 
 --------------------------------------------------------------------------------
 
@@ -37,13 +41,13 @@ comptime { comptime int local_answer = 42; }
   (cplus_comptime_declaration
     (cplus_comptime_invocation
       (identifier)
-      (identifier)
+      (type_identifier)
       (identifier)))
   (cplus_comptime_declaration
     (cplus_comptime_invocation
       (identifier)
-      (identifier)
-      (identifier)))
+      (type_identifier)
+      (type_identifier)))
   (cplus_comptime_declaration
     (cplus_comptime_import
       (string_literal
@@ -64,6 +68,12 @@ comptime { comptime int local_answer = 42; }
           (primitive_type)
           (identifier)
           (number_literal)))))
+  (declaration
+    (primitive_type)
+    (init_declarator
+      (identifier)
+      (cplus_comptime_expression
+        (identifier))))
   (cplus_test_declaration
     (string_literal
       (string_content))
@@ -72,4 +82,26 @@ comptime { comptime int local_answer = 42; }
         (number_literal))))
   (cplus_at_import
     (string_literal
-      (string_content))))
+      (string_content)))
+  (cplus_comptime_conditional
+    (binary_expression
+      (identifier)
+      (string_literal
+        (string_content)))
+    (compound_statement
+      (cplus_comptime_declaration
+        (cplus_comptime_flags
+          (identifier))))
+    (binary_expression
+      (identifier)
+      (string_literal
+        (string_content)))
+    (compound_statement
+      (cplus_comptime_declaration
+        (cplus_comptime_flags
+          (identifier))))
+    (compound_statement
+      (cplus_comptime_declaration
+        (cplus_comptime_flags
+          (identifier)
+          (identifier))))))

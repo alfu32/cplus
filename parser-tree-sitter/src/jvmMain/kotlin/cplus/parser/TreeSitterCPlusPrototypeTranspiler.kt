@@ -14,11 +14,13 @@ import cplus.CPlusTryCatchLoweringPass
 import cplus.CPlusSyntaxNode
 import cplus.MappedText
 import cplus.MappedTextBuilder
+import cplus.MappedEmitter
 import cplus.ParserDiagnostic
 import cplus.SourceId
 import cplus.SourceSpan
 import cplus.SourceManager
 import cplus.SourceSnapshot
+import cplus.TranscodedSource
 
 data class TreeSitterPrototypeResult(
     val cSource: MappedText?,
@@ -26,7 +28,9 @@ data class TreeSitterPrototypeResult(
     val loweringDiagnostics: List<CPlusLoweringDiagnostic>,
     val unsupportedNodes: List<TreeSitterUnsupportedConstruct>,
     val throwsFunctions: Map<String, CPlusThrowingFunction> = emptyMap(),
-    val testFixtures: List<cplus.CPlusExtractedTestFixture> = emptyList()
+    val testFixtures: List<cplus.CPlusExtractedTestFixture> = emptyList(),
+    /** Compiler-facing mapped emission for consumers that need the established source-map facade. */
+    val transcodedSource: TranscodedSource? = null
 ) {
     val successful: Boolean
         get() = cSource != null && parserDiagnostics.isEmpty() && loweringDiagnostics.isEmpty() && unsupportedNodes.isEmpty()
@@ -149,8 +153,15 @@ class TreeSitterCPlusPrototypeTranspiler(
         val output = MappedTextBuilder()
         output.appendGenerated(preamble, cplus.SourceOrigin(source.sourceFile, 0))
         output.append(mapped)
+        val emittedSource = output.build()
         return TreeSitterPrototypeResult(
-            output.build(), emptyList(), emptyList(), emptyList(), throws.functions, extractedTests.fixtures
+            emittedSource,
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            throws.functions,
+            extractedTests.fixtures,
+            MappedEmitter(source.sourceFile).emit(emittedSource, "")
         )
     }
 
@@ -158,7 +169,7 @@ class TreeSitterCPlusPrototypeTranspiler(
         val unsupportedKinds = setOf(
             "cplus_comptime_declaration", "cplus_comptime_block", "cplus_comptime_function_definition",
             "cplus_comptime_invocation", "cplus_comptime_value", "cplus_comptime_import", "cplus_comptime_flags",
-            "cplus_comptime_expression", "cplus_code_fragment", "cplus_at_call_expression",
+            "cplus_comptime_expression", "cplus_comptime_conditional", "cplus_code_fragment", "cplus_at_call_expression",
             "cplus_at_import"
         )
         val nodes = sequenceOf(root) + root.children.asSequence().flatMap { descendants(it) }

@@ -14,6 +14,11 @@ enum class CPlusAstKind {
     COMPTIME_DECLARATION,
     IMPORT,
     TEST,
+    TEST_ASSERTION,
+    COMPTIME_INVOCATION,
+    COMPTIME_EXPRESSION,
+    CODE_FRAGMENT,
+    INTERPOLATED_IDENTIFIER,
     TRY,
     CATCH,
     THROWS_ANNOTATION,
@@ -88,7 +93,7 @@ class CPlusAstAdapter {
             "enum_specifier" -> CPlusAstKind.ENUM_DECLARATION
             "type_definition" -> CPlusAstKind.TYPE_ALIAS
             "field_declaration" -> CPlusAstKind.FIELD_DECLARATION
-            "cplus_method_definition" -> CPlusAstKind.METHOD_DECLARATION
+            "cplus_method_definition", "cplus_throws_annotated_method" -> CPlusAstKind.METHOD_DECLARATION
             "function_definition" -> CPlusAstKind.FUNCTION_DECLARATION
             "cplus_function_declaration" -> CPlusAstKind.FUNCTION_DECLARATION
             "declaration" -> if (children.any { it.containsSyntax("function_declarator") }) {
@@ -96,16 +101,23 @@ class CPlusAstAdapter {
             } else {
                 CPlusAstKind.VARIABLE_DECLARATION
             }
-            "cplus_comptime_declaration", "cplus_comptime_block" -> CPlusAstKind.COMPTIME_DECLARATION
+            "cplus_comptime_declaration", "cplus_comptime_function_definition", "cplus_comptime_value",
+            "cplus_comptime_flags", "cplus_comptime_block", "cplus_comptime_conditional",
+            "cplus_legacy_type_generator" -> CPlusAstKind.COMPTIME_DECLARATION
+            "cplus_comptime_invocation" -> CPlusAstKind.COMPTIME_INVOCATION
+            "cplus_comptime_expression" -> CPlusAstKind.COMPTIME_EXPRESSION
+            "cplus_code_fragment" -> CPlusAstKind.CODE_FRAGMENT
+            "cplus_interpolated_identifier" -> CPlusAstKind.INTERPOLATED_IDENTIFIER
             "cplus_at_import", "cplus_comptime_import" -> CPlusAstKind.IMPORT
             "cplus_test_declaration" -> CPlusAstKind.TEST
+            "cplus_test_assertion_statement" -> CPlusAstKind.TEST_ASSERTION
             "cplus_try_statement" -> CPlusAstKind.TRY
             "cplus_catch_clause" -> CPlusAstKind.CATCH
             "cplus_throws_annotation" -> CPlusAstKind.THROWS_ANNOTATION
             "parameter_declaration", "cplus_parameter_declaration" -> CPlusAstKind.PARAMETER
             "compound_statement" -> CPlusAstKind.BLOCK
             "cplus_defer_statement" -> CPlusAstKind.DEFER
-            "call_expression" -> CPlusAstKind.CALL_EXPRESSION
+            "call_expression", "cplus_at_call_expression" -> CPlusAstKind.CALL_EXPRESSION
             "field_expression" -> CPlusAstKind.FIELD_ACCESS
             "if_statement", "for_statement", "while_statement", "do_statement", "switch_statement",
             "case_statement", "labeled_statement", "break_statement", "continue_statement",

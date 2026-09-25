@@ -10,6 +10,23 @@ import java.nio.file.Files
 
 class TranspilerTest {
     @Test
+    fun preservesLegacyOutputAndSourceMappingGolden() {
+        fun resource(name: String): String = checkNotNull(javaClass.getResourceAsStream("/$name"))
+            .bufferedReader().use { it.readText() }
+        val input = resource("frontend-legacy-baseline.cp")
+        val expectedC = resource("frontend-legacy-baseline.c")
+
+        val generated = CPlusTranspiler().transpile(input, "legacy-baseline.cp")
+
+        assertEquals(expectedC, generated.code)
+        val mainLine = generated.code.lines().indexOfFirst { it == "int main(void) {" } + 1
+        assertTrue(mainLine > 0, generated.code)
+        val origin = generated.sourceMap.sourceForGeneratedLine(mainLine + 1)
+        assertEquals("legacy-baseline.cp", origin?.file)
+        assertEquals(2, origin?.startLine)
+    }
+
+    @Test
     fun lowersErrorReturnAndErrorOutCallsWithOrderedCatchDispatch() {
         val directory = Files.createTempDirectory("cplus-try-catch")
         try {
@@ -1730,7 +1747,8 @@ class TranspilerTest {
                 return (&box).get() == 42 ? 0 : 1;
             }
         """.trimIndent()
-        val result = CPlusTranspiler().transpile(source, "nested-expansion.cp").code
+        val transpiled = CPlusTranspiler().transpile(source, "nested-expansion.cp")
+        val result = transpiled.code
 
         assertTrue("typedef struct generated_box_t" in result, result)
         assertTrue("int generated_box__get(borrowed generated_box_t *self)" in result, result)
@@ -1739,6 +1757,13 @@ class TranspilerTest {
         assertTrue("@emit_box" !in result, result)
         assertTrue("@type" !in result, result)
         assertTrue("@box" !in result, result)
+        val generatedMethodLine = result.lines().indexOfFirst {
+            "generated_box__get(borrowed generated_box_t *self)" in it
+        } + 1
+        assertTrue(generatedMethodLine > 0, result)
+        val generatedMethodOrigin = transpiled.sourceMap.sourceForGeneratedLine(generatedMethodLine)
+        assertEquals("nested-expansion.cp", generatedMethodOrigin?.file)
+        assertTrue((generatedMethodOrigin?.startLine ?: 0) > 0, generatedMethodOrigin.toString())
 
         val directory = Files.createTempDirectory("cplus-generated-declarations")
         try {

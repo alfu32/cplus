@@ -42,16 +42,32 @@ kotlin {
 
 val generatedGrammarSrc = tasks.generateGrammarFiles.get().generatedSrc
 val nativeOutputDirectory = layout.buildDirectory.dir("native-parser")
+val nativeHostOs = when {
+    System.getProperty("os.name").lowercase().contains("windows") -> "windows"
+    System.getProperty("os.name").lowercase().contains("mac") -> "macos"
+    System.getProperty("os.name").lowercase().contains("linux") -> "linux"
+    else -> error("Unsupported JNI parser host: ${System.getProperty("os.name")}")
+}
+val nativeHostArch = when (System.getProperty("os.arch").lowercase()) {
+    "amd64", "x86_64" -> "x64"
+    "aarch64", "arm64" -> "aarch64"
+    else -> error("Unsupported JNI parser architecture: ${System.getProperty("os.arch")}")
+}
 
 val configureNativeParser = tasks.register<Exec>("configureNativeParser") {
     group = "build"
     description = "Configures the local JNI language shim build."
     dependsOn(tasks.generateGrammarFiles)
-    commandLine(
-        "cmake", "-S", generatedGrammarSrc.get().asFile.parentFile.absolutePath,
-        "-B", layout.buildDirectory.dir("native-parser-cmake").get().asFile.absolutePath,
-        "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=${nativeOutputDirectory.get().asFile.absolutePath}"
-    )
+    commandLine(buildList {
+        addAll(listOf(
+            "cmake", "-S", generatedGrammarSrc.get().asFile.parentFile.absolutePath,
+            "-B", layout.buildDirectory.dir("native-parser-cmake").get().asFile.absolutePath,
+            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=${nativeOutputDirectory.get().asFile.absolutePath}"
+        ))
+        if (nativeHostOs == "windows") {
+            add("-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE=${nativeOutputDirectory.get().asFile.absolutePath}")
+        }
+    })
     inputs.file(tasks.generateGrammarFiles.get().cmakeListsFile)
 }
 
@@ -67,8 +83,8 @@ val buildNativeParser = tasks.register<Exec>("buildNativeParser") {
 val installHostParserLibrary = tasks.register<Copy>("installHostParserLibrary") {
     dependsOn(buildNativeParser)
     from(nativeOutputDirectory)
-    into(generatedGrammarSrc.dir("jvmMain/resources/lib/linux/x64"))
-    include("libktreesitter-c.so")
+    into(generatedGrammarSrc.dir("jvmMain/resources/lib/$nativeHostOs/$nativeHostArch"))
+    include("libktreesitter-c.so", "libktreesitter-c.dylib", "ktreesitter-c.dll")
 }
 
 tasks.named("jvmProcessResources") {

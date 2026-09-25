@@ -1,0 +1,82 @@
+================================================================================
+C-plus comptime identifier interpolation
+================================================================================
+
+comptime string @typename(type T) { return T.name; }
+comptime type @list(type T) {
+    return @code {
+        struct list_of_@typename(T) { T* items; };
+    };
+}
+comptime function @mapper(type T, type R) {
+    return @code {
+        R mapper__@typename(T)__to__@typename(R)(T item) { return item; }
+    };
+}
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (identifier)
+      (cplus_generic_type_parameter
+        (identifier))
+      (compound_statement
+        (return_statement
+          (field_expression
+            (identifier)
+            (field_identifier))))))
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (identifier)
+      (cplus_generic_type_parameter
+        (identifier))
+      (compound_statement
+        (return_statement
+          (cplus_code_fragment
+            (compound_statement
+              (struct_specifier
+                (cplus_interpolated_identifier
+                  (identifier)
+                  (cplus_at_call_expression
+                    (identifier)
+                    (argument_list
+                      (identifier))))
+                (field_declaration_list
+                  (field_declaration
+                    (type_identifier)
+                    (pointer_declarator
+                      (field_identifier)))))))))))
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (identifier)
+      (cplus_generic_type_parameter
+        (identifier))
+      (cplus_generic_type_parameter
+        (identifier))
+      (compound_statement
+        (return_statement
+          (cplus_code_fragment
+            (compound_statement
+              (function_definition
+                (type_identifier)
+                (function_declarator
+                  (cplus_interpolated_identifier
+                    (identifier)
+                    (cplus_at_call_expression
+                      (identifier)
+                      (argument_list
+                        (identifier)))
+                    (identifier)
+                    (cplus_at_call_expression
+                      (identifier)
+                      (argument_list
+                        (identifier))))
+                  (parameter_list
+                    (parameter_declaration
+                      (type_identifier)
+                      (identifier))))
+                (compound_statement
+                  (return_statement
+                    (identifier)))))))))))

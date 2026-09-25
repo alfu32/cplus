@@ -66,4 +66,31 @@ class SourceImportGraphTest {
             Files.deleteIfExists(directory)
         }
     }
+
+    @Test
+    fun comptimeImportCycleReportsTheRootImportLocation() {
+        val directory = Files.createTempDirectory("cplus-import-cycle")
+        try {
+            val root = directory.resolve("root.cp")
+            val imported = directory.resolve("imported.cp")
+            val rootText = "comptime import \"imported.cp\";\nint root_value;\n"
+            Files.writeString(root, rootText)
+            Files.writeString(imported, "comptime import \"root.cp\";\nint imported_value;\n")
+            val sourceManager = SourceManager()
+            val source = sourceManager.open(SourceId.fromPath(root), rootText)
+
+            val error = assertThrows(CPlusSyntaxException::class.java) {
+                ComptimeCompiler(source.sourceFile, SilentCompilationLogger, sourceManager = sourceManager).compile()
+            }
+
+            assertTrue(error.message.orEmpty().startsWith("comptime import cycle:"))
+            assertEquals(SourceId.fromPath(root).value, error.sourceSpan?.file)
+            assertEquals(rootText.indexOf("comptime import"), error.sourceSpan?.startOffset)
+            assertNotNull(sourceManager.current(SourceId.fromPath(imported)))
+        } finally {
+            Files.deleteIfExists(directory.resolve("root.cp"))
+            Files.deleteIfExists(directory.resolve("imported.cp"))
+            Files.deleteIfExists(directory)
+        }
+    }
 }

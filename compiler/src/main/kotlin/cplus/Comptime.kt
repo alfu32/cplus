@@ -1096,7 +1096,15 @@ internal data class ComptimeTestBlock(
     val name: String,
     val body: MappedText,
     val source: SourceFile,
-    val bodyStart: Int
+    val bodyStart: Int,
+    val assertions: List<ComptimeTestAssertionInvocation>? = null
+)
+
+internal data class ComptimeTestAssertionInvocation(
+    val start: Int,
+    val close: Int,
+    val macro: String,
+    val arguments: List<String>
 )
 
 private data class ComptimeIfBranch(

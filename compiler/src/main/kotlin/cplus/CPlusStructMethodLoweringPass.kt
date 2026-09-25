@@ -66,9 +66,8 @@ class CPlusStructMethodLoweringPass {
                     return@forEach
                 }
             }
-            val methodSource = source.slice(method.span.startOffset, method.span.endOffset)
             try {
-                val loweredMethod = MethodLowerer.lower(methodSource, typeName)
+                val loweredMethod = lowerMethodFromAst(method, source, typeName, isStatic)
                 methodsByTypeDefinition.getOrPut(typeDefinition, ::mutableListOf) += method to loweredMethod
             } catch (failure: CPlusSyntaxException) {
                 diagnostics += CPlusLoweringDiagnostic(
@@ -106,6 +105,89 @@ class CPlusStructMethodLoweringPass {
             )
         }
     }
+
+    private fun lowerMethodFromAst(
+        method: CPlusAstNode,
+        source: MappedText,
+        typeName: String,
+        isStatic: Boolean
+    ): MappedText {
+        val access = method.children.firstOrNull { it.syntaxKind == "cplus_access_modifier" }
+            ?: throw CPlusSyntaxException("method in struct $typeName is missing an access modifier")
+        val declarator = method.children.firstOrNull { it.fieldName == "declarator" }
+            ?: throw CPlusSyntaxException("method in struct $typeName is missing a declarator")
+        val function = declarator.descendantsAndSelf().firstOrNull { it.syntaxKind == "function_declarator" }
+            ?: throw CPlusSyntaxException("method in struct $typeName has an unsupported declarator")
+        val name = function.children.firstOrNull { it.syntaxKind == "identifier" }
+            ?: throw CPlusSyntaxException("method in struct $typeName is missing a name")
+        val parameters = function.descendantsAndSelf().firstOrNull { it.syntaxKind == "parameter_list" }
+            ?: throw CPlusSyntaxException("method in struct $typeName is missing a parameter list")
+        val open = parameters.children.firstOrNull { it.syntaxKind == "(" }
+            ?: throw CPlusSyntaxException("method in struct $typeName has a malformed parameter list")
+        val close = parameters.children.lastOrNull { it.syntaxKind == ")" }
+            ?: throw CPlusSyntaxException("method in struct $typeName has a malformed parameter list")
+
+        val output = MappedTextBuilder()
+        val declarationOrigin = source.originAt(access.span.startOffset)
+        if (isStatic) output.appendGenerated("static ", declarationOrigin)
+        output.append(source, access.span.startOffset, access.span.endOffset)
+        output.appendGenerated(" ", source.originAt(access.span.endOffset))
+        appendTrimmed(output, source, access.span.endOffset, declarator.span.startOffset)
+        val declaratorPrefix = source.text.substring(declarator.span.startOffset, name.span.startOffset)
+        val pointerReturn = declaratorPrefix.trimStart().startsWith("*")
+        if (pointerReturn) {
+            output.appendGenerated(" ", source.originAt(declarator.span.startOffset))
+        }
+        val prefixEnd = if (pointerReturn) {
+            name.span.startOffset - declaratorPrefix.takeLastWhile(Char::isWhitespace).length
+        } else {
+            name.span.startOffset
+        }
+        output.append(source, declarator.span.startOffset, prefixEnd)
+        if (!pointerReturn) output.appendGenerated(" ", source.originAt(name.span.startOffset))
+        val methodName = source.text.substring(name.span.startOffset, name.span.endOffset)
+        output.appendGenerated("${typeStem(typeName)}__$methodName", source.originAt(name.span.startOffset))
+        output.append(source, name.span.endOffset, open.span.startOffset)
+        output.appendGenerated("(", source.originAt(open.span.startOffset))
+
+        val parameterNodes = parameters.children.filter {
+            it.syntaxKind in setOf("parameter_declaration", "cplus_parameter_declaration", "variadic_parameter")
+        }
+        if (isStatic) {
+            output.append(source, open.span.endOffset, close.span.startOffset)
+        } else {
+            val receiver = parameterNodes.firstOrNull()
+                ?: throw CPlusSyntaxException("instance method $methodName has no self receiver")
+            val receiverAnnotations = receiver.descendantsAndSelf()
+                .filter { it.syntaxKind == "cplus_parameter_annotation" }
+                .map { source.text.substring(it.span.startOffset, it.span.endOffset) }
+                .toList()
+            val receiverOrigin = source.originAt(receiver.span.startOffset)
+            val receiverPrefix = receiverAnnotations.joinToString(" ")
+            if (receiverPrefix.isNotEmpty()) output.appendGenerated("$receiverPrefix ", receiverOrigin)
+            output.appendGenerated("$typeName *self", receiverOrigin)
+            var previousEnd = receiver.span.endOffset
+            parameterNodes.drop(1).forEach { parameter ->
+                output.append(source, previousEnd, parameter.span.startOffset)
+                output.append(source, parameter.span.startOffset, parameter.span.endOffset)
+                previousEnd = parameter.span.endOffset
+            }
+            output.append(source, previousEnd, close.span.startOffset)
+        }
+        output.appendGenerated(")", source.originAt(close.span.startOffset))
+        output.append(source, close.span.endOffset, method.span.endOffset)
+        return output.build()
+    }
+
+    private fun appendTrimmed(output: MappedTextBuilder, source: MappedText, start: Int, end: Int) {
+        var left = start
+        var right = end
+        while (left < right && source.text[left].isWhitespace()) left++
+        while (right > left && source.text[right - 1].isWhitespace()) right--
+        output.append(source, left, right)
+    }
+
+    private fun typeStem(typeName: String): String = if (typeName.endsWith("_t")) typeName.dropLast(2) else typeName
 }
 
 private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =
