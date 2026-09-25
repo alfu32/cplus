@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/x-cplus">
+    <comment>C-plus source code</comment>
+    <icon name="text-x-cplus"/>
+    <glob pattern="*.cp" weight="80"/>
+    <glob pattern="*.c+" weight="80"/>
+  </mime-type>
+</mime-info>

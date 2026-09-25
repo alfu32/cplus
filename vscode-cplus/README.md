@@ -6,6 +6,8 @@ The highlighter gives comptime keywords, built-in comptime forms (`@if`, `@for`,
 
 The compiler-lowered `defer` statement is highlighted and offered as a C-plus keyword completion.
 
+The extension contributes a **C-plus File Icons** theme for `.cp` and `.c+` files. Select it through **Preferences: File Icon Theme** (VS Code extensions cannot silently replace the user's current icon theme). The theme uses the repository logo from `documentation/c-plus-logo-v1.svg` when packaging the VSIX.
+
 ## Development
 
 ```sh

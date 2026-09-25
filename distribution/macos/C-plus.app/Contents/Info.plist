@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleDisplayName</key><string>C-plus Source</string>
+  <key>CFBundleExecutable</key><string>cplus-open</string>
+  <key>CFBundleIconFile</key><string>cplus.icns</string>
+  <key>CFBundleIdentifier</key><string>org.cplus.source-file</string>
+  <key>CFBundleName</key><string>C-plus Source</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>10.13</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeIconFile</key><string>cplus.icns</string>
+      <key>CFBundleTypeName</key><string>C-plus source</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>org.cplus.source-file</string></array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeConformsTo</key><array><string>public.source-code</string></array>
+      <key>UTTypeDescription</key><string>C-plus source code</string>
+      <key>UTTypeIdentifier</key><string>org.cplus.source-file</string>
+      <key>UTTypeTagSpecification</key>
+      <dict><key>public.filename-extension</key><array><string>cp</string><string>c+</string></array></dict>
+    </dict>
+  </array>
+</dict>
+</plist>

@@ -27,6 +27,17 @@ if [[ -f "$LAUNCHER" ]] && grep -Fq "# CPLUS_INSTALL_VERSION=$VERSION" "$LAUNCHE
     rm -f "$LAUNCHER"
 fi
 rm -rf -- "$APP_DIR"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+rm -f "$DATA_HOME/mime/packages/cplus-$VERSION.xml"
+if ! compgen -G "$DATA_HOME/mime/packages/cplus-*.xml" >/dev/null; then
+    rm -f "$DATA_HOME/icons/hicolor/scalable/mimetypes/text-x-cplus.svg"
+fi
+if command -v update-mime-database >/dev/null 2>&1; then
+    update-mime-database "$DATA_HOME/mime" >/dev/null
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t "$DATA_HOME/icons/hicolor" >/dev/null 2>&1 || true
+fi
 echo "Removed C-plus $VERSION from $APP_DIR"
 if [[ "$LAUNCHER" == "$HOME/.local/bin/cpc" ]]; then
     echo "If you added ~/.local/bin to ~/.bashrc only for C-plus, you may remove that PATH line."

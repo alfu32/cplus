@@ -191,6 +191,16 @@ val stageBundleDist = tasks.register<Sync>("stageBundleDist") {
         into("documentation")
         exclude("**/.DS_Store")
     }
+    from(rootProject.file("documentation/c-plus-logo-v1.svg")) {
+        into("icons")
+        rename { "cplus.svg" }
+    }
+    from(distributionDirectory.resolve("icons")) {
+        into("icons")
+    }
+    from(distributionDirectory.resolve("icons/cplus.icns")) {
+        into("C-plus.app/Contents/Resources")
+    }
     from(rootProject.file("README.md"))
     from(distributionDirectory.resolve("README.md")) {
         rename { "DISTRIBUTION.md" }
@@ -238,6 +248,7 @@ val stageBundleDist = tasks.register<Sync>("stageBundleDist") {
             .map(stage::resolve)
             .filter { it.isFile }
             .forEach { it.setExecutable(true, false) }
+        stage.resolve("C-plus.app/Contents/MacOS/cplus-open").takeIf { it.isFile }?.setExecutable(true, false)
     }
 }
 

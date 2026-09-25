@@ -29,6 +29,14 @@ if [[ "$(cd "$SOURCE_DIR" && pwd -P)" != "$(cd "$APP_DIR" && pwd -P)" ]]; then
     cp -R "$SOURCE_DIR"/. "$APP_DIR"/
 fi
 chmod +x "$APP_DIR/cpc.zsh"
+APP_BUNDLE="$APP_DIR/C-plus.app"
+if [[ -d "$APP_BUNDLE" ]]; then
+    chmod +x "$APP_BUNDLE/Contents/MacOS/cplus-open"
+    LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+    if [[ -x "$LSREGISTER" ]]; then
+        "$LSREGISTER" -f "$APP_BUNDLE" >/dev/null 2>&1 || true
+    fi
+fi
 
 LAUNCHER="$BIN_DIR/cpc"
 if [[ -e "$LAUNCHER" ]] && ! grep -Fq '# CPLUS_INSTALL_VERSION=' "$LAUNCHER"; then
@@ -51,3 +59,4 @@ if [[ ":${PATH:-}:" != *":$BIN_DIR:"* ]]; then
     printf '  export PATH="%s:$PATH"\n' "$BIN_DIR"
 fi
 print "Launcher: $LAUNCHER"
+print 'Registered C-plus source file icons as an alternate Viewer; your default editor remains unchanged.'

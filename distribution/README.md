@@ -7,7 +7,7 @@ The two application distributions are:
 - `cplus-VERSION-cross-no-sysroots.zip`: contains the six TinyCC host runtimes, but no sysroot. Native compiles use a system toolchain so host headers and libraries are used; cross-target builds need external target headers/libraries.
 - `cplus-VERSION-bare.zip`: contains no TinyCC runtime and uses an external compiler.
 
-Both archives contain the CLI, standard library, documentation, examples, launchers, and the existing install/uninstall scripts for Linux, macOS, and Windows.
+Both archives contain the CLI, standard library, documentation, examples, launchers, and install/uninstall scripts for Linux, macOS, and Windows. Linux installation registers a user-level `.cp`/`.c+` MIME icon without changing the default editor; macOS registers a C-plus source UTI and icon as an alternate Viewer; Windows registers the matching icon for the current user while preserving existing open-with defaults.
 
 ```sh
 ./gradlew -Prelease=VERSION -Ptarget=cross bundleDist

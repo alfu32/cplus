@@ -35,6 +35,13 @@
         "path": "./syntaxes/cplus.tmLanguage.json"
       }
     ],
+    "iconThemes": [
+      {
+        "id": "cplus-file-icons",
+        "label": "C-plus File Icons",
+        "path": "./icons/cplus-icon-theme.json"
+      }
+    ],
     "commands": [
       {
         "command": "cplus.transcode",

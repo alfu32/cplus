@@ -26,6 +26,27 @@ if ([IO.Path]::GetFullPath($Source).TrimEnd('\') -ine [IO.Path]::GetFullPath($Ta
     Get-ChildItem -LiteralPath $Source -Force | Copy-Item -Destination $Target -Recurse -Force
 }
 
+# Set Explorer's per-user file-type icons without claiming the user's open command.
+$Icon = Join-Path $Target 'icons\cplus.ico'
+$BackupRoot = 'HKCU:\Software\CPlus\FileIconBackups'
+foreach ($Extension in @('.cp', '.c+')) {
+    $IconKey = "HKCU:\Software\Classes\SystemFileAssociations\$Extension\DefaultIcon"
+    $BackupKey = Join-Path $BackupRoot $Extension
+    New-Item -Path $IconKey -Force | Out-Null
+    $Current = (Get-Item -LiteralPath $IconKey).GetValue('')
+    if (-not $Current -or $Current -like '*\CPlus\*\icons\cplus.ico' -or $Current -like '*\.bin\CPlus-*\icons\cplus.ico') {
+        $Backup = Get-Item -LiteralPath $BackupKey -ErrorAction SilentlyContinue
+        if ($null -eq $Backup -or $Current -notlike '*\icons\cplus.ico') {
+            New-Item -Path $BackupKey -Force | Out-Null
+            New-ItemProperty -LiteralPath $BackupKey -Name OriginalPresent -PropertyType DWord -Value ([int]($null -ne $Current)) -Force | Out-Null
+            if ($null -ne $Current) {
+                New-ItemProperty -LiteralPath $BackupKey -Name OriginalValue -PropertyType String -Value $Current -Force | Out-Null
+            }
+        }
+        Set-Item -LiteralPath $IconKey -Value "`"$Icon`",0"
+    }
+}
+
 $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $PathEntries = @($UserPath -split ';' | Where-Object { $_ })
 if (-not ($PathEntries | Where-Object { $_.TrimEnd('\') -ieq $Target.TrimEnd('\') })) {
@@ -66,5 +87,6 @@ $Shortcut.Description = 'C-plus developer command prompt'
 $Shortcut.Save()
 
 Write-Host "C-plus $Version installed ($InstallKind) to $Target"
+Write-Host 'Registered .cp and .c+ icons for the current user; existing open-with defaults are unchanged.'
 Write-Host "Added to the current user's PATH. Open a new terminal; .cmdrc is loaded through the Command Processor AutoRun registry entry."
 Write-Host "Developer Console shortcut: $ShortcutPath"

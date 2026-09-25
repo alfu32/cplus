@@ -70,6 +70,12 @@ intellijPlatform {
 }
 
 tasks {
+    processResources {
+        from(rootProject.file("../documentation/c-plus-logo-v1.svg")) {
+            into("icons")
+            rename { "cplus.svg" }
+        }
+    }
     test {
         useJUnitPlatform()
     }

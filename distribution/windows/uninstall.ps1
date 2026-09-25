@@ -15,6 +15,26 @@ if (-not $Target) {
 }
 if ($Target -notin $Candidates) { throw "Refusing to remove unexpected path: $Target" }
 
+$Icon = Join-Path $Target 'icons\cplus.ico'
+$BackupRoot = 'HKCU:\Software\CPlus\FileIconBackups'
+foreach ($Extension in @('.cp', '.c+')) {
+    $IconKey = "HKCU:\Software\Classes\SystemFileAssociations\$Extension\DefaultIcon"
+    $BackupKey = Join-Path $BackupRoot $Extension
+    if (-not (Test-Path -LiteralPath $IconKey)) { continue }
+    $Current = (Get-Item -LiteralPath $IconKey).GetValue('')
+    if ($Current -ne "`"$Icon`",0") { continue }
+    $Backup = Get-Item -LiteralPath $BackupKey -ErrorAction SilentlyContinue
+    if ($null -ne $Backup -and $Backup.GetValue('OriginalPresent', 0) -eq 1) {
+        Set-Item -LiteralPath $IconKey -Value $Backup.GetValue('OriginalValue', '')
+    } else {
+        Remove-Item -LiteralPath $IconKey -Recurse -Force
+    }
+    Remove-Item -LiteralPath $BackupKey -Recurse -Force -ErrorAction SilentlyContinue
+}
+if ((Test-Path -LiteralPath $BackupRoot) -and -not (Get-ChildItem -LiteralPath $BackupRoot -Force | Select-Object -First 1)) {
+    Remove-Item -LiteralPath $BackupRoot -Force
+}
+
 $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $NewPath = @($UserPath -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ine $Target.TrimEnd('\') }) -join ';'
 [Environment]::SetEnvironmentVariable('Path', $NewPath, 'User')

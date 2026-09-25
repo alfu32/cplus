@@ -29,6 +29,13 @@ for (const value of ["assertEquals", "CPLUS_TEST_ASSERT_EQUALS", "comptime\\\\s+
   assert.ok(grammarText.includes(value), `missing syntax scope/pattern: ${value}`);
 }
 
+const packageManifest = JSON.parse(readFileSync("package.json", "utf8"));
+const cplusIconTheme = packageManifest.contributes.iconThemes.find((theme) => theme.id === "cplus-file-icons");
+assert.ok(cplusIconTheme, "C-plus file icon theme must be contributed");
+const iconTheme = JSON.parse(readFileSync("icons/cplus-icon-theme.json", "utf8"));
+assert.equal(iconTheme.fileExtensions.cp, "_cplus");
+assert.equal(iconTheme.fileExtensions["c+"], "_cplus");
+
 assert.equal(resolveVersion({ CPLUS_RELEASE_VERSION: "2.3.4" }), "2.3.4");
 assert.equal(resolveVersion({ CPLUS_RELEASE_VERSION: "  " }), resolveVersion({}));
 

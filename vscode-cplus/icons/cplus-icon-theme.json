@@ -1,0 +1,11 @@
+{
+  "iconDefinitions": {
+    "_cplus": {
+      "iconPath": "./cplus.svg"
+    }
+  },
+  "fileExtensions": {
+    "cp": "_cplus",
+    "c+": "_cplus"
+  }
+}

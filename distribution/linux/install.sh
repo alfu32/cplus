@@ -30,6 +30,20 @@ if [[ "$(cd "$SOURCE_DIR" && pwd -P)" != "$(cd "$APP_DIR" && pwd -P)" ]]; then
 fi
 chmod +x "$APP_DIR/cpc.sh"
 
+# Register a user-level MIME type and icon without changing the user's default editor.
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+MIME_PACKAGES="$DATA_HOME/mime/packages"
+ICON_DIR="$DATA_HOME/icons/hicolor/scalable/mimetypes"
+mkdir -p "$MIME_PACKAGES" "$ICON_DIR"
+cp "$APP_DIR/cplus.xml" "$MIME_PACKAGES/cplus-$VERSION.xml"
+cp "$APP_DIR/icons/cplus.svg" "$ICON_DIR/text-x-cplus.svg"
+if command -v update-mime-database >/dev/null 2>&1; then
+    update-mime-database "$DATA_HOME/mime" >/dev/null
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t "$DATA_HOME/icons/hicolor" >/dev/null 2>&1 || true
+fi
+
 LAUNCHER="$BIN_DIR/cpc"
 if [[ -e "$LAUNCHER" ]] && ! grep -Fq '# CPLUS_INSTALL_VERSION=' "$LAUNCHER"; then
     echo "Refusing to overwrite an existing non-C-plus launcher: $LAUNCHER" >&2
@@ -50,3 +64,4 @@ if [[ ":${PATH:-}:" != *":$BIN_DIR:"* ]]; then
     printf '  export PATH="%s:$PATH"\n' "$BIN_DIR"
 fi
 echo "Launcher: $LAUNCHER"
+echo "Registered .cp and .c+ source icons for this user; the current default editor is unchanged."

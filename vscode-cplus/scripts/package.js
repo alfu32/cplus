@@ -36,26 +36,36 @@ function resolveVersion(environment = process.env) {
 
 function packageExtension() {
   const version = resolveVersion();
+  const iconDirectory = path.join(extensionRoot, "icons");
+  fs.mkdirSync(iconDirectory, { recursive: true });
+  const iconPath = path.join(iconDirectory, "cplus.svg");
+  const generatedIcon = !fs.existsSync(iconPath);
+  fs.copyFileSync(path.resolve(extensionRoot, "../documentation/c-plus-logo-v1.svg"), iconPath);
   const outputPath = path.join("dist", `cplus-language-support-${version}.vsix`);
   fs.mkdirSync(path.dirname(path.join(extensionRoot, outputPath)), { recursive: true });
 
-  const result = spawnSync(
-    "vsce",
-    [
-      "package",
-      version,
-      "--no-update-package-json",
-      "--no-git-tag-version",
-      "--no-dependencies",
-      "--out",
-      outputPath
-    ],
-    {
-      cwd: extensionRoot,
-      stdio: "inherit",
-      shell: process.platform === "win32"
-    }
-  );
+  let result;
+  try {
+    result = spawnSync(
+      "vsce",
+      [
+        "package",
+        version,
+        "--no-update-package-json",
+        "--no-git-tag-version",
+        "--no-dependencies",
+        "--out",
+        outputPath
+      ],
+      {
+        cwd: extensionRoot,
+        stdio: "inherit",
+        shell: process.platform === "win32"
+      }
+    );
+  } finally {
+    if (generatedIcon) fs.rmSync(iconPath, { force: true });
+  }
 
   if (result.error) {
     console.error(`Failed to run vsce: ${result.error.message}`);

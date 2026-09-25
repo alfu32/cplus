@@ -1,6 +1,6 @@
 # IntelliJ C-plus Module
 
-This module contains a deployable IntelliJ Platform plugin for C-plus: `.cp`/`.c+` file registration, syntax highlighting, annotation and receiver-aware member completion, lightweight symbol indexing, and declaration navigation. Completion resolves both `value.` and `pointer->`, distinguishing value, pointer, and static type receivers.
+This module contains a deployable IntelliJ Platform plugin for C-plus: `.cp`/`.c+` file registration with the repository's SVG file icon, syntax highlighting, annotation and receiver-aware member completion, lightweight symbol indexing, and declaration navigation. Completion resolves both `value.` and `pointer->`, distinguishing value, pointer, and static type receivers.
 
 The source is intentionally kept separate from the Kotlin compiler modules. It targets IntelliJ IDEA 2026.2.2 and Java 21-compatible plugin bytecode.
 

@@ -22,6 +22,11 @@ case "$APP_DIR" in
     "/usr/local/lib/cplus/$VERSION"|"$HOME/.local/opt/cplus/$VERSION") ;;
     *) print -u2 "Refusing to remove unexpected path: $APP_DIR"; exit 2 ;;
 esac
+APP_BUNDLE="$APP_DIR/C-plus.app"
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+if [[ -d "$APP_BUNDLE" && -x "$LSREGISTER" ]]; then
+    "$LSREGISTER" -u "$APP_BUNDLE" >/dev/null 2>&1 || true
+fi
 if [[ -f "$LAUNCHER" ]] && grep -Fq "# CPLUS_INSTALL_VERSION=$VERSION" "$LAUNCHER"; then
     rm -f "$LAUNCHER"
 fi
