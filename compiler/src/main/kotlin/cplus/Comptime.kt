@@ -28,7 +28,8 @@ internal class ComptimeCompiler(
     private val root: SourceFile,
     private val logger: CompilationLogger,
     private val importPaths: CPlusImportPaths = CPlusImportPaths(),
-    private val targetOs: String = CPlusTarget.hostOs()
+    private val targetOs: String = CPlusTarget.hostOs(),
+    private val sourceManager: SourceManager = SourceManager()
 ) {
     private companion object {
         const val MAX_IMPORT_MODULES = 256
@@ -42,6 +43,7 @@ internal class ComptimeCompiler(
     }
 
     private val modules = linkedMapOf<Path, ComptimeModuleResult>()
+    private val importGraph = SourceImportGraph()
     private val tests = mutableListOf<ComptimeTestBlock>()
     private var comptimeCalls = 0
 
@@ -69,7 +71,7 @@ internal class ComptimeCompiler(
                 )
             )
         }
-        return ComptimeCompilation(runtime, resolvedTests, result.compilerOptions)
+        return ComptimeCompilation(runtime, resolvedTests, result.compilerOptions, importGraph.edges())
     }
 
     private fun compileModule(source: SourceFile, stack: ArrayDeque<Path>): ComptimeModuleResult {
@@ -123,6 +125,19 @@ internal class ComptimeCompiler(
                 environment.registerRuntimeTypes(passSource)
                 parsed.items.filterIsInstance<ComptimeImport>().forEach { item ->
                     val importedSource = loadImport(passSource, item)
+                    val importerId = sourceIdFor(passSource)
+                    val importedId = sourceIdFor(importedSource)
+                    val cycle = importGraph.add(
+                        SourceImportEdge(importerId, importedId, passSource.span(item.start, item.end))
+                    )
+                    if (cycle != null) {
+                        val cycleRootEdge = importGraph.importsOf(sourceIdFor(root))
+                            .firstOrNull { it.imported in cycle }
+                        throw CPlusSyntaxException(
+                            "comptime import cycle: ${cycle.joinToString(" -> ") { it.value }}",
+                            cycleRootEdge?.location ?: passSource.span(item.start)
+                        )
+                    }
                     val imported = compileModule(importedSource, stack)
                     if (imported.identity !in importedModules) {
                         importedModules[imported.identity] = imported
@@ -278,9 +293,18 @@ internal class ComptimeCompiler(
             throw syntax("C-plus imports must use .cp or .c+: $path", source, item.start)
         }
         return try {
-            SourceFile(Files.readString(path), path.toAbsolutePath().normalize().toString())
+            sourceManager.load(path).sourceFile
         } catch (error: Exception) {
             throw syntax("cannot read imported C-plus file $path: ${error.message}", source, item.start)
+        }
+    }
+
+    private fun sourceIdFor(source: SourceFile): SourceId {
+        val name = source.name ?: return SourceId.named("<anonymous-source>")
+        return try {
+            SourceId.fromPath(Paths.get(name))
+        } catch (_: Exception) {
+            SourceId.named(name)
         }
     }
 
@@ -1057,7 +1081,8 @@ internal class ComptimeCompiler(
 internal data class ComptimeCompilation(
     val runtime: MappedText,
     val tests: List<ComptimeTestBlock>,
-    val compilerOptions: List<String>
+    val compilerOptions: List<String>,
+    val imports: List<SourceImportEdge>
 )
 
 internal data class ComptimeTestBlock(
@@ -1781,6 +1806,42 @@ private class ComptimeParser(private val source: SourceFile) {
     private fun keywordBoundary(text: String, length: Int): Boolean =
         text.length == length || !text[length].isIdentifierPart()
 
+}
+
+internal data class LegacyComptimeScan(
+    val nodes: List<CPlusSyntaxNode>,
+    val diagnostics: List<ParserDiagnostic>
+)
+
+/** Adapts the existing comptime scanner to the backend-neutral syntax model without claiming full C parsing. */
+internal fun parseLegacyComptimeSyntax(snapshot: SourceSnapshot): LegacyComptimeScan {
+    val source = snapshot.sourceFile
+    return try {
+        val items = ComptimeParser(source).parse().items
+        val nodes = items.map { item ->
+            val kind = when (item) {
+                is ComptimeImport -> "comptime_import"
+                is ComptimeCImport -> "c_import_expression"
+                is ComptimeFlags -> "comptime_flags"
+                is ComptimeBlock -> "comptime_block"
+                is ComptimeTest -> "test_declaration"
+                is ComptimeValue -> "comptime_value_declaration"
+                is ComptimeFunction -> "comptime_function_declaration"
+                is ComptimeTypeGenerator -> "comptime_type_declaration"
+                is ComptimeStruct -> "comptime_struct_declaration"
+                is ComptimeInvocation -> "comptime_invocation"
+                is ComptimeReference -> "comptime_reference"
+            }
+            CPlusSyntaxNode(kind, source.span(item.start, item.end))
+        }
+        LegacyComptimeScan(nodes, emptyList())
+    } catch (error: CPlusSyntaxException) {
+        val span = error.sourceSpan ?: source.span(0, 0)
+        LegacyComptimeScan(
+            nodes = emptyList(),
+            diagnostics = listOf(ParserDiagnostic("legacy.comptime.syntax", error.message ?: "invalid comptime syntax", ParserDiagnosticSeverity.ERROR, span))
+        )
+    }
 }
 
 private class ComptimeEnvironment(

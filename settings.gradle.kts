@@ -6,6 +6,8 @@ pluginManagement {
 
     plugins {
         kotlin("jvm") version "2.2.20"
+        kotlin("multiplatform") version "2.2.20"
+        id("io.github.tree-sitter.ktreesitter-plugin") version "0.25.1"
     }
 }
 
@@ -17,4 +19,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "c-plus"
-include(":compiler", ":cli")
+include(":compiler", ":cli", ":parser-tree-sitter")

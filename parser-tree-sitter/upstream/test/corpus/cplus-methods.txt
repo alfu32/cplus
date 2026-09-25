@@ -1,0 +1,72 @@
+================================================================================
+C-plus methods in struct bodies
+================================================================================
+
+typedef struct counter_t {
+  int value;
+  pub int increment(borrowed mut *self, int amount) { self->value += amount; return 0; }
+  static pub counter_t *create(int initial) { return 0; }
+  priv int reset(borrowed mut *self);
+} counter_t;
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (type_definition
+    (struct_specifier
+      (type_identifier)
+      (field_declaration_list
+        (field_declaration
+          (primitive_type)
+          (field_identifier))
+        (cplus_method_definition
+          (cplus_access_modifier)
+          (primitive_type)
+          (cplus_method_declarator
+            (function_declarator
+              (identifier)
+              (parameter_list
+                (cplus_parameter_declaration
+                  (cplus_parameter_annotation)
+                  (cplus_parameter_annotation)
+                  (pointer_declarator
+                    (identifier)))
+                (parameter_declaration
+                  (primitive_type)
+                  (identifier)))))
+          (compound_statement
+            (expression_statement
+              (assignment_expression
+                (field_expression
+                  (identifier)
+                  (field_identifier))
+                (identifier)))
+            (return_statement
+              (number_literal))))
+        (cplus_method_definition
+          (cplus_static_modifier)
+          (cplus_access_modifier)
+          (type_identifier)
+          (cplus_method_declarator
+            (function_declarator
+              (identifier)
+              (parameter_list
+                (parameter_declaration
+                  (primitive_type)
+                  (identifier)))))
+          (compound_statement
+            (return_statement
+              (number_literal))))
+        (cplus_method_definition
+          (cplus_access_modifier)
+          (primitive_type)
+          (cplus_method_declarator
+            (function_declarator
+              (identifier)
+              (parameter_list
+                (cplus_parameter_declaration
+                  (cplus_parameter_annotation)
+                  (cplus_parameter_annotation)
+                  (pointer_declarator
+                    (identifier)))))))))
+    (type_identifier)))

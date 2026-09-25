@@ -126,11 +126,22 @@ typedef struct snake_app_t {
         else if (self->direction == SNAKE_DOWN) head.y++;
         else if (self->direction == SNAKE_LEFT) head.x--;
         else head.x++;
-
-        if (head.x < 0 || head.x >= SNAKE_BOARD_WIDTH || head.y < 0 || head.y >= SNAKE_BOARD_HEIGHT) {
-            self->state = SNAKE_GAME_OVER;
-            return;
+        if (head.x < 0 && self->direction == SNAKE_LEFT){
+            head.x = SNAKE_BOARD_WIDTH-1;
         }
+        if(head.x >= SNAKE_BOARD_WIDTH && self->direction == SNAKE_RIGHT){
+            head.x = 0;
+        }
+        if (head.y < 0 && self->direction == SNAKE_UP){
+            head.y = SNAKE_BOARD_HEIGHT-1;
+        }
+        if(head.y >= SNAKE_BOARD_HEIGHT && self->direction == SNAKE_DOWN){
+            head.y = 0;
+        }
+        /// if (head.x < 0 || head.x >= SNAKE_BOARD_WIDTH || head.y < 0 || head.y >= SNAKE_BOARD_HEIGHT) {
+        ///     self->state = SNAKE_GAME_OVER;
+        ///     return;
+        /// }
         bool growing = snake_app_t.same_cell(head, self->food);
         int collision_limit = growing ? self->length : self->length - 1;
         for (int segment = 0; segment < collision_limit; segment++) {

@@ -1,0 +1,409 @@
+package cplus.parser
+
+import cplus.ParseCoverage
+import cplus.SourceId
+import cplus.SourceManager
+import cplus.CPlusAstAdapter
+import cplus.CPlusSemanticAnalyzer
+import cplus.CPlusSymbolKind
+import cplus.CPlusDeferLoweringPass
+import cplus.CPlusComptimeIndexer
+import cplus.CPlusMethodCallLoweringPass
+import cplus.CPlusStructMethodLoweringPass
+import cplus.CPlusParserShadowRunner
+import cplus.LegacyCPlusParserBackend
+import cplus.MappedText
+import cplus.dump
+import java.nio.file.Files
+import java.util.Comparator
+import kotlin.test.Test
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.assertEquals
+
+class TreeSitterCPlusParserBackendTest {
+    private val backend = TreeSitterCPlusParserBackend()
+    private val sources = SourceManager()
+
+    @Test
+    fun parsesCAndCPlusMethodsIntoStableNodes() {
+        val snapshot = sources.open(
+            SourceId.named("parser-test.cp"),
+            """
+            typedef struct counter_t {
+                int value;
+                pub int increment(borrowed mut *self, int amount) { return amount; }
+                static pub counter_t *create(int initial) { return 0; }
+            } counter_t;
+            int main(void) { counter_t counter; counter.increment(1); return 0; }
+            """.trimIndent()
+        )
+
+        val result = backend.parse(snapshot)
+
+        assertEquals(ParseCoverage.STRUCTURAL, result.coverage)
+        assertEquals("translation_unit", result.root.kind)
+        val methods = result.root.descendants().filter { it.kind == "cplus_method_definition" }
+        assertEquals(2, methods.size)
+        assertTrue(methods.all { snapshot.text.substring(it.span.startOffset, it.span.endOffset).contains("pub") })
+        assertTrue(result.root.descendants().any { it.kind == "call_expression" })
+        assertTrue(result.diagnostics.isEmpty())
+    }
+
+    @Test
+    fun shadowParsingReportsDifferencesWithoutReplacingTheLegacyResult() {
+        val snapshot = sources.open(
+            SourceId.named("shadow.cp"),
+            "typedef struct item_t { pub int get(borrowed *self); } item_t;\ncomptime int answer = 42;"
+        )
+        val legacy = LegacyCPlusParserBackend()
+        val report = CPlusParserShadowRunner(legacy, backend).parse(snapshot)
+
+        assertEquals(cplus.ParserBackendId.LEGACY, report.authoritative.backend)
+        assertEquals(legacy.parse(snapshot).root, report.authoritative.root)
+        assertFalse(report.coverageMatches)
+        assertTrue(report.shadowOnlyNodeCount > 0)
+        assertTrue(report.authoritativeOnlyNodeSamples.any { it.contains("legacy_text_region") })
+    }
+
+    @Test
+    fun mapsUtf8TreeSitterOffsetsBackToUtf16SourceSpans() {
+        val text = "// 🪐 C-plus source\ntypedef struct sample_t { pub int f(borrowed mut *self); } sample_t;"
+        val snapshot = sources.open(SourceId.named("unicode.cp"), text)
+
+        val result = backend.parse(snapshot)
+        val method = result.root.descendants().single { it.kind == "cplus_method_definition" }
+
+        assertEquals("pub int f(borrowed mut *self);", text.substring(method.span.startOffset, method.span.endOffset))
+    }
+
+    @Test
+    fun reportsRecoveredSyntaxWithSourceMappedSpans() {
+        val snapshot = sources.open(
+            SourceId.named("broken.cp"),
+            "typedef struct broken_t { pub int method(borrowed mut *self { return 0; } } broken_t;"
+        )
+
+        val result = backend.parse(snapshot)
+
+        assertEquals(ParseCoverage.PARTIAL, result.coverage)
+        assertFalse(result.diagnostics.isEmpty())
+        assertTrue(result.diagnostics.all { it.span.file == snapshot.id.value })
+    }
+
+    @Test
+    fun serializesEditorParseResultsWithStableUtf16SpansAndEscapedStrings() {
+        val text = "// 🪐 \"editor\"\nint value;"
+        val snapshot = sources.open(SourceId.named("editor-\"quoted\".cp"), text)
+        val result = backend.parse(snapshot)
+
+        val json = CPlusParseJson.encode(result)
+
+        assertTrue(json.startsWith("{\"schema\":\"cplus.parse.v1\""), json)
+        assertTrue(json.contains("\"offsetEncoding\":\"utf16\""), json)
+        assertTrue(json.contains("\"startOffset\":"), json)
+        assertTrue(json.contains("\\\"quoted\\\""), json)
+        assertTrue(json.contains("\"syntaxKind\":\"translation_unit\""), json)
+        val nodeAvailable = runCatching { ProcessBuilder("node", "--version").start().waitFor() == 0 }.getOrDefault(false)
+        if (nodeAvailable) {
+            val process = ProcessBuilder(
+                "node", "-e",
+                "const j=JSON.parse(require('fs').readFileSync(0,'utf8'));if(j.schema!=='cplus.parse.v1'||j.ast.span.endOffset!==${text.length})process.exit(1)"
+            ).start()
+            process.outputStream.bufferedWriter().use { it.write(json) }
+            val errors = process.errorStream.bufferedReader().use { it.readText() }
+            assertEquals(0, process.waitFor(), errors)
+        }
+    }
+
+    @Test
+    fun indexesMethodsAndResolvesExplicitInstanceAndStaticReceivers() {
+        val snapshot = sources.open(
+            SourceId.named("semantic.cp"),
+            """
+            typedef struct widget_t {
+                pub int value;
+                pub int read(borrowed mut *self, owned char* output);
+                static pub widget_t *create(void);
+            } widget_t;
+            int main(void) {
+                widget_t item;
+                item.read();
+                widget_t.create();
+                return 0;
+            }
+            """.trimIndent()
+        )
+
+        val parsed = backend.parse(snapshot)
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val index = CPlusSemanticAnalyzer().analyze(ast)
+
+        assertEquals(1, index.symbols.count { it.kind == CPlusSymbolKind.STRUCT && it.name == "widget_t" })
+        assertEquals(2, index.symbols.count { it.kind in setOf(CPlusSymbolKind.INSTANCE_METHOD, CPlusSymbolKind.STATIC_METHOD) })
+        assertEquals(2, index.resolvedCalls.size, "both explicit instance and static calls should resolve")
+        assertEquals(setOf(false, true), index.resolvedCalls.map { it.staticCall }.toSet())
+        val read = index.symbols.single { it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "read" }
+        assertEquals("pub", read.access)
+        assertTrue(read.parameters.first().receiver)
+        assertEquals("self", read.parameters.first().name)
+        assertEquals(setOf("borrowed", "mut"), read.parameters.first().annotations)
+        assertEquals(setOf("owned"), read.parameters[1].annotations)
+    }
+
+    @Test
+    fun lowersDeferredStatementsInReverseOrderAndKeepsMovedSourceOrigins() {
+        val text = """
+            void cleanup(int value);
+            void work(void) {
+                defer cleanup(1);
+                defer { cleanup(2); cleanup(3); }
+            }
+        """.trimIndent()
+        val snapshot = sources.open(SourceId.named("defer.cp"), text)
+        val ast = CPlusAstAdapter().adapt(backend.parse(snapshot))
+
+        val lowered = CPlusDeferLoweringPass().lower(ast, MappedText.identity(snapshot.sourceFile))
+
+        assertTrue(lowered.diagnostics.isEmpty(), lowered.diagnostics.toString())
+        val deferredBlockPosition = lowered.source.text.indexOf("cleanup(2)")
+        val deferredCallPosition = lowered.source.text.indexOf("cleanup(1)")
+        assertTrue(deferredBlockPosition >= 0 && deferredBlockPosition < deferredCallPosition)
+        assertFalse("defer" in lowered.source.text)
+        val movedSourceOffset = text.indexOf("cleanup(1)")
+        assertEquals(movedSourceOffset, lowered.source.originAt(deferredCallPosition)?.offset)
+    }
+
+    @Test
+    fun rejectsConditionalDeferRatherThanChangingItsExecutionSemantics() {
+        val text = "void work(void) { if (ready) defer release(); }"
+        val snapshot = sources.open(SourceId.named("conditional-defer.cp"), text)
+        val ast = CPlusAstAdapter().adapt(backend.parse(snapshot))
+
+        val lowered = CPlusDeferLoweringPass().lower(ast, MappedText.identity(snapshot.sourceFile))
+
+        assertEquals("CPLUS_DEFER_CONDITIONAL_SCOPE", lowered.diagnostics.single().code)
+        assertEquals(text, lowered.source.text)
+    }
+
+    @Test
+    fun indexesThrowsMetadataAndTryCatchAstNodes() {
+        val snapshot = sources.open(
+            SourceId.named("throws.cp"),
+            """
+            @throws(error) pub int load(borrowed mut int *out_value, borrowed mut error_t *error);
+            typedef struct file_t {
+                @throws() pub error_t open(borrowed mut *self);
+            } file_t;
+            void run(void) {
+                @try { load(&value); }
+                @catch (ERROR_IO | ERROR_INVALID_ARGUMENT, error_t error) { report(error); }
+                @catch (error_t error) { report(error); }
+            }
+            """.trimIndent()
+        )
+
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val astNodes = ast.root.descendantsAndSelf().toList()
+        assertTrue(astNodes.any { it.kind == cplus.CPlusAstKind.TRY })
+        assertTrue(astNodes.any { it.kind == cplus.CPlusAstKind.CATCH })
+        assertEquals(2, astNodes.count { it.kind == cplus.CPlusAstKind.THROWS_ANNOTATION })
+
+        val index = CPlusSemanticAnalyzer().analyze(ast)
+        assertEquals("error", index.symbols.single { it.name == "load" }.throwsParameter)
+        assertEquals("", index.symbols.single { it.name == "open" }.throwsParameter)
+        assertEquals(listOf(listOf("ERROR_IO", "ERROR_INVALID_ARGUMENT"), null), index.catchBindings.map { it.codes })
+        assertTrue(index.catchBindings.all { it.typeName == "error_t" && it.parameterName == "error" })
+    }
+
+    @Test
+    fun resolvesReceiverMethodsThroughTypedefsAndTypedParametersWithoutLeakingShadowedLocals() {
+        val snapshot = sources.open(
+            SourceId.named("aliases.cp"),
+            """
+            typedef struct widget_t {
+                pub int refresh(borrowed mut *self);
+            } widget_alias_t;
+            typedef widget_alias_t widget_handle_t;
+            int use_widget(widget_handle_t *widget) {
+                widget->refresh();
+                {
+                    int widget;
+                    widget.refresh();
+                }
+                return 0;
+            }
+            """.trimIndent()
+        )
+
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val index = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(index.symbols.any { it.name == "widget_alias_t" }, index.symbols.toString())
+        assertEquals("widget_t", index.symbols.single { it.name == "widget_alias_t" }.typeName, index.symbols.toString())
+        assertEquals("widget_alias_t", index.symbols.single { it.name == "widget_handle_t" }.typeName, index.symbols.toString())
+        assertEquals(1, index.resolvedCalls.size, "the int local shadows the typed function parameter")
+        assertEquals("refresh", index.resolvedCalls.single().methodName)
+    }
+
+    @Test
+    fun lowersResolvedValuePointerAndStaticCallsAndPreservesOrigins() {
+        val text = """
+            typedef struct counter_t {
+                pub int add(borrowed mut *self, int amount);
+                static pub counter_t *create(int initial);
+            } counter_t;
+            int run(void) {
+                counter_t counter;
+                counter_t *pointer = &counter;
+                counter.add(3);
+                pointer->add(4);
+                counter_t.create(5);
+                return 0;
+            }
+        """.trimIndent()
+        val snapshot = sources.open(SourceId.named("method-lowering.cp"), text)
+        val ast = CPlusAstAdapter().adapt(backend.parse(snapshot))
+        val semantics = CPlusSemanticAnalyzer().analyze(ast)
+
+        val lowered = CPlusMethodCallLoweringPass().lower(ast, MappedText.identity(snapshot.sourceFile), semantics)
+
+        assertTrue(lowered.diagnostics.isEmpty(), lowered.diagnostics.toString())
+        assertTrue(lowered.source.text.contains("counter__add(&counter, 3)"), lowered.source.text)
+        assertTrue(lowered.source.text.contains("counter__add(pointer, 4)"), lowered.source.text)
+        assertTrue(lowered.source.text.contains("counter__create(5)"), lowered.source.text)
+        val generated = lowered.source.text.indexOf("counter__add")
+        assertEquals(text.indexOf("add(3)"), lowered.source.originAt(generated)?.offset)
+    }
+
+    @Test
+    fun extractsMethodsAndCompilesTheResultingPlainCWithSystemCcWhenAvailable() {
+        val text = """
+            typedef struct counter_t {
+                int value;
+                pub int increment(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+                static pub int zero(void) { return 0; }
+            } counter_t;
+            int main(void) {
+                counter_t counter = {0};
+                counter_t *pointer = &counter;
+                return counter.increment(2) == 2 && pointer->increment(0) == 2 && counter_t.zero() == 0 ? 0 : 1;
+            }
+        """.trimIndent()
+        val firstSnapshot = sources.open(SourceId.named("method-pipeline.cp"), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(firstSnapshot)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val methods = result.cSource!!
+        assertTrue(methods.text.contains("pub int counter__increment(borrowed mut counter_t *self, int amount)"), methods.text)
+        assertTrue(methods.text.contains("static pub int counter__zero(void)"), methods.text)
+        assertTrue(methods.text.contains("counter__increment(&counter, 2)"), methods.text)
+        assertTrue(methods.text.contains("counter__increment(pointer, 0)"), methods.text)
+        assertTrue(methods.text.contains("counter__zero()"), methods.text)
+        assertFalse(Regex("struct counter_t \\{[^}]*increment").containsMatchIn(methods.text))
+        assertEquals(text.indexOf("increment"), methods.originAt(methods.text.indexOf("counter__increment"))?.offset)
+
+        val cc = runCatching { ProcessBuilder("cc", "--version").start().waitFor() == 0 }.getOrDefault(false)
+        if (cc) {
+            val temporaryDirectory = Files.createTempDirectory("cplus-tree-sitter-c")
+            try {
+                val executableName = "prototype" + if (System.getProperty("os.name").startsWith("Windows", true)) ".exe" else ""
+                val executable = temporaryDirectory.resolve(executableName)
+                val process = ProcessBuilder("cc", "-std=c11", "-x", "c", "-", "-o", executable.toString()).start()
+                process.outputStream.bufferedWriter().use {
+                    it.write(methods.text)
+                }
+                val errors = process.errorStream.bufferedReader().use { it.readText() }
+                assertEquals(0, process.waitFor(), errors + "\n" + methods.text)
+                val run = ProcessBuilder(executable.toString()).start()
+                assertEquals(0, run.waitFor(), run.errorStream.bufferedReader().use { it.readText() })
+            } finally {
+                Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+    }
+
+    @Test
+    fun diagnosesInstanceMethodsWithoutTheRequiredSelfReceiver() {
+        val text = "typedef struct invalid_t { pub int method(int value); } invalid_t;"
+        val snapshot = sources.open(SourceId.named("invalid-receiver.cp"), text)
+        val ast = CPlusAstAdapter().adapt(backend.parse(snapshot))
+
+        val result = CPlusStructMethodLoweringPass().lower(ast, MappedText.identity(snapshot.sourceFile))
+
+        assertEquals("CPLUS_METHOD_RECEIVER_NAME", result.diagnostics.single().code)
+        assertEquals(text, result.source.text)
+    }
+
+    @Test
+    fun prototypeTranspilerFailsClosedOnUnimplementedComptimeAndTestNodes() {
+        val source = sources.open(
+            SourceId.named("prototype-unsupported.cp"),
+            "comptime int answer = 42; @test answer { return 0; }"
+        )
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful)
+        assertEquals(null, result.cSource)
+        assertTrue(result.unsupportedNodes.any { it.syntaxKind == "cplus_comptime_declaration" }, result.unsupportedNodes.toString())
+        assertTrue(result.unsupportedNodes.any { it.syntaxKind == "cplus_test_declaration" }, result.unsupportedNodes.toString())
+        assertTrue(result.unsupportedNodes.all { it.span.file == source.id.value })
+    }
+
+    @Test
+    fun prototypeLoweringDiagnosticsMapBackToOriginalSourceAfterReparse() {
+        val text = "typedef struct invalid_t { pub int method(int value); } invalid_t;"
+        val source = sources.open(SourceId.named("mapped-diagnostic.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_METHOD_RECEIVER_NAME", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertTrue(diagnostic.span.startOffset in text.indices)
+        assertTrue(text.substring(diagnostic.span.startOffset, diagnostic.span.endOffset).contains("int value"))
+    }
+
+    @Test
+    fun indexesComptimeDeclarationsCallsImportsAndTestsFromAst() {
+        val snapshot = sources.open(
+            SourceId.named("comptime-index.cp"),
+            """
+            comptime type @list(type T) {
+                comptime int staged_detail = 7;
+                return @code { struct list_t { T *items; }; };
+            }
+            comptime typedef list(int) int_list_t;
+            comptime import "types.cp";
+            @test "list starts empty" { @assert(1 == 1); }
+            """.trimIndent()
+        )
+
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val index = CPlusComptimeIndexer().index(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(listOf("cplus_comptime_function_definition", "cplus_comptime_value", "cplus_comptime_invocation", "cplus_comptime_import"),
+            index.constructs.map { it.syntaxKind })
+        assertEquals("list", index.constructs[0].symbol)
+        assertFalse(index.constructs[1].activeThisPass, "nested generator-body declarations stay dormant until materialization")
+        assertTrue(index.constructs[0].activeThisPass)
+        assertEquals("list", index.constructs[2].symbol)
+        assertEquals(1, index.imports.size)
+        assertEquals(1, index.tests.size)
+        assertTrue(index.constructs.first().bodySpan != null)
+    }
+
+    private fun cplus.CPlusSyntaxNode.descendants(): List<cplus.CPlusSyntaxNode> =
+        listOf(this) + children.flatMap { it.descendants() }
+
+    private fun cplus.CPlusAstNode.descendantsAndSelf(): Sequence<cplus.CPlusAstNode> =
+        sequenceOf(this) + children.asSequence().flatMap { it.descendantsAndSelf() }
+}

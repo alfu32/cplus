@@ -1,0 +1,75 @@
+================================================================================
+C-plus comptime declarations and invocation sites
+================================================================================
+
+comptime string @typename(type T) { return T.name; }
+comptime type @list(type T) { return 0; }
+comptime typedef list(string_t) string_list_t;
+comptime make_helpers(int_t, string_t);
+comptime import "constants.cp";
+comptime flags -lraylib -lm;
+comptime int answer = 73;
+comptime { comptime int local_answer = 42; }
+@test "fixture works" { return 0; }
+@import("plain.c")
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (identifier)
+      (cplus_generic_type_parameter
+        (identifier))
+      (compound_statement
+        (return_statement
+          (field_expression
+            (identifier)
+            (field_identifier))))))
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (identifier)
+      (cplus_generic_type_parameter
+        (identifier))
+      (compound_statement
+        (return_statement
+          (number_literal)))))
+  (cplus_comptime_declaration
+    (cplus_comptime_invocation
+      (identifier)
+      (identifier)
+      (identifier)))
+  (cplus_comptime_declaration
+    (cplus_comptime_invocation
+      (identifier)
+      (identifier)
+      (identifier)))
+  (cplus_comptime_declaration
+    (cplus_comptime_import
+      (string_literal
+        (string_content))))
+  (cplus_comptime_declaration
+    (cplus_comptime_flags
+      (identifier)
+      (identifier)))
+  (cplus_comptime_declaration
+    (cplus_comptime_value
+      (primitive_type)
+      (identifier)
+      (number_literal)))
+  (cplus_comptime_block
+    (compound_statement
+      (cplus_comptime_declaration
+        (cplus_comptime_value
+          (primitive_type)
+          (identifier)
+          (number_literal)))))
+  (cplus_test_declaration
+    (string_literal
+      (string_content))
+    (compound_statement
+      (return_statement
+        (number_literal))))
+  (cplus_at_import
+    (string_literal
+      (string_content))))

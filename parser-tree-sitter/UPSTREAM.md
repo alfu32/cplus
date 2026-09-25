@@ -1,0 +1,15 @@
+# Upstream provenance
+
+- Project: [`tree-sitter/tree-sitter-c`](https://github.com/tree-sitter/tree-sitter-c)
+- Version/tag: `v0.24.2`
+- Pinned commit: `b780e47fc780ddc8da13afa35a3f4ed5c157823d`
+- License: MIT; see [`upstream/LICENSE`](upstream/LICENSE).
+- Generated with Tree-sitter CLI `0.25.10`, language ABI 15.
+
+## Local changes
+
+`upstream/grammar.js` adds named nodes for access-annotated global functions and struct methods, static methods, `defer`, comptime declarations/blocks/imports/flags/invocations, `@test`, `@throws`, and `@try`/`@catch`. C-plus method/function declarations require `pub` or `priv`; static methods may use `static pub` or `static priv`. Parameter lists additionally accept `borrowed`, `owned`, and `mut` prefixes, including an untyped pointer receiver such as `borrowed mut *self`. Catch alternatives use `|` and catch-all clauses bind an `error_t` parameter.
+
+The added corpus files are `upstream/test/corpus/cplus-methods.txt`, `cplus-defer.txt`, `cplus-comptime.txt`, and `cplus-errors.txt`. No upstream C corpus case was changed. Keep future patches narrow and list each here so rebasing against upstream remains reviewable.
+
+The Tree-sitter Kotlin/JVM grammar generator expects a flat `tree-sitter-c.h` include, while this upstream revision stores it at `tree_sitter/tree-sitter-c.h`. `upstream/bindings/c/tree-sitter-c.h` is a local include shim only; it includes the untouched upstream header. The grammar name remains `c` so the upstream generated `tree_sitter_c` ABI symbol and existing corpus remain compatible.

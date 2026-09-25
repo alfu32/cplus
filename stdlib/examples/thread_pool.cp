@@ -21,6 +21,7 @@ thread_step_result_t do_work(thread_task_t* task, void* context) {
     while (budget > 0 && work->completed_steps < work->total_steps) {
         work->completed_steps++;
         budget--;
+        printf("stdlib/examples/thread_pool.cp:24:8 task:%d,steps:%d,budget:%d\n",work->task_number,work->completed_steps,budget);
     }
 
     if (work->completed_steps < work->total_steps) return thread_task_t.yield();
@@ -37,7 +38,7 @@ int main(void) {
     };
 
     if (pool.init(2) != THREAD_POOL_OK) {
-        fprintf(stderr, "could not start the thread pool\n");
+        fprintf(stderr, "stdlib/examples/thread_pool.cp:41:8 could not start the thread pool\n");
         return 1;
     }
 
@@ -45,7 +46,7 @@ int main(void) {
     for (size_t index = 0; index < 3; index++) {
         thread_task_t.init(&tasks[index], do_work, &work[index]);
         if (pool.submit(&tasks[index]) != THREAD_POOL_OK) {
-            fprintf(stderr, "could not submit task %zu\n", index + 1);
+            fprintf(stderr, "stdlib/examples/thread_pool.cp:49:12 could not submit task %zu\n", index + 1);
             failed = 1;
             break;
         }
@@ -55,20 +56,20 @@ int main(void) {
         for (size_t index = 0; index < 3; index++) {
             if (pool.wait(&tasks[index]) != THREAD_POOL_OK ||
                 tasks[index].state != THREAD_TASK_COMPLETED) {
-                fprintf(stderr, "task %zu did not complete successfully\n", index + 1);
+                fprintf(stderr, "stdlib/examples/thread_pool.cp:59:16 task %zu did not complete successfully\n", index + 1);
                 failed = 1;
             }
         }
     }
 
     if (pool.destroy() != THREAD_POOL_OK) {
-        fprintf(stderr, "could not shut down the thread pool cleanly\n");
+        fprintf(stderr, "stdlib/examples/thread_pool.cp:66:8 could not shut down the thread pool cleanly\n");
         failed = 1;
     }
     if (failed) return 1;
 
     for (size_t index = 0; index < 3; index++) {
-        printf("task %d completed %d cooperative steps\n",
+        printf("stdlib/examples/thread_pool.cp:72:8 task %d completed %d cooperative steps\n",
                work[index].task_number, work[index].completed_steps);
     }
     return 0;

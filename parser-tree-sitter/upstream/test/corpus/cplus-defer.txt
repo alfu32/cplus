@@ -1,0 +1,51 @@
+================================================================================
+C-plus defer statements
+================================================================================
+
+void release(void *value);
+void work(void) {
+  defer release(first);
+  if (enabled) defer { release(second); release(third); }
+}
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (declaration
+    (primitive_type)
+    (function_declarator
+      (identifier)
+      (parameter_list
+        (parameter_declaration
+          (primitive_type)
+          (pointer_declarator
+            (identifier))))))
+  (function_definition
+    (primitive_type)
+    (function_declarator
+      (identifier)
+      (parameter_list
+        (parameter_declaration
+          (primitive_type))))
+    (compound_statement
+      (cplus_defer_statement
+        (expression_statement
+          (call_expression
+            (identifier)
+            (argument_list
+              (identifier)))))
+      (if_statement
+        (parenthesized_expression
+          (identifier))
+        (cplus_defer_statement
+          (compound_statement
+            (expression_statement
+              (call_expression
+                (identifier)
+                (argument_list
+                  (identifier))))
+            (expression_statement
+              (call_expression
+                (identifier)
+                (argument_list
+                  (identifier))))))))))

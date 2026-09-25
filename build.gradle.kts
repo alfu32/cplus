@@ -5,6 +5,8 @@ import org.gradle.api.tasks.bundling.Zip
 import java.time.LocalDate
 
 plugins {
+    kotlin("jvm") version "2.2.20" apply false
+    kotlin("multiplatform") version "2.2.20" apply false
     base
 }
 
@@ -114,21 +116,21 @@ gradle.projectsEvaluated {
 }
 
 tasks.named("assemble") {
-    dependsOn(":cli:assemble")
+    dependsOn(":cli:assemble", ":parser-tree-sitter:assemble")
 }
 
 tasks.named("check") {
-    dependsOn(":cli:check")
+    dependsOn(":compiler:check", ":cli:check", ":parser-tree-sitter:check")
 }
 
 tasks.named("clean") {
-    dependsOn(":cli:clean", ":compiler:clean")
+    dependsOn(":cli:clean", ":compiler:clean", ":parser-tree-sitter:clean")
 }
 
 tasks.register("test") {
     group = "verification"
-    description = "Runs the CLI module tests."
-    dependsOn(":cli:test")
+    description = "Runs compiler, CLI, and Tree-sitter grammar/runtime tests."
+    dependsOn(":compiler:test", ":cli:test", ":parser-tree-sitter:testTreeSitterGrammar", ":parser-tree-sitter:jvmTest")
 }
 
 tasks.register("fatJar") {

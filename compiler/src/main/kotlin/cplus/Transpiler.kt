@@ -34,7 +34,8 @@ class CPlusTranspiler {
             source
         ).sourceFile
         val comptime = logger.pass("comptime-resolve") {
-            ComptimeCompiler(sourceFile, logger, importPaths, targetOs).compile(resolveTestBodies = testMode)
+            ComptimeCompiler(sourceFile, logger, importPaths, targetOs, sourceManager)
+                .compile(resolveTestBodies = testMode)
         }
         val input = if (testMode) {
             logger.pass("collect-tests") { testProgram(comptime.runtime, comptime.tests) }
@@ -585,7 +586,7 @@ private data class StructMembers(
     }
 }
 
-private object MethodLowerer {
+internal object MethodLowerer {
     fun lower(method: MappedText, typeName: String): MappedText {
         val open = method.text.indexOf('(')
         val masked = SourceMasker.mask(method.text)

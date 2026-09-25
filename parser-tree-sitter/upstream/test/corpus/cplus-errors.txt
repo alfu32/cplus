@@ -1,0 +1,135 @@
+================================================================================
+C-plus error annotations and try/catch
+================================================================================
+
+@throws() pub error_t read_count(borrowed FILE *file, borrowed mut int *out_count);
+@throws(error) pub counter_t *create_counter(int initial, borrowed mut error_t *error);
+typedef struct counter_t {
+  @throws() pub error_t load(borrowed mut *self);
+} counter_t;
+void run(void) {
+  @try {
+    read_count(file, &count);
+    counter = create_counter(count);
+  }
+  @catch (ERROR_ALLOCATION, error_t error) { report(error); }
+  @catch (ERROR_INVALID_ARGUMENT | ERROR_IO, error_t error) { report(error); }
+  @catch (error_t error) { report(error); }
+}
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (cplus_function_declaration
+    (cplus_throws_annotation)
+    (cplus_access_modifier)
+    (type_identifier)
+    (cplus_method_declarator
+      (function_declarator
+        (identifier)
+        (parameter_list
+          (cplus_parameter_declaration
+            (cplus_parameter_annotation)
+            (type_identifier)
+            (pointer_declarator
+              (identifier)))
+          (cplus_parameter_declaration
+            (cplus_parameter_annotation)
+            (cplus_parameter_annotation)
+            (primitive_type)
+            (pointer_declarator
+              (identifier)))))))
+  (cplus_function_declaration
+    (cplus_throws_annotation
+      (identifier))
+    (cplus_access_modifier)
+    (type_identifier)
+    (cplus_method_declarator
+      (function_declarator
+        (identifier)
+        (parameter_list
+          (parameter_declaration
+            (primitive_type)
+            (identifier))
+          (cplus_parameter_declaration
+            (cplus_parameter_annotation)
+            (cplus_parameter_annotation)
+            (type_identifier)
+            (pointer_declarator
+              (identifier)))))))
+  (type_definition
+    (struct_specifier
+      (type_identifier)
+      (field_declaration_list
+        (cplus_throws_annotated_method
+          (cplus_throws_annotation)
+          (cplus_method_definition
+            (cplus_access_modifier)
+            (type_identifier)
+            (cplus_method_declarator
+              (function_declarator
+                (identifier)
+                (parameter_list
+                  (cplus_parameter_declaration
+                    (cplus_parameter_annotation)
+                    (cplus_parameter_annotation)
+                    (pointer_declarator
+                      (identifier))))))))))
+    (type_identifier))
+  (function_definition
+    (primitive_type)
+    (function_declarator
+      (identifier)
+      (parameter_list
+        (parameter_declaration
+          (primitive_type))))
+    (compound_statement
+      (cplus_try_statement
+        (compound_statement
+          (expression_statement
+            (call_expression
+              (identifier)
+              (argument_list
+                (identifier)
+                (pointer_expression
+                  (identifier)))))
+          (expression_statement
+            (assignment_expression
+              (identifier)
+              (call_expression
+                (identifier)
+                (argument_list
+                  (identifier))))))
+        (cplus_catch_clause
+          (identifier)
+          (parameter_declaration
+            (type_identifier)
+            (identifier))
+          (compound_statement
+            (expression_statement
+              (call_expression
+                (identifier)
+                (argument_list
+                  (identifier))))))
+        (cplus_catch_clause
+          (identifier)
+          (identifier)
+          (parameter_declaration
+            (type_identifier)
+            (identifier))
+          (compound_statement
+            (expression_statement
+              (call_expression
+                (identifier)
+                (argument_list
+                  (identifier))))))
+        (cplus_catch_clause
+          (parameter_declaration
+            (type_identifier)
+            (identifier))
+          (compound_statement
+            (expression_statement
+              (call_expression
+                (identifier)
+                (argument_list
+                  (identifier))))))))))
