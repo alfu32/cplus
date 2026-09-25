@@ -1,14 +1,14 @@
 # IntelliJ C-plus Module
 
-This module contains a deployable IntelliJ Platform plugin for C-plus: `.cp`/`.c+` file registration with the repository's SVG file icon, syntax highlighting, annotation and receiver-aware member completion, lightweight symbol indexing, and declaration navigation. Completion resolves both `value.` and `pointer->`, distinguishing value, pointer, and static type receivers.
+This module contains a deployable IntelliJ Platform plugin for C-plus: `CPlusLanguage` is registered through the `.cp`/`.c+` language file type with the repository's SVG file icon, syntax highlighting, annotation and receiver-aware member completion, lightweight symbol indexing, and declaration navigation. Completion resolves both `value.` and `pointer->`, distinguishing value, pointer, and static type receivers.
 
 The source is intentionally kept separate from the Kotlin compiler modules. It targets IntelliJ IDEA 2026.2.2 and Java 21-compatible plugin bytecode.
 
-The highlighter distinguishes C-plus annotations, comptime directives and built-ins, `comptime flags`, the target value `os`, reflection properties, `@assert`/`@assertEquals`, `@throws`/`@try`/`@catch`, test helper macros, and the `self` receiver. Completion offers the C keyword set, C-plus annotations, comptime result kinds/forms, built-in C-plus forms, and test macros.
+The highlighter distinguishes C and C-plus types, control keywords, function calls, C-plus annotations, comptime directives and built-ins, `comptime flags`, the target value `os`, reflection properties, `@assert`/`@assertEquals`, `@throws`/`@try`/`@catch`, test helper macros, and the `self` receiver. Completion offers the C keyword set, C-plus annotations, comptime result kinds/forms, built-in C-plus forms, and test macros.
 
 `@test` and identifier splices (for example, `mapper__@name(T)__to__@name(R)`) are highlighted and offered in completion. Simple object-like `#define generated_name public_name` aliases are suggested as callable names. The plugin does not evaluate comptime expansions; use the compiler for exact materialized output. Without `-Prelease`, its version uses generated CLI metadata or the repository's latest Git tag.
 
-Each `@test` fixture has a gutter run icon. Click it to execute only that fixture with `cplus test <file> "<fixture name>"`. The plugin uses `CPLUS_COMMAND` when set, otherwise it looks for `cplus` on `PATH`.
+Configure **Settings → Tools → C-plus** with the compiler command, runner command, and test program. Each `@test` fixture has a gutter run icon; it launches the runner with the configured test program and fixture name as arguments. The default runner is `cplus test`, and the test program defaults to the open source file. The compiler command is stored for compiler-backed features.
 
 Build the deployable plugin with:
 

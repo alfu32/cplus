@@ -21,6 +21,7 @@ class CPlusSyntaxHighlighter : SyntaxHighlighterBase() {
         CPlusTokenTypes.COMPTIME_PROPERTY -> pack(COMPTIME_PROPERTY)
         CPlusTokenTypes.COMMENT -> pack(DefaultLanguageHighlighterColors.LINE_COMMENT)
         CPlusTokenTypes.PREPROCESSOR -> pack(DefaultLanguageHighlighterColors.METADATA)
+        CPlusTokenTypes.FUNCTION -> pack(DefaultLanguageHighlighterColors.FUNCTION_DECLARATION)
         CPlusTokenTypes.KEYWORD -> pack(DefaultLanguageHighlighterColors.KEYWORD)
         CPlusTokenTypes.TYPE -> pack(DefaultLanguageHighlighterColors.CLASS_NAME)
         CPlusTokenTypes.NUMBER -> pack(DefaultLanguageHighlighterColors.NUMBER)

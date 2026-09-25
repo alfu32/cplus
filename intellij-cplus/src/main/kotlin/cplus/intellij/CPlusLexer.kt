@@ -85,8 +85,10 @@ class CPlusLexer : LexerBase() {
                     word in comptimeProperties && previousNonWhitespace(position) == '.' -> CPlusTokenTypes.COMPTIME_PROPERTY
                     word == "flags" && previousHorizontalWord(position) == "comptime" -> CPlusTokenTypes.COMPTIME_KEYWORD
                     word in comptimeKeywords -> CPlusTokenTypes.COMPTIME_KEYWORD
+                    word in cTypes -> CPlusTokenTypes.TYPE
                     word in keywords -> CPlusTokenTypes.KEYWORD
                     word in annotations -> CPlusTokenTypes.ANNOTATION
+                    nextNonWhitespace(tokenEnd) == '(' && word !in controlKeywords -> CPlusTokenTypes.FUNCTION
                     word.endsWith("_t") -> CPlusTokenTypes.TYPE
                     else -> CPlusTokenTypes.IDENTIFIER
                 }
@@ -123,6 +125,12 @@ class CPlusLexer : LexerBase() {
         return if (end > cursor + 1) buffer.subSequence(cursor + 1, end).toString() else null
     }
 
+    private fun nextNonWhitespace(offset: Int): Char? {
+        var cursor = offset
+        while (cursor < bufferEnd && buffer[cursor].isWhitespace()) cursor++
+        return buffer.getOrNull(cursor)
+    }
+
     private fun isIdentifierPart(character: Char): Boolean = character.isLetterOrDigit() || character == '_'
 
     companion object {
@@ -144,8 +152,15 @@ class CPlusLexer : LexerBase() {
             "_Noreturn", "_Static_assert", "_Thread_local", "bool", "size_t", "ptrdiff_t", "wchar_t",
             "char16_t", "char32_t"
         )
+        private val cTypes = setOf(
+            "char", "const", "double", "enum", "extern", "float", "inline", "int", "long",
+            "register", "restrict", "short", "signed", "static", "struct", "typedef", "union",
+            "unsigned", "void", "volatile", "_Bool", "bool", "size_t", "ptrdiff_t", "wchar_t",
+            "char16_t", "char32_t"
+        )
         private val annotations = setOf(
             "pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"
         )
+        private val controlKeywords = setOf("if", "for", "while", "switch", "sizeof", "_Alignof", "_Generic")
     }
 }

@@ -18,16 +18,19 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
         val action = object : AnAction("Run '${fixture.name}'", "Run this C-plus test fixture", AllIcons.RunConfigurations.TestState.Run) {
             override fun actionPerformed(event: AnActionEvent) {
                 val project = event.project ?: return
-                val compiler = System.getenv("CPLUS_COMMAND")?.takeIf(String::isNotBlank) ?: "cplus"
+                val settings = CPlusSettings.getInstance().current()
+                val runner = settings.runnerCommand.ifBlank { "cplus test" }
+                val program = settings.testProgram.ifBlank { virtualFile.path }
                 object : Task.Backgroundable(project, "C-plus: ${fixture.name}", true) {
                     override fun run(indicator: ProgressIndicator) {
                         val process = try {
-                            val builder = ProcessBuilder(compiler, "test", virtualFile.path, fixture.name)
+                            val command = splitCommand(runner) + program + fixture.name
+                            val builder = ProcessBuilder(command)
                                 .redirectErrorStream(true)
                             virtualFile.parent?.path?.let { builder.directory(java.io.File(it)) }
                             builder.start()
                         } catch (error: Exception) {
-                            showResult(project, fixture.name, "Could not start '$compiler': ${error.message}", false)
+                            showResult(project, fixture.name, "Could not start '$runner': ${error.message}", false)
                             return
                         }
                         val output = process.inputStream.bufferedReader().use { it.readText() }
@@ -47,4 +50,10 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
             }
         }
     }
+
+    private fun splitCommand(command: String): List<String> =
+        Regex("\\\"([^\\\"]*)\\\"|'([^']*)'|([^\\s]+)")
+            .findAll(command)
+            .map { it.groups[1]?.value ?: it.groups[2]?.value ?: it.groups[3]!!.value }
+            .toList()
 }

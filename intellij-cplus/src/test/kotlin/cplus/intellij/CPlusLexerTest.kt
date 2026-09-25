@@ -51,7 +51,10 @@ class CPlusLexerTest {
         assertToken(tokens, "@custom", CPlusTokenTypes.ANNOTATION)
         listOf("CPLUS_TEST_ASSERT", "CPLUS_TEST_ASSERT_EQUALS", "CPLUS_TEST_FAIL")
             .forEach { assertToken(tokens, it, CPlusTokenTypes.BUILTIN_MACRO) }
-        listOf("sizeof", "_Bool", "while").forEach { assertToken(tokens, it, CPlusTokenTypes.KEYWORD) }
+        listOf("sizeof", "while").forEach { assertToken(tokens, it, CPlusTokenTypes.KEYWORD) }
+        assertToken(tokens, "_Bool", CPlusTokenTypes.TYPE)
+        assertToken(lex("int main(void) { return helper(); }"), "main", CPlusTokenTypes.FUNCTION)
+        assertToken(lex("int main(void) { return helper(); }"), "helper", CPlusTokenTypes.FUNCTION)
     }
 
     private fun assertToken(tokens: List<Pair<String, com.intellij.psi.tree.IElementType>>, text: String, expected: com.intellij.psi.tree.IElementType) {

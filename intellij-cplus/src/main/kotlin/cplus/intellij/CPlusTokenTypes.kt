@@ -19,4 +19,5 @@ object CPlusTokenTypes {
     @JvmField val IDENTIFIER = IElementType("CPLUS_IDENTIFIER", CPlusLanguage)
     @JvmField val SELF = IElementType("CPLUS_SELF", CPlusLanguage)
     @JvmField val PREPROCESSOR = IElementType("CPLUS_PREPROCESSOR", CPlusLanguage)
+    @JvmField val FUNCTION = IElementType("CPLUS_FUNCTION", CPlusLanguage)
 }
