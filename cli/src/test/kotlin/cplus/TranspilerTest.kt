@@ -189,7 +189,7 @@ class TranspilerTest {
         val status = CPlusCli(output = output, errors = errors).run(listOf("test", sourcePath.toString()))
 
         assertEquals(0, status, "${errors}\n${output}")
-        assertTrue("thread_pool.cp | 10 |" in output, output.toString())
+        assertTrue("thread_pool.cp | 8 |" in output, output.toString())
         assertTrue("0 failed files" in output, output.toString())
     }
 

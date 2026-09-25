@@ -37,7 +37,6 @@ typedef pthread_t thread_pool_native_thread_t;
 
 typedef enum thread_step_action_t {
     THREAD_STEP_YIELD = 0,
-    THREAD_STEP_WAIT = 1,
     THREAD_STEP_DONE = 2,
     THREAD_STEP_FAILED = 3
 } thread_step_action_t;
@@ -51,7 +50,6 @@ typedef enum thread_task_state_t {
     THREAD_TASK_IDLE = 0,
     THREAD_TASK_QUEUED = 1,
     THREAD_TASK_RUNNING = 2,
-    THREAD_TASK_WAITING = 3,
     THREAD_TASK_COMPLETED = 4,
     THREAD_TASK_FAILED = 5,
     THREAD_TASK_CANCELLED = 6
@@ -85,7 +83,6 @@ typedef struct thread_task_t {
     size_t step_count;
     int error_code;
     int cancel_requested;
-    int wake_requested;
 
     static pub void init(borrowed mut thread_task_t* self, thread_task_step_fn_t step, void* context) {
         if (self == NULL) return;
@@ -96,16 +93,10 @@ typedef struct thread_task_t {
         self->step_count = 0;
         self->error_code = 0;
         self->cancel_requested = 0;
-        self->wake_requested = 0;
     }
 
     static pub thread_step_result_t yield(void) {
         thread_step_result_t result = { THREAD_STEP_YIELD, 0 };
-        return result;
-    }
-
-    static pub thread_step_result_t wait(void) {
-        thread_step_result_t result = { THREAD_STEP_WAIT, 0 };
         return result;
     }
 
@@ -303,7 +294,6 @@ typedef struct thread_pool_t {
         size_t kept_count = 0;
         for (size_t index = 0; index < self->active_count; index++) {
             thread_task_t* task = self->active[index];
-            task->wake_requested = 0;
             if (task->state == THREAD_TASK_RUNNING) {
                 task->cancel_requested = 1;
                 self->active[kept_count++] = task;
@@ -351,10 +341,8 @@ typedef struct thread_pool_t {
             task->step_count++;
             if (self->state == THREAD_POOL_STOPPING || task->cancel_requested) {
                 task->state = THREAD_TASK_CANCELLED;
-                task->wake_requested = 0;
                 thread_pool_t.remove_active_locked(self, task);
             } else if (result.action == THREAD_STEP_YIELD) {
-                task->wake_requested = 0;
                 if (!thread_pool_t.enqueue_locked(self, task)) {
                     task->state = THREAD_TASK_FAILED;
                     task->error_code = THREAD_POOL_FULL;
@@ -362,33 +350,17 @@ typedef struct thread_pool_t {
                 } else {
                     thread_pool_t.condition_signal(&self->work_condition);
                 }
-            } else if (result.action == THREAD_STEP_WAIT) {
-                if (task->wake_requested) {
-                    task->wake_requested = 0;
-                    if (!thread_pool_t.enqueue_locked(self, task)) {
-                        task->state = THREAD_TASK_FAILED;
-                        task->error_code = THREAD_POOL_FULL;
-                        thread_pool_t.remove_active_locked(self, task);
-                    } else {
-                        thread_pool_t.condition_signal(&self->work_condition);
-                    }
-                } else {
-                    task->state = THREAD_TASK_WAITING;
-                }
             } else if (result.action == THREAD_STEP_DONE) {
                 task->state = THREAD_TASK_COMPLETED;
                 task->error_code = result.error_code;
-                task->wake_requested = 0;
                 thread_pool_t.remove_active_locked(self, task);
             } else if (result.action == THREAD_STEP_FAILED) {
                 task->state = THREAD_TASK_FAILED;
                 task->error_code = result.error_code;
-                task->wake_requested = 0;
                 thread_pool_t.remove_active_locked(self, task);
             } else {
                 task->state = THREAD_TASK_FAILED;
                 task->error_code = THREAD_POOL_INVALID_STEP_RESULT;
-                task->wake_requested = 0;
                 thread_pool_t.remove_active_locked(self, task);
             }
             thread_pool_t.condition_broadcast(&self->state_condition);
@@ -452,40 +424,10 @@ typedef struct thread_pool_t {
         task->step_count = 0;
         task->error_code = 0;
         task->cancel_requested = 0;
-        task->wake_requested = 0;
         if (!thread_pool_t.enqueue_locked(self, task)) {
             self->active[--self->active_count] = NULL;
             task->owner = NULL;
             task->state = THREAD_TASK_IDLE;
-            thread_pool_t.mutex_unlock(&self->mutex);
-            return THREAD_POOL_FULL;
-        }
-        thread_pool_t.condition_signal(&self->work_condition);
-        thread_pool_t.mutex_unlock(&self->mutex);
-        return THREAD_POOL_OK;
-    }
-
-    pub int wake(borrowed mut *self, borrowed mut thread_task_t* task) {
-        if (self == NULL || task == NULL || !self->synchronization_ready) return THREAD_POOL_INVALID_ARGUMENT;
-        if (!thread_pool_t.mutex_lock(&self->mutex)) return THREAD_POOL_SYSTEM_ERROR;
-        if (task->owner != self || thread_pool_t.find_active_locked(self, task) < 0) {
-            thread_pool_t.mutex_unlock(&self->mutex);
-            return THREAD_POOL_NOT_FOUND;
-        }
-        if (self->state != THREAD_POOL_RUNNING) {
-            thread_pool_t.mutex_unlock(&self->mutex);
-            return THREAD_POOL_INVALID_STATE;
-        }
-        if (task->state == THREAD_TASK_RUNNING) {
-            task->wake_requested = 1;
-            thread_pool_t.mutex_unlock(&self->mutex);
-            return THREAD_POOL_OK;
-        }
-        if (task->state != THREAD_TASK_WAITING) {
-            thread_pool_t.mutex_unlock(&self->mutex);
-            return THREAD_POOL_INVALID_STATE;
-        }
-        if (!thread_pool_t.enqueue_locked(self, task)) {
             thread_pool_t.mutex_unlock(&self->mutex);
             return THREAD_POOL_FULL;
         }

@@ -13,6 +13,12 @@ thread_step_result_t thread_pool_count_step(thread_task_t* task, void* raw_conte
     return thread_task_t.done();
 }
 
+thread_step_result_t thread_pool_yield_step(thread_task_t* task, void* context) {
+    (void)task;
+    (void)context;
+    return thread_task_t.yield();
+}
+
 typedef struct thread_pool_fair_context_t {
     thread_pool_t* pool;
     thread_task_t* second_task;
@@ -74,42 +80,6 @@ thread_step_result_t thread_pool_queue_record_step(thread_task_t* task, void* ra
     return thread_task_t.done();
 }
 
-typedef struct thread_pool_wait_context_t {
-    thread_pool_t* pool;
-    thread_task_t* waiting_task;
-    thread_task_t* controller_task;
-    int should_cancel;
-    int operation_result;
-    int calls;
-} thread_pool_wait_context_t;
-
-thread_step_result_t thread_pool_wait_step(thread_task_t* task, void* raw_context) {
-    (void)task;
-    thread_pool_wait_context_t* context = (thread_pool_wait_context_t*)raw_context;
-    context->calls++;
-    if (context->calls == 1) {
-        thread_pool_t* pool = context->pool;
-        context->operation_result = pool->submit(context->controller_task);
-        if (context->operation_result != THREAD_POOL_OK) return thread_task_t.failed(context->operation_result);
-        return thread_task_t.wait();
-    }
-    return thread_task_t.done();
-}
-
-thread_step_result_t thread_pool_control_step(thread_task_t* task, void* raw_context) {
-    (void)task;
-    thread_pool_wait_context_t* context = (thread_pool_wait_context_t*)raw_context;
-    thread_pool_t* pool = context->pool;
-    if (context->should_cancel) {
-        context->operation_result = pool->cancel(context->waiting_task);
-    } else {
-        context->operation_result = pool->wake(context->waiting_task);
-    }
-    return context->operation_result == THREAD_POOL_OK
-        ? thread_task_t.done()
-        : thread_task_t.failed(context->operation_result);
-}
-
 thread_step_result_t thread_pool_fail_step(thread_task_t* task, void* context) {
     (void)task;
     (void)context;
@@ -122,35 +92,12 @@ typedef struct thread_pool_cancel_context_t {
     int calls;
 } thread_pool_cancel_context_t;
 
-typedef struct thread_pool_early_wake_context_t {
-    thread_pool_t* pool;
-    int wake_result;
-    int calls;
-} thread_pool_early_wake_context_t;
-
-thread_step_result_t thread_pool_early_wake_step(thread_task_t* task, void* raw_context) {
-    thread_pool_early_wake_context_t* context = (thread_pool_early_wake_context_t*)raw_context;
-    context->calls++;
-    if (context->calls == 1) {
-        thread_pool_t* pool = context->pool;
-        context->wake_result = pool->wake(task);
-        return thread_task_t.wait();
-    }
-    return thread_task_t.done();
-}
-
 thread_step_result_t thread_pool_cancel_self_step(thread_task_t* task, void* raw_context) {
     thread_pool_cancel_context_t* context = (thread_pool_cancel_context_t*)raw_context;
     context->calls++;
     thread_pool_t* pool = context->pool;
     context->cancel_result = pool->cancel(task);
     return thread_task_t.yield();
-}
-
-thread_step_result_t thread_pool_wait_forever_step(thread_task_t* task, void* context) {
-    (void)task;
-    (void)context;
-    return thread_task_t.wait();
 }
 
 @test "thread pool validates limits and supports repeat-safe shutdown" {
@@ -268,67 +215,22 @@ thread_step_result_t thread_pool_wait_forever_step(thread_task_t* task, void* co
     @assertEquals(THREAD_POOL_OK, destroyed);
 }
 
-@test "thread pool parks tasks until woken by another task" {
+@test "running callbacks acknowledge cancellation at the next checkpoint" {
     thread_pool_t pool = {0};
-    thread_task_t parked = {0};
-    thread_task_t controller = {0};
-    thread_pool_wait_context_t context = {&pool, &parked, &controller, 0, 0, 0};
-    thread_task_state_t state = THREAD_TASK_IDLE;
-    int initialized = pool.init(1);
-    thread_task_t.init(&parked, thread_pool_wait_step, &context);
-    thread_task_t.init(&controller, thread_pool_control_step, &context);
-    int submitted = initialized == THREAD_POOL_OK ? pool.submit(&parked) : THREAD_POOL_INVALID_STATE;
-    int waited = submitted == THREAD_POOL_OK ? pool.wait(&parked) : THREAD_POOL_INVALID_STATE;
-    int status_result = waited == THREAD_POOL_OK ? pool.status(&parked, &state, NULL, NULL) : THREAD_POOL_INVALID_STATE;
-    int controller_waited = waited == THREAD_POOL_OK ? pool.wait(&controller) : THREAD_POOL_INVALID_STATE;
-    int destroyed = pool.destroy();
-    @assertEquals(THREAD_POOL_OK, initialized);
-    @assertEquals(THREAD_POOL_OK, submitted);
-    @assertEquals(THREAD_POOL_OK, waited);
-    @assertEquals(THREAD_POOL_OK, status_result);
-    @assertEquals(THREAD_TASK_COMPLETED, state);
-    @assertEquals(THREAD_POOL_OK, context.operation_result);
-    @assertEquals(2, context.calls);
-    @assertEquals(THREAD_POOL_OK, controller_waited);
-    @assertEquals(THREAD_POOL_OK, destroyed);
-}
-
-@test "thread pool cancellation removes a parked task" {
-    thread_pool_t pool = {0};
-    thread_task_t parked = {0};
-    thread_task_t controller = {0};
-    thread_task_t running_cancelled = {0};
-    thread_pool_wait_context_t context = {&pool, &parked, &controller, 1, 0, 0};
+    thread_task_t task = {0};
     thread_pool_cancel_context_t cancel_context = {&pool, 0, 0};
     thread_task_state_t state = THREAD_TASK_IDLE;
-    thread_task_state_t running_state = THREAD_TASK_IDLE;
     int initialized = pool.init(1);
-    thread_task_t.init(&parked, thread_pool_wait_step, &context);
-    thread_task_t.init(&controller, thread_pool_control_step, &context);
-    int submitted = initialized == THREAD_POOL_OK ? pool.submit(&parked) : THREAD_POOL_INVALID_STATE;
-    int waited = submitted == THREAD_POOL_OK ? pool.wait(&parked) : THREAD_POOL_INVALID_STATE;
-    int status_result = waited == THREAD_POOL_OK ? pool.status(&parked, &state, NULL, NULL) : THREAD_POOL_INVALID_STATE;
-    int controller_waited = waited == THREAD_POOL_OK ? pool.wait(&controller) : THREAD_POOL_INVALID_STATE;
-    int wake_result = waited == THREAD_POOL_OK ? pool.wake(&parked) : THREAD_POOL_INVALID_STATE;
-    thread_task_t.init(&running_cancelled, thread_pool_cancel_self_step, &cancel_context);
-    int running_submitted = waited == THREAD_POOL_OK ? pool.submit(&running_cancelled) : THREAD_POOL_INVALID_STATE;
-    int running_waited = running_submitted == THREAD_POOL_OK ? pool.wait(&running_cancelled) : THREAD_POOL_INVALID_STATE;
-    int running_status = running_waited == THREAD_POOL_OK
-        ? pool.status(&running_cancelled, &running_state, NULL, NULL)
-        : THREAD_POOL_INVALID_STATE;
+    thread_task_t.init(&task, thread_pool_cancel_self_step, &cancel_context);
+    int submitted = initialized == THREAD_POOL_OK ? pool.submit(&task) : THREAD_POOL_INVALID_STATE;
+    int waited = submitted == THREAD_POOL_OK ? pool.wait(&task) : THREAD_POOL_INVALID_STATE;
+    int status_result = waited == THREAD_POOL_OK ? pool.status(&task, &state, NULL, NULL) : THREAD_POOL_INVALID_STATE;
     int destroyed = pool.destroy();
     @assertEquals(THREAD_POOL_OK, initialized);
     @assertEquals(THREAD_POOL_OK, submitted);
     @assertEquals(THREAD_POOL_OK, waited);
     @assertEquals(THREAD_POOL_OK, status_result);
     @assertEquals(THREAD_TASK_CANCELLED, state);
-    @assertEquals(1, context.calls);
-    @assertEquals(THREAD_POOL_OK, controller_waited);
-    @assertEquals(THREAD_POOL_NOT_FOUND, wake_result);
-    @assertEquals(THREAD_POOL_OK, running_submitted);
-    @assertEquals(THREAD_POOL_OK, running_waited);
-    @assertEquals(THREAD_POOL_OK, running_status);
-    @assertEquals(THREAD_TASK_CANCELLED, running_state);
     @assertEquals(THREAD_POOL_OK, cancel_context.cancel_result);
     @assertEquals(1, cancel_context.calls);
     @assertEquals(THREAD_POOL_OK, destroyed);
@@ -351,29 +253,6 @@ thread_step_result_t thread_pool_wait_forever_step(thread_task_t* task, void* co
     @assertEquals(THREAD_POOL_OK, status_result);
     @assertEquals(THREAD_TASK_FAILED, state);
     @assertEquals(73, error_code);
-    @assertEquals(THREAD_POOL_OK, destroyed);
-}
-
-@test "wake during a running step is retained when the step parks" {
-    thread_pool_t pool = {0};
-    thread_task_t task = {0};
-    thread_pool_early_wake_context_t context = {&pool, THREAD_POOL_INVALID_STATE, 0};
-    thread_task_state_t state = THREAD_TASK_IDLE;
-    size_t steps = 0;
-    int initialized = pool.init(1);
-    thread_task_t.init(&task, thread_pool_early_wake_step, &context);
-    int submitted = initialized == THREAD_POOL_OK ? pool.submit(&task) : THREAD_POOL_INVALID_STATE;
-    int waited = submitted == THREAD_POOL_OK ? pool.wait(&task) : THREAD_POOL_INVALID_STATE;
-    int status_result = waited == THREAD_POOL_OK ? pool.status(&task, &state, &steps, NULL) : THREAD_POOL_INVALID_STATE;
-    int destroyed = pool.destroy();
-    @assertEquals(THREAD_POOL_OK, initialized);
-    @assertEquals(THREAD_POOL_OK, submitted);
-    @assertEquals(THREAD_POOL_OK, waited);
-    @assertEquals(THREAD_POOL_OK, status_result);
-    @assertEquals(THREAD_POOL_OK, context.wake_result);
-    @assertEquals(2, context.calls);
-    @assertEquals(THREAD_TASK_COMPLETED, state);
-    @assertEquals((size_t)2, steps);
     @assertEquals(THREAD_POOL_OK, destroyed);
 }
 
@@ -407,9 +286,8 @@ thread_step_result_t thread_pool_wait_forever_step(thread_task_t* task, void* co
     thread_pool_t pool = {0};
     thread_task_t tasks[CPLUS_THREAD_POOL_MAX_TASKS + 1] = {0};
     for (size_t index = 0; index < CPLUS_THREAD_POOL_MAX_TASKS + 1; index++) {
-        thread_task_t.init(&tasks[index], thread_pool_wait_forever_step, NULL);
+        thread_task_t.init(&tasks[index], thread_pool_yield_step, NULL);
     }
-    @assertEquals(THREAD_POOL_OK, pool.init(1));
     size_t submitted = 0;
     int initialized = pool.init(1);
     if (initialized == THREAD_POOL_OK) {
