@@ -242,13 +242,17 @@ class CPlusCli(
                     put("CPLUS_TEST_ASSERTION_OFFSET", currentAssertionOffset.toString())
                     put("CPLUS_TEST_ASSERTION_TOTAL", totalAssertions.toString())
                 }
-                var testOutput = ""
                 val exitCode = activeLogger.pass("run-tests") {
                     val process = processBuilder.start()
-                    testOutput = process.inputStream.bufferedReader().readText()
+                    val reader = process.inputStream.bufferedReader()
+                    val chunk = CharArray(4096)
+                    while (true) {
+                        val count = reader.read(chunk)
+                        if (count < 0) break
+                        output.append(String(chunk, 0, count))
+                    }
                     process.waitFor()
                 }
-                if (verbosity >= 2 || exitCode != 0) output.append(testOutput)
                 val fileStatus = if (exitCode == 0) "PASS" else "FAIL"
                 if (exitCode != 0) {
                     errors.append("cplus: test process for ")
@@ -265,7 +269,7 @@ class CPlusCli(
                 paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
             }
         }
-        if (verbosity >= 2 || failed > 0) printTestAggregateReport(reports, totalFixtures, totalAssertions, failed)
+        printTestAggregateReport(reports, totalFixtures, totalAssertions, failed)
         return if (failed == 0) 0 else 1
     }
 

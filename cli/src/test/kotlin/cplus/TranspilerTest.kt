@@ -454,7 +454,9 @@ class TranspilerTest {
         val directory = Files.createTempDirectory("cplus-verbosity")
         try {
             val source = directory.resolve("sample.cp")
+            val fixtureSource = directory.resolve("fixture.cp")
             Files.writeString(source, "int main(void) { return 0; }\n")
+            Files.writeString(fixtureSource, """@test "visible test output" { puts("fixture printf remains visible"); }""")
             val quietErrors = StringBuilder()
             assertEquals(0, CPlusCli(output = StringBuilder(), errors = quietErrors).run(listOf("transcode", source.toString())))
             assertEquals("", quietErrors.toString())
@@ -462,6 +464,16 @@ class TranspilerTest {
             val verboseErrors = StringBuilder()
             assertEquals(0, CPlusCli(output = StringBuilder(), errors = verboseErrors).run(listOf("-v2", "transcode", source.toString())))
             assertTrue("pass: emit-mapped-c" in verboseErrors.toString(), verboseErrors.toString())
+
+            val fixtureOutput = StringBuilder()
+            val fixtureErrors = StringBuilder()
+            assertEquals(
+                0,
+                CPlusCli(output = fixtureOutput, errors = fixtureErrors).run(listOf("test", "-v0", fixtureSource.toString())),
+                fixtureErrors.toString()
+            )
+            assertTrue("fixture printf remains visible" in fixtureOutput.toString(), fixtureOutput.toString())
+            assertTrue("AGGREGATE TEST REPORT" in fixtureOutput.toString(), fixtureOutput.toString())
         } finally {
             Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
