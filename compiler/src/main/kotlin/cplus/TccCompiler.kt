@@ -39,7 +39,7 @@ class TccCompiler {
         val effectiveOptions = CompilerOptions.merge(options, source.compilerOptions)
         output.toAbsolutePath().parent?.let(Files::createDirectories)
         if (!hasEmbeddedRuntimeForCurrentPlatform()) {
-            return@pass compileWithExternalTcc(source, output, effectiveOptions)
+            return@pass compileWithExternalCompiler(source, output, effectiveOptions, logger)
         }
         val hostTarget = hostTarget()
         val requestedTarget = targetOption(effectiveOptions)
@@ -49,13 +49,15 @@ class TccCompiler {
             // The no-sysroots cross payload supplies TinyCC's native driver, not
             // the host's CRT, libc headers, or linker search paths. Let the
             // installed system compiler use its configured native toolchain.
-            return@pass compileWithExternalTcc(source, output, effectiveOptions)
+            return@pass compileWithExternalCompiler(source, output, effectiveOptions, logger)
         }
         if (effectiveOptions.any { it == "--target" || it.startsWith("--target=") || it == "-lraylib" } ||
             effectiveOptions.zipWithNext().any { (option, value) -> option == "-l" && value == "raylib" }
         ) {
-            return@pass compileWithEmbeddedTccCli(source, output, effectiveOptions)
+            return@pass compileWithEmbeddedTccCli(source, output, effectiveOptions, logger)
         }
+
+        reportBundledCompiler(logger, hostTarget, "TinyCC in-process API", requestedTarget)
 
         val rawDiagnostics = StringBuilder()
         val diagnostics = DiagnosticListener { message -> rawDiagnostics.append(message) }
@@ -81,8 +83,10 @@ class TccCompiler {
     private fun compileWithEmbeddedTccCli(
         source: TranscodedSource,
         output: Path,
-        options: List<String>
+        options: List<String>,
+        logger: CompilationLogger
     ): TccCompilationResult {
+        reportBundledCompiler(logger, hostTarget(), "TinyCC CLI through JVM facade", targetOption(options))
         val outputPath = output.toAbsolutePath().normalize()
         val sourceFile = Files.createTempFile(outputPath.parent, "cplus-", ".c")
         var packagedRaylibDirectory: Path? = null
@@ -277,31 +281,41 @@ class TccCompiler {
         return if (formatMatches) null else "TinyCC output format does not match requested target '$target'"
     }
 
-    private fun compileWithExternalTcc(
+    private fun compileWithExternalCompiler(
         source: TranscodedSource,
         output: Path,
-        options: List<String>
+        options: List<String>,
+        logger: CompilationLogger
     ): TccCompilationResult {
         val outputPath = output.toAbsolutePath().normalize()
         val sourceFile = Files.createTempFile(outputPath.parent, "cplus-", ".c")
         try {
-        Files.writeString(sourceFile, source.code)
-        val tcc = System.getenv("TCC")?.takeIf(String::isNotBlank) ?: "tcc"
-        val (compileOptions, linkOptions) = splitLinkOptions(withoutRedundantHostTarget(options))
-        val command = buildList {
-            add(tcc)
-            addAll(compileOptions)
-            add("-o")
-            add(outputPath.toString())
-            add(sourceFile.toString())
-            addAll(linkOptions)
-        }
+            val compiler = ExternalCompilerResolver.resolve()
+                ?: throw IllegalStateException(
+                    "No usable C compiler was found (checked bundled TinyCC, TCC, PATH for tcc, and CC).\n" +
+                        CompilerInstallationGuide.forCurrentHost()
+                )
+            logger.info(
+                "C compiler: external compiler via ${compiler.origin.label}; binary=${compiler.executable}" +
+                    if (compiler.arguments.isEmpty()) "" else "; command arguments=${compiler.arguments.joinToString(" ")}"
+            )
+
+            Files.writeString(sourceFile, source.code)
+            val (compileOptions, linkOptions) = splitLinkOptions(withoutRedundantHostTarget(options))
+            val command = buildList {
+                add(compiler.executable.toString())
+                addAll(compiler.arguments)
+                addAll(compileOptions)
+                add("-o")
+                add(outputPath.toString())
+                add(sourceFile.toString())
+                addAll(linkOptions)
+            }
             val process = try {
                 ProcessBuilder(command).redirectErrorStream(true).start()
             } catch (error: IOException) {
                 throw IllegalStateException(
-                    "External 'tcc' could not be started. Install TinyCC and make it available on PATH, " +
-                        "or set TCC to its executable path; native builds also need it when the embedded payload has no sysroot.",
+                    "External C compiler '${compiler.executable}' could not be started; check that it is executable and its runtime dependencies are installed.",
                     error
                 )
             }
@@ -314,6 +328,13 @@ class TccCompiler {
         } finally {
             Files.deleteIfExists(sourceFile)
         }
+    }
+
+    private fun reportBundledCompiler(logger: CompilationLogger, host: String?, route: String, target: String?) {
+        val location = TinyCC::class.java.protectionDomain?.codeSource?.location?.toString() ?: "unknown JAR location"
+        val payload = host?.let { "native/$it" } ?: "host-native payload"
+        val targetDescription = target?.let { "; selected target=$it" }.orEmpty()
+        logger.info("C compiler: bundled TinyCC via $route; payload=$payload$targetDescription; location=$location")
     }
 
     private fun hasEmbeddedRuntimeForCurrentPlatform(): Boolean {

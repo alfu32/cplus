@@ -284,6 +284,7 @@ class MappedEmitter(private val sourceFile: SourceFile) {
 interface CompilationLogger {
     fun passStarted(name: String)
     fun passFinished(name: String, detail: String? = null)
+    fun info(message: String) = Unit
 }
 
 object SilentCompilationLogger : CompilationLogger {
@@ -292,6 +293,10 @@ object SilentCompilationLogger : CompilationLogger {
 }
 
 class ConsoleCompilationLogger(private val output: Appendable = System.err) : CompilationLogger {
+    override fun info(message: String) {
+        output.append("[cplus] ").append(message).append('\n')
+    }
+
     override fun passStarted(name: String) {
         output.append("[cplus] pass: ").append(name).append("...\n")
     }

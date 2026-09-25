@@ -74,6 +74,7 @@ class CPlusCli(
     private fun transcode(arguments: List<String>): Int {
         val parsed = parseFileCommand(arguments, allowTccOptions = true)
         validateTranscodeTargetOptions(parsed.passthrough)
+        printTranscoderVersion()
         val destination = parsed.output ?: defaultTranscodedPath(parsed.source)
         val sourcePath = parsed.source.toAbsolutePath().normalize()
         val importPaths = importPathsFor(sourcePath)
@@ -92,6 +93,7 @@ class CPlusCli(
 
     private fun compile(arguments: List<String>, runAfter: Boolean): Int {
         val parsed = parseFileCommand(arguments, allowTccOptions = true)
+        printTranscoderVersion()
         val destination = parsed.output ?: defaultExecutablePath(parsed.source)
         val sourcePath = parsed.source.toAbsolutePath().normalize()
         val importPaths = importPathsFor(sourcePath)
@@ -133,6 +135,7 @@ class CPlusCli(
         sources.forEach { path ->
             if (!Files.isRegularFile(path)) throw IllegalArgumentException("test source does not exist: $path")
         }
+        printTranscoderVersion()
 
         val compiledSources = sources.map { path ->
             val importPaths = importPathsFor(path)
@@ -381,7 +384,7 @@ global options:
 defaults:
   transcode: filename.cp -> filename.c
   compile/run: filename.cp -> filename
-  compiler: matching embedded TinyCC, otherwise external tcc from PATH (or TCC)
+  compiler: bundled TinyCC, then TCC, system tcc on PATH, then compiler from CC
   test: runs all @test blocks, or only the exact names supplied after the source files
   new: creates a C-plus project with cplus.toml and src/main.cp
 
@@ -394,6 +397,10 @@ empty macros: pub, priv, mut, borrowed, owned, and stat.
 """.trimIndent()
         )
         output.append('\n')
+    }
+
+    private fun printTranscoderVersion() {
+        errors.append("[cplus] transcoder runtime: ").append(Version().toString()).append('\n')
     }
 
     private data class ParsedCommand(

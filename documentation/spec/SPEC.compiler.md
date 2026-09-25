@@ -16,7 +16,9 @@ cplus new project_name|.
 cplus --stdlib directory <subcommand> ...
 ```
 
-`transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. `transcode` accepts only `--target` among compiler options; it uses the option to choose comptime branches but does not compile. Additional arguments for `compile` and `run` are passed to TinyCC; for example, `-DFLAG=1` or `-Iinclude`. A CLI jar with a matching embedded TinyCC target uses it; a jar without that target invokes external `tcc` from `PATH`, or the executable specified by `TCC`.
+`transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. `transcode` accepts only `--target` among compiler options; it uses the option to choose comptime branches but does not compile. Additional arguments for `compile` and `run` are passed to the selected C compiler; for example, `-DFLAG=1` or `-Iinclude`. Code-processing commands print the C-plus transcoder version. Before each C compilation, the CLI reports whether the compiler is bundled or external and its payload/JAR or executable location.
+
+Compiler selection is: a usable bundled TinyCC route for the requested target; an explicit executable from `TCC`; system `tcc` found on `PATH`; then the command in `CC` (including simple quoted paths and arguments such as `CC='ccache gcc'`). `CC` is a fallback, not an override for an installed TinyCC; set `TCC` to choose an explicit TinyCC. When no compiler is usable, `compile`, `run`, and `test` print OS-specific setup commands. The external compiler must have the host C runtime development headers and libraries; optional libraries such as Raylib are installed separately.
 
 `run` compiles first and then executes the generated executable, inheriting its standard input, output, and error streams.
 
@@ -86,16 +88,16 @@ java -jar cli/build/libs/c-plus-0.2.0.jar help
 
 `-Prelease=VERSION` sets the shared CLI/editor release version. The root `editorArtifacts` task passes it to VS Code, IntelliJ, and Vim packaging; standalone VS Code/IntelliJ packaging falls back to generated CLI version metadata or the latest Git tag.
 
-By default, `fatJar` and `bundleJar` omit TinyCC native binaries and all sysroots. `transcode` still works normally, while `compile`, `run`, and `test` use an external `tcc` executable from `PATH` (or `TCC`). Install TinyCC and the system headers/libraries needed by the C program being compiled.
+By default, `fatJar` and `bundleJar` omit TinyCC native binaries and all sysroots. `transcode` still works normally, while `compile`, `run`, and `test` select an external compiler in the order above. The `CC` fallback is useful for GCC or Clang when system TinyCC is unavailable.
 
 With the embedded Linux TinyCC bundle, C-plus links executable output statically by default so it does not depend on the bundle's musl dynamic loader being installed on the host. Pass `-dynamic` or `-shared` to request a non-static link; external `tcc` invocations keep that compiler's own defaults.
 
-`-Ptarget=none` (the default) embeds no TinyCC native binaries; the bare CLI uses system `tcc`. `-Ptarget=cross` embeds the six TinyCC host drivers from `tinycc-cross-cli-no-sysroots.jar`, but no sysroots; target headers and libraries must be supplied by the host or through TinyCC options. `all` and `crossbuild` are aliases for `cross`. The old per-platform targets and `-Pos`/`-Parch` properties are unsupported.
+`-Ptarget=none` (the default) embeds no TinyCC native binaries; the bare CLI uses an available external compiler. `-Ptarget=cross` embeds the six TinyCC host drivers from `tinycc-cross-cli-no-sysroots.jar`, but no sysroots; target headers and libraries must be supplied by the host or through compiler options. `all` and `crossbuild` are aliases for `cross`. The old per-platform targets and `-Pos`/`-Parch` properties are unsupported.
 
 ### Cross-target drivers and system dependencies
 
 For the all-host `cross` bundle, pass target options through `compile` or `run`, for example `cpc compile src/main.cp --target=linux-aarch64 -o build/main`. For a native target, when the embedded host payload has no sysroot, C-plus delegates to system `tcc` so the system toolchain supplies its configured startup objects, headers, and libraries. For a foreign target, the JVM TinyCC facade selects the matching embedded cross-driver; no target sysroot is embedded or injected, so cross-compilation needs compatible headers, libraries, and (where applicable) a sysroot supplied externally. `run` additionally requires the produced binary to be runnable on the current host.
 
-The CI workflow refreshes both TinyCC inputs from the latest TinyCC release before building. It publishes the bare CLI JAR, the six-host-driver JAR without sysroots, and the VS Code, IntelliJ, and Vim plugin bundles. C-plus platform ZIP bundles are intentionally omitted from CI/release for now; `bundleDist` remains available for optional local ZIP creation.
+The CI workflow refreshes both TinyCC inputs from the latest TinyCC release before building. On tagged runs it publishes two application ZIPs plus the VS Code, IntelliJ, and Vim plugin bundles: `-cross-no-sysroots.zip` includes all six TinyCC host runtimes but no sysroots, and `-bare.zip` includes no TinyCC runtime and uses an external compiler. Both ZIPs contain the CLI JAR, standard library, documentation, examples, launchers, and platform install/uninstall scripts.
 
-`bundleJar` writes `dist/cplus-VERSION-bare.jar` or `dist/cplus-VERSION-cross-no-sysroots.jar`. `bundleDist` is an optional local installer/distribution ZIP task; it stages launchers, the standard library, documentation, and examples. `bundleJars` is a legacy helper for extracting JARs from already-created ZIPs.
+Build the application ZIPs locally with `./gradlew -Prelease=VERSION -Ptarget=cross bundleDist` and `./gradlew -Prelease=VERSION -Ptarget=none bundleDist`. `bundleDist` stages the existing launchers and install/uninstall scripts along with the documentation, standard library, and examples. `bundleJar` remains available for standalone JARs; `bundleJars` is a legacy helper for extracting JARs from existing ZIPs.

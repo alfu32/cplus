@@ -82,7 +82,7 @@ Deployable editor bundles are attached to [GitHub releases](https://github.com/c
 
 ## Releases and building from source
 
-Most users can download a CLI JAR or editor plugin from [Releases](https://github.com/c-plus/c-plus/releases). The manual GitHub Actions workflow builds the selected branch or tag; branch runs publish workflow artifacts, while a successful tag run creates or updates a GitHub Release with the bare CLI JAR, the cross-host CLI JAR, and editor bundles. It does not run automatically on push. C-plus platform ZIPs are not built or published by CI; they may be consolidated into a single ZIP later. The CLI JARs do not embed `stdlib/` sources: use `--stdlib path/to/stdlib` when no installed library root is discoverable.
+Most users can download an application distribution or editor plugin from [Releases](https://github.com/c-plus/c-plus/releases). A successful tagged CI run publishes two CLI distributions and the editor bundles: `cplus-VERSION-cross-no-sysroots.zip` includes the six TinyCC host runtimes without sysroots, while `cplus-VERSION-bare.zip` uses an external C compiler. Both application ZIPs include the standard library, documentation, examples, launchers, and platform install/uninstall scripts. The manual workflow does not run automatically on push. Standalone CLI JARs do not embed `stdlib/`; the application ZIP launchers discover their adjacent copy automatically.
 
 For local development, install a Java 21 JDK and use the Gradle wrapper:
 
@@ -92,9 +92,11 @@ For local development, install a Java 21 JDK and use the Gradle wrapper:
 ./gradlew -Prelease=0.3.4 fatJar
 ./gradlew -Prelease=0.3.4 -Ptarget=none bundleJar
 ./gradlew -Prelease=0.3.4 -Ptarget=cross bundleJar
+./gradlew -Prelease=0.3.4 -Ptarget=none bundleDist
+./gradlew -Prelease=0.3.4 -Ptarget=cross bundleDist
 ./gradlew -Prelease=0.3.4 editorArtifacts
 ```
 
-The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. The default `-Ptarget=none` (also the default when omitted) creates a bare C-plus JAR with no native TinyCC payload; `compile`, `run`, and `test` use `tcc` from `PATH` (or `TCC`). `-Ptarget=cross` embeds TinyCC host drivers for all six supported host combinations, without sysroots; target headers and libraries must be provided separately. `-Ptarget=all` and `-Ptarget=crossbuild` remain aliases for `cross`. `bundleDist` still creates an optional local platform ZIP and its JAR, while `bundleJar` creates only the selected JAR. The older `-Pos` and `-Parch` properties are no longer supported.
+The root Gradle project aggregates the Kotlin compiler in `compiler/` and CLI/tests in `cli/`. The default `-Ptarget=none` creates a bare C-plus JAR with no native TinyCC payload; `compile`, `run`, and `test` select bundled TinyCC when usable, then `TCC`, system `tcc` from `PATH`, and finally the compiler named by `CC`. If none is available, the CLI prints installation guidance for the host OS. `-Ptarget=cross` embeds TinyCC host drivers for all six supported host combinations, without sysroots; target headers and libraries must be provided separately. `-Ptarget=all` and `-Ptarget=crossbuild` remain aliases for `cross`. Run `bundleDist` once for each target to produce the two application ZIPs. The older `-Pos` and `-Parch` properties are no longer supported.
 
 TinyCC JARs are not stored in Git. CI downloads the latest `tinycc-cli.jar` and `tinycc-cross-cli-no-sysroots.jar` before building and shares them as short-lived workflow artifacts. To refresh them locally, run `bash .github/scripts/download-tinycc.sh latest tinycc-cross-cli-no-sysroots.jar` (requires `curl` and `jq`); these files are ignored by Git.

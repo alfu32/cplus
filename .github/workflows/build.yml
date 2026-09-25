@@ -48,40 +48,62 @@ jobs:
           sudo apt-get install --yes tcc
       - name: Run Gradle tests
         run: ./gradlew test --no-daemon
-      - name: Build bare JAR using external TinyCC
-        run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=none bundleJar --no-daemon
-      - name: Build cross-host JAR without bundled sysroots
-        run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=cross bundleJar --no-daemon
-      - name: Verify payload selection and smoke-test both JARs
+      - name: Build cross-runtime application ZIP (no sysroots)
+        run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=cross bundleDist --no-daemon
+      - name: Build system-compiler application ZIP
+        run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=none bundleDist --no-daemon
+      - name: Verify payload selection, documentation, installers, and both distributions
         shell: bash
         run: |
-          bare="dist/cplus-${RELEASE_VERSION}-bare.jar"
-          cross="dist/cplus-${RELEASE_VERSION}-cross-no-sysroots.jar"
+          bare="dist/cplus-${RELEASE_VERSION}-bare.zip"
+          cross="dist/cplus-${RELEASE_VERSION}-cross-no-sysroots.zip"
           test -s "$bare"
           test -s "$cross"
 
-          bare_targets="$(jar tf "$bare" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
+          mkdir -p build/distribution-check/bare build/distribution-check/cross
+          unzip -q "$bare" -d build/distribution-check/bare
+          unzip -q "$cross" -d build/distribution-check/cross
+          for bundle in build/distribution-check/bare build/distribution-check/cross; do
+            test -s "$bundle/c-plus.jar"
+            test -s "$bundle/documentation/spec/SPEC.language.md"
+            test -s "$bundle/documentation/spec/SPEC.compiler.md"
+            test -s "$bundle/cpc.sh"
+            test -s "$bundle/install.sh"
+            test -s "$bundle/uninstall.sh"
+            test -s "$bundle/install.zsh"
+            test -s "$bundle/uninstall.zsh"
+            test -s "$bundle/install.cmd"
+            test -s "$bundle/uninstall.cmd"
+            test -s "$bundle/install.ps1"
+            test -s "$bundle/uninstall.ps1"
+          done
+
+          bare_jar="build/distribution-check/bare/c-plus.jar"
+          cross_jar="build/distribution-check/cross/c-plus.jar"
+          bare_targets="$(jar tf "$bare_jar" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
           test -z "$bare_targets"
-          cross_targets="$(jar tf "$cross" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
+          cross_targets="$(jar tf "$cross_jar" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
           expected_targets="$(printf '%s\n' linux-aarch64 linux-x86_64 macos-aarch64 macos-x86_64 windows-aarch64 windows-x86_64)"
           test "$cross_targets" = "$expected_targets"
-          sysroots="$(jar tf "$cross" | grep '/tinycc/sysroot/' || true)"
+          sysroots="$(jar tf "$cross_jar" | grep '/tinycc/sysroot/' || true)"
           test -z "$sysroots"
 
-          java -jar "$bare" help >/dev/null
-          java -jar "$cross" help >/dev/null
-          java -jar "$cross" --stdlib stdlib compile examples/basic.cp -o build/cross-host-smoke
-          test -s build/cross-host-smoke
+          java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" help >/dev/null
+          java -Dcplus.home="$PWD/build/distribution-check/cross" -jar "$cross_jar" help >/dev/null
+          build/distribution-check/bare/cpc.sh compile build/distribution-check/bare/examples/basic.cp -o build/bare-smoke
+          build/distribution-check/cross/cpc.sh compile build/distribution-check/cross/examples/basic.cp -o build/cross-smoke
+          test -s build/bare-smoke
+          test -s build/cross-smoke
 
           mapfile -t fixtures < <(find stdlib/tests -maxdepth 1 -name '*.cp' ! -name 'raylib_math.cp' -print | sort)
           test "${#fixtures[@]}" -gt 0
-          java -jar "$bare" --stdlib stdlib test "${fixtures[@]}"
+          java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" test "${fixtures[@]}"
       - uses: actions/upload-artifact@v4
         with:
-          name: cplus-cli-jars
+          name: cplus-application-distributions
           path: |
-            dist/cplus-${{ env.RELEASE_VERSION }}-bare.jar
-            dist/cplus-${{ env.RELEASE_VERSION }}-cross-no-sysroots.jar
+            dist/cplus-${{ env.RELEASE_VERSION }}-bare.zip
+            dist/cplus-${{ env.RELEASE_VERSION }}-cross-no-sysroots.zip
           if-no-files-found: error
           compression-level: 0
 
@@ -141,7 +163,7 @@ jobs:
           path: release-assets
           pattern: cplus-*
           merge-multiple: true
-      - name: Create or update release and upload CLI JARs and IDE plugins
+      - name: Create or update release and upload application distributions and IDE plugins
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}

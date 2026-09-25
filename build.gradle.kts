@@ -282,7 +282,7 @@ val bundleJars = tasks.register<Copy>("bundleJars") {
 
 tasks.register<Zip>("bundleDist") {
     group = "distribution"
-    description = "Builds a versioned C-plus distribution bundle for -Ptarget."
+    description = "Builds a versioned application ZIP for -Ptarget (cross includes bundled TinyCC drivers; none uses system compilers)."
     dependsOn(stageBundleDist, bundleJar)
     from(bundleStageDirectory)
     eachFile {
