@@ -9,6 +9,8 @@ version = rootProject.version
 
 dependencies {
     implementation(files(rootProject.file("lib/tinycc-cli.jar")))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
 }
 
 kotlin {
@@ -19,4 +21,8 @@ java {
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(21))
     }
+}
+
+tasks.test {
+    useJUnitPlatform()
 }

@@ -2,6 +2,8 @@ package cplus
 
 /** Converts the supported C-plus syntax into C while retaining source origins. */
 class CPlusTranspiler {
+    private val sourceManager = SourceManager()
+
     fun transpile(
         source: String,
         sourceName: String? = null,
@@ -27,7 +29,10 @@ class CPlusTranspiler {
         importPaths: CPlusImportPaths,
         targetOs: String
     ): TranscodedTestSource {
-        val sourceFile = SourceFile(source, sourceName)
+        val sourceFile = sourceManager.open(
+            SourceId.named(sourceName ?: "<cplus-input>"),
+            source
+        ).sourceFile
         val comptime = logger.pass("comptime-resolve") {
             ComptimeCompiler(sourceFile, logger, importPaths, targetOs).compile(resolveTestBodies = testMode)
         }

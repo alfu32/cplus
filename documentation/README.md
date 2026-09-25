@@ -12,3 +12,6 @@ The `spec/` directory contains the living specifications:
 These files are living specifications and must be updated in the same change as any language or compiler behavior change.
 
 Implementation plans and design decisions are recorded under [`plan/`](plan/).
+
+- [`plan/COMPILER-FRONTEND-ARCHITECTURE.md`](plan/COMPILER-FRONTEND-ARCHITECTURE.md) describes the target parser/compiler architecture and component lifetimes.
+- [`plan/COMPILER-FRONTEND-IMPLEMENTATION.md`](plan/COMPILER-FRONTEND-IMPLEMENTATION.md) tracks migration phases, acceptance gates, and component retirement.
