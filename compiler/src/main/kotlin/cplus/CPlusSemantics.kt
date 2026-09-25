@@ -20,7 +20,9 @@ data class CPlusSymbol(
     val span: SourceSpan,
     val throwsParameter: String? = null,
     val throwsMetadata: CPlusThrowsMetadata? = null,
-    val functionType: CPlusFunctionType? = null
+    val functionType: CPlusFunctionType? = null,
+    /** Original declaration spelling, retained for declarator forms not yet normalized semantically. */
+    val declarationText: String? = null
 )
 
 /** Callable signature attached to a C function-pointer typedef, kept distinct from its return type. */
@@ -28,7 +30,9 @@ data class CPlusFunctionType(
     val returnType: String?,
     val parameters: List<CPlusParameterSymbol>,
     val variadic: Boolean,
-    val declaratorSpan: SourceSpan
+    val declaratorSpan: SourceSpan,
+    /** Callable type returned by this function-pointer signature, when declarators compose. */
+    val returnFunctionType: CPlusFunctionType? = null
 )
 
 data class CPlusParameterSymbol(
@@ -38,7 +42,9 @@ data class CPlusParameterSymbol(
     val receiver: Boolean,
     val span: SourceSpan,
     /** Original declaration spelling, retaining pointer depth and qualifiers beyond [typeName]. */
-    val declarationText: String? = null
+    val declarationText: String? = null,
+    /** Callable signature when this parameter is itself a function pointer/function parameter. */
+    val functionType: CPlusFunctionType? = null
 )
 
 data class CPlusResolvedCall(
@@ -124,7 +130,7 @@ class CPlusSemanticAnalyzer {
                         }
                         ?.text(ast.source.text)
                     if (alias != null) {
-                        val functionType = functionTypeOf(declarator, typeNode, ast.source.text)
+                        val functionType = functionTypeOf(declarator, typeNode, ast.source.text, alias)
                         val resolvedTarget = taggedCompositeName
                             ?: if (composite != null) anonymousStructNames[composite.span.startOffset] ?: alias
                             else primitiveTarget
@@ -139,7 +145,8 @@ class CPlusSemanticAnalyzer {
                                 emptySet(),
                                 emptyList(),
                                 declarator.span,
-                                functionType = functionType
+                                functionType = functionType,
+                                declarationText = node.text(ast.source.text)
                             )
                         }
                     }
@@ -362,36 +369,64 @@ class CPlusSemanticAnalyzer {
     private fun functionTypeOf(
         declarator: CPlusAstNode,
         returnTypeNode: CPlusAstNode?,
-        source: String
+        source: String,
+        declaredName: String? = null
     ): CPlusFunctionType? {
-        val functionDeclarator = declarator.descendantsAndSelf()
-            .firstOrNull { it.syntaxKind == "function_declarator" } ?: return null
-        val parameterList = functionDeclarator.descendantsAndSelf()
-            .firstOrNull { it.syntaxKind == "parameter_list" }
-        val parameterNodes = parameterList?.children.orEmpty()
-            .filter { it.syntaxKind in setOf("parameter_declaration", "cplus_parameter_declaration") }
-        val parameters = parameterNodes.map { parameter ->
-            val declaredName = parameter.children.firstOrNull { it.fieldName == "declarator" }
-                ?.descendantsAndSelf()?.firstOrNull { it.syntaxKind == "identifier" }
-                ?.text(source).orEmpty()
-            val parameterType = parameter.children.firstOrNull { it.fieldName == "type" }
-                ?.text(source)
-            CPlusParameterSymbol(
-                declaredName,
-                parameterType,
-                parameter.descendants().filter { it.syntaxKind == "cplus_parameter_annotation" }
-                    .map { it.text(source) }.toSet(),
-                receiver = false,
-                span = parameter.span,
-                declarationText = parameter.text(source)
+        val functionDeclarators = declarator.descendantsAndSelf()
+            .filter { it.syntaxKind == "function_declarator" }
+            .toList()
+        val functionDeclarator = if (declaredName == null) {
+            functionDeclarators.firstOrNull()
+        } else {
+            functionDeclarators.filter { candidate ->
+                candidate.children.firstOrNull { it.fieldName == "declarator" }
+                    ?.descendantsAndSelf()
+                    ?.any { it.syntaxKind in setOf("identifier", "type_identifier") && it.text(source) == declaredName } == true
+            }.minByOrNull { it.span.endOffset - it.span.startOffset }
+                ?: functionDeclarators.firstOrNull()
+        } ?: return null
+        fun buildSignature(node: CPlusAstNode): CPlusFunctionType {
+            val parameterList = node.children.firstOrNull {
+                it.fieldName == "parameters" || it.syntaxKind == "parameter_list"
+            }
+            val parameterNodes = parameterList?.children.orEmpty()
+                .filter { it.syntaxKind in setOf("parameter_declaration", "cplus_parameter_declaration") }
+            val parameters = parameterNodes.map { parameter ->
+                val parameterDeclarator = parameter.children.firstOrNull { it.fieldName == "declarator" }
+                val parameterName = parameterDeclarator
+                    ?.descendantsAndSelf()?.firstOrNull { it.syntaxKind == "identifier" }
+                    ?.text(source).orEmpty()
+                val parameterTypeNode = parameter.children.firstOrNull { it.fieldName == "type" }
+                val nestedFunctionType = parameterDeclarator?.let { nestedDeclarator ->
+                    functionTypeOf(nestedDeclarator, parameterTypeNode, source, parameterName)
+                }
+                CPlusParameterSymbol(
+                    parameterName,
+                    parameterTypeNode?.text(source),
+                    parameter.descendants().filter { it.syntaxKind == "cplus_parameter_annotation" }
+                        .map { it.text(source) }.toSet(),
+                    receiver = false,
+                    span = parameter.span,
+                    declarationText = parameter.text(source),
+                    functionType = nestedFunctionType
+                )
+            }
+            val returnedFunctionDeclarator = functionDeclarators
+                .filter { candidate ->
+                    candidate !== node &&
+                        candidate.span.startOffset <= node.span.startOffset &&
+                        candidate.span.endOffset >= node.span.endOffset
+                }
+                .minByOrNull { it.span.endOffset - it.span.startOffset }
+            return CPlusFunctionType(
+                returnTypeNode?.text(source),
+                parameters,
+                parameterList?.children.orEmpty().any { it.syntaxKind == "variadic_parameter" },
+                node.span,
+                returnedFunctionDeclarator?.let(::buildSignature)
             )
         }
-        return CPlusFunctionType(
-            returnTypeNode?.text(source),
-            parameters,
-            parameterList?.children.orEmpty().any { it.syntaxKind == "variadic_parameter" },
-            functionDeclarator.span
-        )
+        return buildSignature(functionDeclarator)
     }
 
     private fun CPlusAstNode.text(source: String): String = source.substring(span.startOffset, span.endOffset)

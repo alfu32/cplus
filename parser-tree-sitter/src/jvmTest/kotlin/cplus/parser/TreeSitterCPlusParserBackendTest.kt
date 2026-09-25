@@ -12,6 +12,8 @@ import cplus.CPlusComptimeIndexer
 import cplus.CPlusMethodCallLoweringPass
 import cplus.CPlusStructMethodLoweringPass
 import cplus.CPlusParserShadowRunner
+import cplus.AllocationIntent
+import cplus.AllocationSymbolKind
 import cplus.LegacyCPlusParserBackend
 import cplus.MappedText
 import cplus.dump
@@ -117,6 +119,40 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(cplus.CPlusAstKind.PREPROCESSOR in kinds)
         assertTrue(cplus.CPlusAstKind.CONTROL_FLOW in kinds)
         assertTrue(cplus.CPlusAstKind.LITERAL in kinds)
+    }
+
+    @Test
+    fun analyzesDirectAllocationIntentMismatchFromAstAndMapsItsSpan() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-shape.cp"),
+            "int main(void) { hot char* value = alloc_cold(64); scratch char* aligned = alloc_scratch(32); return 0; }"
+        )
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(backend.parse(snapshot)))
+
+        assertEquals(1, result.diagnostics.size)
+        assertTrue(result.diagnostics.single().message.contains("'value' is declared hot but receives memory from alloc_cold()"))
+        assertEquals(snapshot.sourceFile.span(snapshot.text.indexOf("value"), snapshot.text.indexOf("value") + 5), result.diagnostics.single().sourceSpan)
+        val symbol = result.symbols.single { it.name == "value" }
+        assertEquals(AllocationSymbolKind.VARIABLE, symbol.kind)
+        assertEquals(AllocationIntent.HOT, symbol.intent)
+        assertEquals(AllocationIntent.COLD, symbol.knownProvenance)
+        val matching = result.symbols.single { it.name == "aligned" }
+        assertEquals(AllocationIntent.SCRATCH, matching.intent)
+        assertEquals(AllocationIntent.SCRATCH, matching.knownProvenance)
+    }
+
+    @Test
+    fun exposesAstAllocationDiagnosticsThroughPrototypeAndTranscodedResult() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-prototype.cp"),
+            "int main(void) { hot char* value = alloc_cold(64); return value == 0; }"
+        )
+        val result = TreeSitterCPlusPrototypeTranspiler(sourceManager = sources).transpile(snapshot)
+
+        assertTrue(result.successful, "diagnostics=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        assertEquals(1, result.allocationAnalysis.diagnostics.size)
+        assertEquals(result.allocationAnalysis, result.transcodedSource?.allocationAnalysis)
+        assertEquals(snapshot.text.indexOf("value"), result.allocationAnalysis.diagnostics.single().sourceSpan.startOffset)
     }
 
     @Test
@@ -355,6 +391,13 @@ class TreeSitterCPlusParserBackendTest {
             #include <stddef.h>
             typedef int (*callback_t)(const char *value, size_t length);
             typedef const char *(*format_callback_t)(const char *format, ...);
+            typedef int (*nested_callback_t)(
+                int value,
+                long (*transform)(const char *text, size_t length),
+                void (*notify)(void *context)
+            );
+            typedef int (*(*factory_t)(int code))(const char *text);
+            typedef int (*(*(*deep_factory_t)(int code))(const char *text))(long value);
             #if defined(_WIN32)
             __declspec(dllexport) int apply(callback_t callback, const char *value, size_t length);
             #else
@@ -367,7 +410,31 @@ class TreeSitterCPlusParserBackendTest {
                 (void)value;
                 return (int)length;
             }
-            int main(void) { return apply(count_chars, "ok", 2) != 2; }
+            static long transform_length(const char *text, size_t length) {
+                (void)text;
+                return (long)length;
+            }
+            static void notify_context(void *context) { (void)context; }
+            static int first_character(const char *text) { return (unsigned char)text[0]; }
+            static int (*make_callback(int code))(const char *text) {
+                (void)code;
+                return first_character;
+            }
+            static int invoke_nested(
+                int value,
+                long (*transform)(const char *text, size_t length),
+                void (*notify)(void *context)
+            ) {
+                notify(NULL);
+                return value + (int)transform("x", 1);
+            }
+            int main(void) {
+                nested_callback_t nested = invoke_nested;
+                factory_t factory = make_callback;
+                return apply(count_chars, "ok", 2) != 2 ||
+                    nested(5, transform_length, notify_context) != 6 ||
+                    factory(0)("Z") != 'Z';
+            }
         """.trimIndent()
         val snapshot = sources.open(SourceId.named("c-dialect-compatibility.c"), text)
 
@@ -394,6 +461,38 @@ class TreeSitterCPlusParserBackendTest {
         }?.functionType
         assertTrue(formatType != null, "variadic function pointer typedef signature was not indexed; symbols=${semanticIndex.symbols}; ast=${ast.dump()}")
         assertTrue(formatType?.variadic == true, formatType.toString())
+        val formatAlias = semanticIndex.symbols.firstOrNull {
+            it.kind == CPlusSymbolKind.TYPE_ALIAS && it.name == "format_callback_t"
+        }
+        assertEquals(
+            "typedef const char *(*format_callback_t)(const char *format, ...);",
+            formatAlias?.declarationText
+        )
+        val nestedType = semanticIndex.symbols.firstOrNull {
+            it.kind == CPlusSymbolKind.TYPE_ALIAS && it.name == "nested_callback_t"
+        }?.functionType
+        assertTrue(nestedType != null, "nested function-pointer typedef was not indexed")
+        val transformParameter = nestedType?.parameters?.getOrNull(1)
+        assertEquals("transform", transformParameter?.name)
+        assertEquals("long", transformParameter?.functionType?.returnType)
+        assertEquals(listOf("text", "length"), transformParameter?.functionType?.parameters?.map { it.name })
+        val notifyParameter = nestedType?.parameters?.getOrNull(2)
+        assertEquals("notify", notifyParameter?.name)
+        assertEquals("void", notifyParameter?.functionType?.returnType)
+        assertEquals("void *context", notifyParameter?.functionType?.parameters?.singleOrNull()?.declarationText)
+        val factoryType = semanticIndex.symbols.firstOrNull {
+            it.kind == CPlusSymbolKind.TYPE_ALIAS && it.name == "factory_t"
+        }?.functionType
+        assertEquals(listOf("code"), factoryType?.parameters?.map { it.name })
+        assertEquals("int", factoryType?.returnType)
+        assertEquals("int", factoryType?.returnFunctionType?.returnType)
+        assertEquals(listOf("text"), factoryType?.returnFunctionType?.parameters?.map { it.name })
+        val deepFactoryType = semanticIndex.symbols.firstOrNull {
+            it.kind == CPlusSymbolKind.TYPE_ALIAS && it.name == "deep_factory_t"
+        }?.functionType
+        assertEquals(listOf("code"), deepFactoryType?.parameters?.map { it.name })
+        assertEquals(listOf("text"), deepFactoryType?.returnFunctionType?.parameters?.map { it.name })
+        assertEquals(listOf("value"), deepFactoryType?.returnFunctionType?.returnFunctionType?.parameters?.map { it.name })
         compileAndRunC(text)
     }
 

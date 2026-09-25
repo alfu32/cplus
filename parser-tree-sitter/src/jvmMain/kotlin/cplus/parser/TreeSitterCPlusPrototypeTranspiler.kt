@@ -30,7 +30,8 @@ data class TreeSitterPrototypeResult(
     val throwsFunctions: Map<String, CPlusThrowingFunction> = emptyMap(),
     val testFixtures: List<cplus.CPlusExtractedTestFixture> = emptyList(),
     /** Compiler-facing mapped emission for consumers that need the established source-map facade. */
-    val transcodedSource: TranscodedSource? = null
+    val transcodedSource: TranscodedSource? = null,
+    val allocationAnalysis: cplus.AllocationAnalysisResult = cplus.AllocationAnalysisResult()
 ) {
     val successful: Boolean
         get() = cSource != null && parserDiagnostics.isEmpty() && loweringDiagnostics.isEmpty() && unsupportedNodes.isEmpty()
@@ -61,6 +62,7 @@ class TreeSitterCPlusPrototypeTranspiler(
             return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mappedIdentity(source), it.span) }, emptyList(), emptyList())
         }
         var ast = CPlusAstAdapter().adapt(parsed)
+        val allocationAnalysis = TreeSitterAllocationIntentAnalyzer().analyze(ast)
         var mapped = MappedText.identity(source.sourceFile)
         val extractedTests = CPlusTestExtractionPass().extract(ast, mapped)
         if (extractedTests.diagnostics.isNotEmpty()) {
@@ -161,7 +163,8 @@ class TreeSitterCPlusPrototypeTranspiler(
             emptyList(),
             throws.functions,
             extractedTests.fixtures,
-            MappedEmitter(source.sourceFile).emit(emittedSource, "")
+            MappedEmitter(source.sourceFile).emit(emittedSource, "", allocationAnalysis),
+            allocationAnalysis
         )
     }
 
