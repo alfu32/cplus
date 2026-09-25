@@ -161,6 +161,7 @@ class TranspilerTest {
             )
         ).code
         assertTrue("#include <raymath.h>" in generated)
+        assertTrue("#define RAYMATH_STATIC_INLINE" in generated)
         assertTrue("Vector3Add" in fixture)
         assertTrue("MatrixMultiply" in fixture)
         assertFalse("Vector3Add" in generated, "@test bodies must not leak into ordinary C output")

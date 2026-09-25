@@ -23,7 +23,7 @@ int main(void) {
 
 ## Module and API Inventory
 
-Every domain module includes `<raylib.h>`. The math module additionally includes `<raymath.h>`, and low-level rendering additionally includes `<rlgl.h>`. The headers define the public Raylib functions, constants, enums, and data types; the C-plus modules do not redeclare them.
+Every domain module includes `<raylib.h>`. The math module additionally includes `<raymath.h>` in `RAYMATH_STATIC_INLINE` mode so header-only math calls link consistently with TinyCC, GCC, and Clang without relying on TinyCC's implicit inline behavior. The low-level module additionally includes `<rlgl.h>`. The headers define the public Raylib functions, constants, enums, and data types; the C-plus modules do not redeclare them.
 
 | C-plus import | Raylib domain | Representative native types |
 | --- | --- | --- |
