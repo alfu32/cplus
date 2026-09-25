@@ -160,6 +160,7 @@ class CPlusTranspiler {
             static int cplus_test_assertion_total = 0;
             static int cplus_test_fixture_offset = 0;
             static int cplus_test_fixture_total = 0;
+            static int cplus_test_failure = 0;
             static int cplus_test_environment_int(const char* name, int fallback) {
                 const char* value = getenv(name);
                 if (value == NULL || *value == '\0') return fallback;
@@ -191,7 +192,7 @@ class CPlusTranspiler {
             #define CPLUS_TEST_ASSERT_AT(number, total, condition) do { \
                 _Bool cplus_assert_given = !!(condition); \
                 cplus_test_report_assert((number), (total), #condition, cplus_assert_given, __FILE__, __LINE__); \
-                if (!cplus_assert_given) return 1; \
+                if (!cplus_assert_given) { cplus_test_failure = 1; goto cplus_test_finish; } \
             } while (0)
             static void cplus_test_report_assert_equals(int number, int total, const char* expected_expression, const char* given_expression,
                 const void* expected, size_t expected_size, int expected_kind, const void* given, size_t given_size, int given_kind,
@@ -217,19 +218,19 @@ class CPlusTranspiler {
                     &cplus_expected_value, sizeof cplus_expected_value, CPLUS_TEST_VALUE_KIND(cplus_expected_value), \
                     &cplus_given_value, sizeof cplus_given_value, CPLUS_TEST_VALUE_KIND(cplus_given_value), \
                     cplus_assert_passed, __FILE__, __LINE__); \
-                if (!cplus_assert_passed) return 1; \
+                if (!cplus_assert_passed) { cplus_test_failure = 1; goto cplus_test_finish; } \
             } while (0)
             #define CPLUS_TEST_ASSERT(condition) CPLUS_TEST_ASSERT_AT(0, 0, condition)
             #define CPLUS_TEST_ASSERT_EQUALS(expected, given) CPLUS_TEST_ASSERT_EQUALS_AT(0, 0, expected, given)
-            #define CPLUS_TEST_FAIL(message) do { fprintf(stderr, "test failure: %s\n", (message)); return 1; } while (0)
+            #define CPLUS_TEST_FAIL(message) do { fprintf(stderr, "test failure: %s\n", (message)); cplus_test_failure = 1; goto cplus_test_finish; } while (0)
             """.trimIndent() + "\n",
         )
 
         tests.forEachIndexed { index, test ->
-            output.appendGenerated("static int cplus_test_$index(void) {\n")
+            output.appendGenerated("static void cplus_test_$index(void) {\n    cplus_test_failure = 0;\n")
             output.append(lowerTestAssertions(test.body, assertions[index], 1, assertions[index].size))
             if (test.body.text.isNotEmpty() && !test.body.text.endsWith('\n')) output.appendGenerated("\n")
-            output.appendGenerated("    return 0;\n}\n\n")
+            output.appendGenerated("cplus_test_finish:\n    ;\n}\n\n")
         }
 
         output.appendGenerated(
@@ -263,7 +264,8 @@ class CPlusTranspiler {
                     cplus_test_assertion_offset = file_assertion_offset + assertions_before_selected;
                     printf("\n\033[1;33m========== BEGIN TEST %d/%d: %s ==========\033[0m\n", fixture_number, cplus_test_fixture_total, $literal);
                     fflush(stdout);
-                    int result = cplus_test_$index();
+                    cplus_test_$index();
+                    int result = cplus_test_failure;
                     printf("========== END TEST %d/%d: %s [%s%s\033[0m] ==========\n", fixture_number, cplus_test_fixture_total, $literal, result == 0 ? "\033[1;32m" : "\033[1;31m", result == 0 ? "PASS" : "FAIL");
                     if (result != 0) failed++;
                     assertions_before_selected += ${assertions[index].size};

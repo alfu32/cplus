@@ -56,6 +56,49 @@ class TranspilerTest {
     }
 
     @Test
+    fun failingTestFixtureRunsDeferredCleanupBeforeTheNextFixture() {
+        val directory = Files.createTempDirectory("cplus-test-defer-cleanup")
+        try {
+            val source = directory.resolve("cleanup.cp")
+            Files.writeString(
+                source,
+                """
+                    int cleanup_count = 0;
+
+                    @test "failed fixture still cleans up" {
+                        defer cleanup_count++;
+                        @assert(0);
+                    }
+
+                    @test "next fixture observes cleanup" {
+                        @assertEquals(1, cleanup_count);
+                    }
+                """.trimIndent()
+            )
+            val program = CPlusTranspiler().transpileTests(Files.readString(source), source.toString())
+            val executable = directory.resolve("cleanup-tests")
+            val compilation = TccCompiler().compileExecutable(program.source, executable, emptyList())
+            assertEquals(0, compilation.exitCode, compilation.diagnostics.joinToString("\n"))
+
+            val log = directory.resolve("test-output.txt")
+            val process = ProcessBuilder(executable.toString())
+                .redirectErrorStream(true)
+                .redirectOutput(log.toFile())
+                .start()
+            val exitCode = process.waitFor()
+            val output = Files.readString(log)
+            assertEquals(1, exitCode, output)
+            assertTrue("END TEST 1/2: failed fixture still cleans up" in output, output)
+            assertTrue("END TEST 2/2: next fixture observes cleanup" in output, output)
+            assertTrue("next fixture observes cleanup [\u001b[1;32mPASS" in output, output)
+            assertTrue("2 selected, 1 failed" in output, output)
+            assertFalse("Segmentation fault" in output, output)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun deferIsRejectedOutsideAFunctionBody() {
         val error = assertThrows(CPlusSyntaxException::class.java) {
             CPlusTranspiler().transpile("defer cleanup();", "outside-defer.cp")

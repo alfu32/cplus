@@ -203,6 +203,13 @@ class CPlusCli(
                     processBuilder.start().waitFor()
                 }
                 val fileStatus = if (exitCode == 0) "PASS" else "FAIL"
+                if (exitCode != 0) {
+                    errors.append("cplus: test process for ")
+                        .append(compiled.path.toString())
+                        .append(" exited with status ")
+                        .append(exitCode.toString())
+                        .append('\n')
+                }
                 reports += TestFileReport(compiled.path, fixtures.size, fixtures.sumOf { it.assertionCount }, fileStatus)
                 if (exitCode != 0) failed++
             }
