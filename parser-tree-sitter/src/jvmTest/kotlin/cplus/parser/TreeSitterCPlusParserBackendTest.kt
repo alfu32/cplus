@@ -13,6 +13,7 @@ import cplus.CPlusMethodCallLoweringPass
 import cplus.CPlusStructMethodLoweringPass
 import cplus.CPlusParserShadowRunner
 import cplus.AllocationIntent
+import cplus.AllocationOwnership
 import cplus.AllocationSymbolKind
 import cplus.LegacyCPlusParserBackend
 import cplus.MappedText
@@ -153,6 +154,71 @@ class TreeSitterCPlusParserBackendTest {
         assertEquals(1, result.allocationAnalysis.diagnostics.size)
         assertEquals(result.allocationAnalysis, result.transcodedSource?.allocationAnalysis)
         assertEquals(snapshot.text.indexOf("value"), result.allocationAnalysis.diagnostics.single().sourceSpan.startOffset)
+    }
+
+    @Test
+    fun propagatesAllocationProvenanceThroughAliasesWithoutLeakingNestedScopes() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-aliases.cp"),
+            """
+                int main(void) {
+                    scratch char* source = alloc_scratch(32);
+                    char* alias = source;
+                    warm char* mismatch = alias;
+                    warm char* reassigned = NULL;
+                    reassigned = alias;
+                    warm char* conditional = NULL;
+                    int enabled = 1;
+                    enabled && (conditional = alias);
+                    warm char* after_conditional = conditional;
+                    {
+                        cold char* alias = alloc_cold(16);
+                        cold char* local = alias;
+                    }
+                    warm char* outer_mismatch = alias;
+                    consume(alias);
+                    return 0;
+                }
+                void consume(borrowed warm char* value);
+            """.trimIndent()
+        )
+        val ast = CPlusAstAdapter().adapt(backend.parse(snapshot))
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(ast)
+
+        assertEquals(4, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.any { it.message.contains("'mismatch' is declared warm") })
+        assertTrue(result.diagnostics.any { it.message.contains("'reassigned' is declared warm") })
+        assertTrue(result.diagnostics.any { it.message.contains("'outer_mismatch' is declared warm") })
+        assertTrue(result.diagnostics.any { it.message.contains("argument for 'consume.value' is scratch but the parameter expects warm") })
+        assertEquals(snapshot.text.lastIndexOf("alias"), result.diagnostics.single { it.message.contains("argument for 'consume.value'") }.sourceSpan.startOffset)
+        assertFalse(result.diagnostics.any { it.message.contains("'local'") })
+        assertFalse(result.diagnostics.any { it.message.contains("'after_conditional'") })
+        assertEquals(AllocationIntent.SCRATCH, result.symbols.single { it.name == "alias" && it.sourceSpan.startLine == 3 }.knownProvenance)
+        assertEquals(AllocationIntent.COLD, result.symbols.single { it.name == "alias" && it.sourceSpan.startLine == 12 }.knownProvenance)
+    }
+
+    @Test
+    fun checksAnnotatedFunctionReturnAllocationIntentFromAst() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-return.cp"),
+            """
+                owned warm char* make_name(void);
+                char* make_name(void) { return alloc_cold(24); }
+                owned cold char* make_cold(void);
+                char* make_cold(void) { return alloc_cold(16); }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.single().message.contains("function 'make_name' is annotated warm but returns alloc_cold()"))
+        val returned = result.symbols.single { it.kind == AllocationSymbolKind.FUNCTION_RETURN && it.name == "make_name" }
+        assertEquals("make_name", returned.name)
+        assertEquals(AllocationIntent.WARM, returned.intent)
+        assertEquals(AllocationOwnership.OWNED, returned.ownership)
+        assertEquals(AllocationIntent.COLD, result.symbols.single { it.kind == AllocationSymbolKind.FUNCTION_RETURN && it.name == "make_cold" }.intent)
     }
 
     @Test
