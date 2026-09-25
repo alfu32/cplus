@@ -11,18 +11,21 @@ import kotlin.system.exitProcess
 private val sourceExtensions = listOf(".cp", ".c+")
 
 fun main(args: Array<String>) {
+    val verbosity = args.firstOrNull { it.matches(Regex("-v[012]")) }?.substring(2)?.toInt() ?: 1
     val exitCode = try {
         CPlusCli().run(args.toList())
     } catch (error: CPlusSyntaxException) {
         val span = error.sourceSpan
-        if (span?.file != null) {
-            System.err.println("${span.file}:${span.startLine}:${span.startColumn}: error: ${error.message}")
-        } else {
-            System.err.println("cplus: error: ${error.message}")
+        if (verbosity >= 1) {
+            if (span?.file != null) {
+                System.err.println("${span.file}:${span.startLine}:${span.startColumn}: error: ${error.message}")
+            } else {
+                System.err.println("cplus: error: ${error.message}")
+            }
         }
         2
     } catch (error: Exception) {
-        System.err.println("cplus: ${error.message ?: error::class.simpleName}")
+        if (verbosity >= 1) System.err.println("cplus: ${error.message ?: error::class.simpleName}")
         2
     }
     if (exitCode != 0) exitProcess(exitCode)
@@ -36,13 +39,22 @@ class CPlusCli(
     private val logger: CompilationLogger = ConsoleCompilationLogger(errors)
 ) {
     private var cliStdlibRoot: Path? = null
+    private var verbosity: Int = 1
+    private var activeLogger: CompilationLogger = logger
 
     fun run(arguments: List<String>): Int {
         cliStdlibRoot = null
+        verbosity = 1
+        activeLogger = SilentCompilationLogger
         val commandArguments = mutableListOf<String>()
         var index = 0
         while (index < arguments.size) {
-            if (arguments[index] == "--stdlib") {
+            val argument = arguments[index]
+            if (argument.matches(Regex("-v[012]"))) {
+                verbosity = argument.substring(2).toInt()
+                activeLogger = if (verbosity >= 2) logger else SilentCompilationLogger
+                index++
+            } else if (argument == "--stdlib") {
                 if (index + 1 >= arguments.size) throw IllegalArgumentException("--stdlib requires a directory")
                 val directory = Path(arguments[index + 1]).toAbsolutePath().normalize()
                 if (!Files.isDirectory(directory)) throw IllegalArgumentException("standard-library directory does not exist: $directory")
@@ -78,16 +90,16 @@ class CPlusCli(
         val destination = parsed.output ?: defaultTranscodedPath(parsed.source)
         val sourcePath = parsed.source.toAbsolutePath().normalize()
         val importPaths = importPathsFor(sourcePath)
-        val source = logger.pass("read-source") { readSource(sourcePath) }
+        val source = activeLogger.pass("read-source") { readSource(sourcePath) }
         val transcoded = transpiler.transpile(
             source,
             sourcePath.toString(),
-            logger,
+            activeLogger,
             importPaths,
             CPlusTarget.osFromCompilerOptions(parsed.passthrough)
         )
         printAllocationDiagnostics(transcoded)
-        logger.pass("write-c") { writeText(destination, transcoded.code) }
+        activeLogger.pass("write-c") { writeText(destination, transcoded.code) }
         return 0
     }
 
@@ -97,11 +109,11 @@ class CPlusCli(
         val destination = parsed.output ?: defaultExecutablePath(parsed.source)
         val sourcePath = parsed.source.toAbsolutePath().normalize()
         val importPaths = importPathsFor(sourcePath)
-        val source = logger.pass("read-source") { readSource(sourcePath) }
+        val source = activeLogger.pass("read-source") { readSource(sourcePath) }
         val transcoded = transpiler.transpile(
             source,
             sourcePath.toString(),
-            logger,
+            activeLogger,
             importPaths,
             CPlusTarget.osFromCompilerOptions(parsed.passthrough)
         )
@@ -114,12 +126,12 @@ class CPlusCli(
             addAll(parsed.passthrough)
         }
 
-        val result = compiler.compileExecutable(transcoded, destination, options, logger)
+        val result = compiler.compileExecutable(transcoded, destination, options, activeLogger)
         result.diagnostics.forEach(::printDiagnostic)
         if (result.exitCode != 0) return result.exitCode
         if (!runAfter) return 0
 
-        return logger.pass("run-executable") {
+        return activeLogger.pass("run-executable") {
             val process = ProcessBuilder(destination.toAbsolutePath().normalize().toString())
                 .inheritIO()
                 .start()
@@ -128,30 +140,63 @@ class CPlusCli(
     }
 
     private fun test(arguments: List<String>): Int {
-        val sourceCount = arguments.takeWhile(::isCPlusSource).size
-        if (sourceCount == 0) throw IllegalArgumentException("test requires one or more .cp or .c+ source files")
-        val sources = arguments.take(sourceCount).map(::Path).map { it.toAbsolutePath().normalize() }
-        val requestedNames = arguments.drop(sourceCount).distinct()
+        val parsed = parseTestCommand(arguments)
+        val sources = parsed.sources.map(::Path).map { it.toAbsolutePath().normalize() }
+        if (parsed.mode != TestMode.RUN && sources.size != 1) {
+            throw IllegalArgumentException("test ${parsed.mode.name.lowercase()} currently requires exactly one input source")
+        }
+        val requestedNames = parsed.testNames.distinct()
         sources.forEach { path ->
             if (!Files.isRegularFile(path)) throw IllegalArgumentException("test source does not exist: $path")
         }
         printTranscoderVersion()
 
+        if (parsed.mode == TestMode.TRANSCODE) {
+            val path = sources.single()
+            val importPaths = importPathsFor(path)
+            val transpiled = transpiler.transpileTests(
+                readSource(path), path.toString(), activeLogger, importPaths,
+                CPlusTarget.osFromCompilerOptions(parsed.compilerFlags)
+            )
+            val destination = parsed.output ?: path.resolveSibling(path.fileName.toString().substringBeforeLast('.') + ".test.c")
+            writeText(
+                destination,
+                addCompilerFlagsComment(transpiled.source.code, CompilerOptions.merge(transpiled.source.compilerOptions, parsed.compilerFlags))
+            )
+            return 0
+        }
+
         val compiledSources = sources.map { path ->
             val importPaths = importPathsFor(path)
-            val source = logger.pass("read-source") { readSource(path) }
-            val testSource = transpiler.transpileTests(source, path.toString(), logger, importPaths)
+            val source = activeLogger.pass("read-source") { readSource(path) }
+            val testSource = transpiler.transpileTests(
+                source, path.toString(), activeLogger, importPaths,
+                CPlusTarget.osFromCompilerOptions(parsed.compilerFlags)
+            )
             printAllocationDiagnostics(testSource.source)
             TestSource(path, testSource, importPaths)
         }
+
+        if (parsed.mode == TestMode.COMPILE) {
+            val compiled = compiledSources.single()
+            val destination = parsed.output ?: defaultExecutablePath(compiled.path)
+            val result = compiler.compileExecutable(
+                compiled.transcoded.source,
+                destination,
+                testCompilerOptions(compiled, parsed.compilerFlags),
+                activeLogger
+            )
+            result.diagnostics.forEach(::printDiagnostic)
+            return result.exitCode
+        }
         val allNames = compiledSources.flatMap { it.transcoded.testNames }.toSet()
         if (allNames.isEmpty()) {
-            errors.append("cplus: no @test declarations found in the input sources\n")
+            if (verbosity > 0) errors.append("cplus: no @test declarations found in the input sources\n")
             return 2
         }
         val unmatched = requestedNames.filterNot { it in allNames }
         if (unmatched.isNotEmpty()) {
-            errors.append("cplus: unknown test name(s): ").append(unmatched.joinToString(", ")).append('\n')
+            if (verbosity > 0) errors.append("cplus: unknown test name(s): ").append(unmatched.joinToString(", ")).append('\n')
             return 2
         }
 
@@ -177,13 +222,8 @@ class CPlusCli(
                 assertionOffset += fixtures.sumOf { it.assertionCount }
 
                 val executable = temporaryDirectory.resolve("test-$index")
-                val options = buildList {
-                    compiled.path.parent?.let { add("-I$it") }
-                    add("-I${Path("").toAbsolutePath().normalize()}")
-                    compiled.importPaths.moduleRoots.forEach { add("-I$it") }
-                    compiled.importPaths.standardLibraryRoots.forEach { add("-I$it") }
-                }
-                val result = compiler.compileExecutable(compiled.transcoded.source, executable, options, logger)
+                val options = testCompilerOptions(compiled, parsed.compilerFlags + compiledSources.flatMap { it.transcoded.source.compilerOptions })
+                val result = compiler.compileExecutable(compiled.transcoded.source, executable, options, activeLogger)
                 result.diagnostics.forEach(::printDiagnostic)
                 if (result.exitCode != 0) {
                     failed++
@@ -195,16 +235,20 @@ class CPlusCli(
                     add(executable.toAbsolutePath().normalize().toString())
                     addAll(requestedNames)
                 }
-                val processBuilder = ProcessBuilder(command).inheritIO()
+                val processBuilder = ProcessBuilder(command).redirectErrorStream(true)
                 processBuilder.environment().apply {
                     put("CPLUS_TEST_FIXTURE_OFFSET", currentFixtureOffset.toString())
                     put("CPLUS_TEST_FIXTURE_TOTAL", totalFixtures.toString())
                     put("CPLUS_TEST_ASSERTION_OFFSET", currentAssertionOffset.toString())
                     put("CPLUS_TEST_ASSERTION_TOTAL", totalAssertions.toString())
                 }
-                val exitCode = logger.pass("run-tests") {
-                    processBuilder.start().waitFor()
+                var testOutput = ""
+                val exitCode = activeLogger.pass("run-tests") {
+                    val process = processBuilder.start()
+                    testOutput = process.inputStream.bufferedReader().readText()
+                    process.waitFor()
                 }
+                if (verbosity >= 2 || exitCode != 0) output.append(testOutput)
                 val fileStatus = if (exitCode == 0) "PASS" else "FAIL"
                 if (exitCode != 0) {
                     errors.append("cplus: test process for ")
@@ -221,8 +265,53 @@ class CPlusCli(
                 paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
             }
         }
-        printTestAggregateReport(reports, totalFixtures, totalAssertions, failed)
+        if (verbosity >= 2 || failed > 0) printTestAggregateReport(reports, totalFixtures, totalAssertions, failed)
         return if (failed == 0) 0 else 1
+    }
+
+    private fun testCompilerOptions(compiled: TestSource, flags: List<String>): List<String> =
+        CompilerOptions.merge(buildList {
+            compiled.path.parent?.let { add("-I$it") }
+            add("-I${Path("").toAbsolutePath().normalize()}")
+            compiled.importPaths.moduleRoots.forEach { add("-I$it") }
+            compiled.importPaths.standardLibraryRoots.forEach { add("-I$it") }
+        }, flags)
+
+    private fun addCompilerFlagsComment(source: String, flags: List<String>): String {
+        val unique = CompilerOptions.distinct(flags)
+        val body = source.replace(Regex("(?m)^/\\* cplus compiler flags:.*\\*/\\R?"), "")
+        if (unique.isEmpty()) return body
+        return "/* cplus compiler flags: ${unique.joinToString(" ") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"").replace("*/", "* /")}\"" }} */\n$body"
+    }
+
+    private fun parseTestCommand(arguments: List<String>): ParsedTestCommand {
+        val modes = setOf("run", "compile", "transcode")
+        val mode = arguments.firstOrNull()?.takeIf(modes::contains)?.uppercase()?.let(TestMode::valueOf) ?: TestMode.RUN
+        val start = if (arguments.firstOrNull() in modes) 1 else 0
+        val sources = mutableListOf<String>()
+        val testNames = mutableListOf<String>()
+        val flags = mutableListOf<String>()
+        var outputPath: Path? = null
+        val paired = setOf("-l", "-L", "-F", "-I", "-D", "-U", "-include", "-isystem", "-iquote", "-isysroot", "--sysroot", "-sysroot", "--target", "-target", "-arch", "-framework", "-Xlinker", "-Xclang")
+        var index = start
+        while (index < arguments.size) {
+            val value = arguments[index]
+            when {
+                value == "-o" -> {
+                    if (index + 1 >= arguments.size) throw IllegalArgumentException("-o requires an output path")
+                    outputPath = Path(arguments[index + 1]); index += 2
+                }
+                isCPlusSource(value) -> { sources += value; index++ }
+                value.startsWith("-") -> {
+                    flags += value
+                    if (value in paired && index + 1 < arguments.size) flags += arguments[++index]
+                    index++
+                }
+                else -> { testNames += value; index++ }
+            }
+        }
+        if (sources.isEmpty()) throw IllegalArgumentException("test requires one or more .cp or .c+ source files")
+        return ParsedTestCommand(mode, sources, outputPath, flags, testNames)
     }
 
     private fun printTestAggregateReport(
@@ -329,6 +418,8 @@ class CPlusCli(
     }
 
     private fun printDiagnostic(diagnostic: CompilerDiagnostic) {
+        if (verbosity == 0) return
+        if (verbosity == 1 && diagnostic.severity !in setOf(DiagnosticSeverity.ERROR, DiagnosticSeverity.UNKNOWN)) return
         val location = when {
             diagnostic.file != null && diagnostic.line != null && diagnostic.column != null ->
                 "${diagnostic.file}:${diagnostic.line}:${diagnostic.column}"
@@ -345,6 +436,7 @@ class CPlusCli(
     }
 
     private fun printAllocationDiagnostics(source: TranscodedSource) {
+        if (verbosity < 2) return
         source.allocationAnalysis.diagnostics.forEach { diagnostic ->
             val span = diagnostic.sourceSpan
             val location = span.file?.let { "$it:${span.startLine}:${span.startColumn}" } ?: "<c-plus-input>"
@@ -376,16 +468,22 @@ usage:
   cplus compile filename.cp [-o executable] [passthrough tcc parameters]
   cplus run filename.cp [-o executable] [passthrough tcc parameters]
   cplus test filename.cp [filename2.cp ...] [test name ...]
+  cplus test [run] [compiler flags] filename.cp ... [test name ...]
+  cplus test transcode [-o output.c] filename.cp
+  cplus test compile [-o executable] [compiler flags] filename.cp
   cplus new project_name|.
 
 global options:
   --stdlib directory    use this standard-library root (also settable with CPLUS_STDLIB)
+  -v0                   silence all C-plus messages
+  -v1                   show errors only (default)
+  -v2                   show passes, compiler details, and test output
 
 defaults:
   transcode: filename.cp -> filename.c
   compile/run: filename.cp -> filename
   compiler: bundled TinyCC, then TCC, system tcc on PATH, then compiler from CC
-  test: runs all @test blocks, or only the exact names supplied after the source files
+  test: runs all @test blocks by default; run, compile, and transcode are explicit modes
   new: creates a C-plus project with cplus.toml and src/main.cp
 
 Imports:
@@ -400,7 +498,7 @@ empty macros: pub, priv, mut, borrowed, owned, and stat.
     }
 
     private fun printTranscoderVersion() {
-        errors.append("[cplus] transcoder runtime: ").append(Version().toString()).append('\n')
+        if (verbosity >= 2) errors.append("[cplus] transcoder runtime: ").append(Version().toString()).append('\n')
     }
 
     private data class ParsedCommand(
@@ -413,6 +511,16 @@ empty macros: pub, priv, mut, borrowed, owned, and stat.
         val path: Path,
         val transcoded: TranscodedTestSource,
         val importPaths: CPlusImportPaths
+    )
+
+    private enum class TestMode { RUN, COMPILE, TRANSCODE }
+
+    private data class ParsedTestCommand(
+        val mode: TestMode,
+        val sources: List<String>,
+        val output: Path?,
+        val compilerFlags: List<String>,
+        val testNames: List<String>
     )
 
     private data class TestFileReport(

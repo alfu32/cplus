@@ -1,7 +1,7 @@
 package cplus
 
 /** Preserves order while deduplicating compiler arguments as logical options. */
-internal object CompilerOptions {
+object CompilerOptions {
     private val pairedOptions = setOf(
         "-framework", "-l", "-L", "-F", "-I", "-D", "-U", "-include", "-isystem", "-iquote",
         "-isysroot", "--sysroot", "-sysroot", "--target", "-target", "-arch", "-Xlinker", "-Xclang"

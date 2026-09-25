@@ -11,9 +11,12 @@ cplus help
 cplus transcode filename.cp [-o some_file_name.c] [--target=TRIPLE]
 cplus compile filename.cp [-o executable] [passthrough tcc parameters]
 cplus run filename.cp [-o executable] [passthrough tcc parameters]
-cplus test filename.cp [filename2.cp ...] [exact test name ...]
+cplus test [run] [compiler flags] filename.cp [filename2.cp ...] [exact test name ...]
+cplus test transcode [-o test.c] filename.cp
+cplus test compile [-o executable] [compiler flags] filename.cp
 cplus new project_name|.
 cplus --stdlib directory <subcommand> ...
+cplus -v0|-v1|-v2 <subcommand> ...
 ```
 
 `transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. `transcode` accepts only `--target` among compiler options; it uses the option to choose comptime branches but does not compile. Additional arguments for `compile` and `run` are passed to the selected C compiler; for example, `-DFLAG=1` or `-Iinclude`. Code-processing commands print the C-plus transcoder version. Before each C compilation, the CLI reports whether the compiler is bundled or external and its payload/JAR or executable location.
@@ -26,15 +29,19 @@ Top-level `comptime flags` declarations in the source and its comptime imports a
 
 Comptime exposes `os` as the normalized operating system of the selected target. `compile` and `run` derive it from TinyCC's `--target` option (or the local host when omitted); `transcode` can be given `--target` for the same selection. The current supported spellings include `linux`, `windows`, and `macos`. This only selects source branches: the target compiler/sysroot must still contain the requested libraries.
 
-`test` compiles and runs all `@test` blocks in the input files. Source paths must come first; any following arguments are exact, case-sensitive test-name filters. The shell may expand file globs before invoking C-plus:
+`test` runs all `@test` blocks by default; `test run` is equivalent. Compiler flags may appear before or after source paths, and `-v0`, `-v1`, or `-v2` may be placed before or after the command. Flags from all input files and CLI arguments are logically deduplicated and passed to each test compilation. Generated test C carries one consolidated `cplus compiler flags` comment, matching ordinary transpilation. `test compile` and `test transcode` currently accept one source file because each generated test harness owns a `main` function. Test-name filters remain exact and case-sensitive:
 
 ```sh
 java -jar c-plus.jar test test/folder/some_file.cp
+java -jar c-plus.jar test run -lraylib test/folder/raylib_math.cp
 java -jar c-plus.jar test test/folder/some_file.cp "print and init struct"
 java -jar c-plus.jar test test/folder/*.cp "print and init struct" "list grows"
+java -jar c-plus.jar test transcode -o build/tests.c test/folder/some_file.cp
+java -jar c-plus.jar test compile -o build/tests -lraylib test/folder/raylib_math.cp
+java -jar c-plus.jar -v2 test test/folder/some_file.cp
 ```
 
-Each selected source file gets a temporary test executable, and its temporary output is deleted after execution. Test fixture banners are numbered continuously across the selected fixtures from all files; assertion numbers likewise continue across files and use one aggregate denominator. Test names are yellow, PASS is green, FAIL is red. Every assertion prints its original expression(s), invocation-wide assertion number/total, given value, and expected value even when it passes. `@assert(condition)` reports the condition's boolean result; `@assertEquals(expected, actual)` prints scalar values where recognized and otherwise emits byte hex. After all files run, the CLI prints an aggregate table with each file's selected fixture/assert totals and result, followed by total files, fixtures, assertions, and failed files. Assert totals count assertion sites in the selected fixtures, including sites after a failing assertion that short-circuits that fixture. A failed assertion marks that fixture failed and later fixtures still run; a nonzero test run returns `1`, an unknown requested name or CLI error returns `2`. Test bodies support `@assert(condition)`, bytewise `@assertEquals(expected, actual)`, the corresponding `CPLUS_TEST_ASSERT` compatibility macro, and `CPLUS_TEST_FAIL(message)`. Existing C files can be used with `#include "fixture.c"` or `@import("fixture.c")`; C imports become normal preprocessor includes. Their `main` definition is renamed in test builds so the generated driver can supply `main`.
+At `-v1` (default), successful runs are quiet and errors/failing test output are shown; `-v0` suppresses C-plus messages, and `-v2` shows passes, compiler details, test output, and aggregate reports. Output from a program run by `cplus run` remains visible. Each selected source file gets a temporary test executable, and its temporary output is deleted after execution. Test fixture banners are numbered continuously across the selected fixtures from all files; assertion numbers likewise continue across files and use one aggregate denominator. Test names are yellow, PASS is green, FAIL is red. Every assertion prints its original expression(s), invocation-wide assertion number/total, given value, and expected value even when it passes. `@assert(condition)` reports the condition's boolean result; `@assertEquals(expected, actual)` prints scalar values where recognized and otherwise emits byte hex. After all files run, the CLI prints an aggregate table with each file's selected fixture/assert totals and result, followed by total files, fixtures, assertions, and failed files. Assert totals count assertion sites in the selected fixtures, including sites after a failing assertion that short-circuits that fixture. A failed assertion marks that fixture failed and later fixtures still run; a nonzero test run returns `1`, an unknown requested name or CLI error returns `2`. Test bodies support `@assert(condition)`, bytewise `@assertEquals(expected, actual)`, the corresponding `CPLUS_TEST_ASSERT` compatibility macro, and `CPLUS_TEST_FAIL(message)`. Existing C files can be used with `#include "fixture.c"` or `@import("fixture.c")`; C imports become normal preprocessor includes. Their `main` definition is renamed in test builds so the generated driver can supply `main`.
 
 `new` creates `cplus.toml`, `src/main.cp`, and `modules/`/`tests/` directories. It accepts a new directory or `.` for the current directory; it never overwrites an existing manifest, main source, or README. `--stdlib directory` overrides the standard-library root. Otherwise the CLI checks `--stdlib`, the project manifest, `CPLUS_STDLIB`, `CPLUS_HOME`, jar/bundle location, repository ancestors, and conventional user/system install paths, in that order.
 

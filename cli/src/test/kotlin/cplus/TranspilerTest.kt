@@ -229,7 +229,7 @@ class TranspilerTest {
         val sourcePath = findRepositoryFile("stdlib/tests/thread_pool.cp")
         val output = StringBuilder()
         val errors = StringBuilder()
-        val status = CPlusCli(output = output, errors = errors).run(listOf("test", sourcePath.toString()))
+        val status = CPlusCli(output = output, errors = errors).run(listOf("test", "-v2", sourcePath.toString()))
 
         assertEquals(0, status, "${errors}\n${output}")
         assertTrue("thread_pool.cp | 8 |" in output, output.toString())
@@ -241,7 +241,7 @@ class TranspilerTest {
         val sourcePath = findRepositoryFile("stdlib/tests/http.cp")
         val output = StringBuilder()
         val errors = StringBuilder()
-        val status = CPlusCli(output = output, errors = errors).run(listOf("test", sourcePath.toString()))
+        val status = CPlusCli(output = output, errors = errors).run(listOf("test", "-v2", sourcePath.toString()))
 
         assertEquals(0, status, "${errors}\n${output}")
         assertTrue("http.cp | 4 |" in output, output.toString())
@@ -286,7 +286,7 @@ class TranspilerTest {
             val output = StringBuilder()
             val errors = StringBuilder()
             val status = CPlusCli(output = output, errors = errors).run(
-                listOf("test", first.toString(), second.toString(), "alpha", "beta")
+                listOf("test", "-v2", first.toString(), second.toString(), "alpha", "beta")
             )
 
             assertEquals(0, status, errors.toString())
@@ -398,6 +398,71 @@ class TranspilerTest {
             Files.walk(directory).use { paths ->
                 paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
             }
+        }
+    }
+
+    @Test
+    fun testCommandAcceptsCompilerFlagsAndTestSubcommands() {
+        val directory = Files.createTempDirectory("cplus-test-cli-options")
+        try {
+            val source = directory.resolve("flags.cp")
+            val generated = directory.resolve("flags.test.c")
+            val executable = directory.resolve("flags-tests")
+            Files.writeString(
+                source,
+                """comptime flags -DDECLARED_FLAG=3 -lm
+                    |@test "flag options" {
+                    |    @assert(DECLARED_FLAG + CLI_FLAG == 10);
+                    |}
+                """.trimMargin()
+            )
+
+            val errors = StringBuilder()
+            assertEquals(
+                0,
+                CPlusCli(output = StringBuilder(), errors = errors)
+                    .run(listOf("test", "-DCLI_FLAG=7", source.toString())),
+                errors.toString()
+            )
+
+            assertEquals(
+                0,
+                CPlusCli(output = StringBuilder(), errors = errors)
+                    .run(listOf("test", "compile", "-o", executable.toString(), "-DCLI_FLAG=7", source.toString())),
+                errors.toString()
+            )
+            assertTrue(Files.isExecutable(executable))
+
+            assertEquals(
+                0,
+                CPlusCli(output = StringBuilder(), errors = errors)
+                    .run(listOf("test", "transcode", "-o", generated.toString(), "-DCLI_FLAG=7", source.toString())),
+                errors.toString()
+            )
+            val generatedText = Files.readString(generated)
+            assertEquals(1, generatedText.lines().count { it.startsWith("/* cplus compiler flags:") }, generatedText)
+            assertTrue("\"-DDECLARED_FLAG=3\"" in generatedText, generatedText)
+            assertTrue("\"-DCLI_FLAG=7\"" in generatedText, generatedText)
+        } finally {
+            Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
+    }
+
+    @Test
+    fun verbosityDefaultsToErrorsAndV2ShowsPasses() {
+        val directory = Files.createTempDirectory("cplus-verbosity")
+        try {
+            val source = directory.resolve("sample.cp")
+            Files.writeString(source, "int main(void) { return 0; }\n")
+            val quietErrors = StringBuilder()
+            assertEquals(0, CPlusCli(output = StringBuilder(), errors = quietErrors).run(listOf("transcode", source.toString())))
+            assertEquals("", quietErrors.toString())
+
+            val verboseErrors = StringBuilder()
+            assertEquals(0, CPlusCli(output = StringBuilder(), errors = verboseErrors).run(listOf("-v2", "transcode", source.toString())))
+            assertTrue("pass: emit-mapped-c" in verboseErrors.toString(), verboseErrors.toString())
+        } finally {
+            Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
     }
 
@@ -1091,7 +1156,7 @@ class TranspilerTest {
             )
             val errors = StringBuilder()
             val status = CPlusCli(output = StringBuilder(), errors = errors).run(
-                listOf("transcode", source.toString(), "-o", generated.toString())
+                listOf("transcode", "-v2", source.toString(), "-o", generated.toString())
             )
 
             assertEquals(0, status)
@@ -1673,7 +1738,7 @@ class TranspilerTest {
                 output = StringBuilder(),
                 errors = errors,
                 logger = ConsoleCompilationLogger(errors)
-            ).run(listOf("compile", source.toString(), "-o", executable.toString()))
+            ).run(listOf("compile", "-v2", source.toString(), "-o", executable.toString()))
             assertTrue(result != 0, "invalid C-plus unexpectedly compiled")
             assertTrue(source.toString() in errors.toString(), errors.toString())
             assertTrue(":5:" in errors.toString(), errors.toString())
