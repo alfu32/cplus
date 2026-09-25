@@ -71,7 +71,13 @@ internal class ComptimeCompiler(
                 )
             )
         }
-        return ComptimeCompilation(runtime, resolvedTests, result.compilerOptions, importGraph.edges())
+        return ComptimeCompilation(
+            runtime,
+            resolvedTests,
+            result.compilerOptions,
+            importGraph.edges(),
+            importGraph.dependencyOrder(listOf(sourceIdFor(root)))
+        )
     }
 
     private fun compileModule(source: SourceFile, stack: ArrayDeque<Path>): ComptimeModuleResult {
@@ -1082,7 +1088,8 @@ internal data class ComptimeCompilation(
     val runtime: MappedText,
     val tests: List<ComptimeTestBlock>,
     val compilerOptions: List<String>,
-    val imports: List<SourceImportEdge>
+    val imports: List<SourceImportEdge>,
+    val sourceOrder: List<SourceId>
 )
 
 internal data class ComptimeTestBlock(

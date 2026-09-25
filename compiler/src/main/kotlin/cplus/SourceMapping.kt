@@ -198,7 +198,11 @@ data class TranscodedSource(
     val sourceFile: SourceFile,
     val sourceMap: SourceMap,
     val allocationAnalysis: AllocationAnalysisResult = AllocationAnalysisResult(),
-    val compilerOptions: List<String> = emptyList()
+    val compilerOptions: List<String> = emptyList(),
+    /** Resolved C-plus imports in dependency-first emission order, including the root source. */
+    val sourceOrder: List<SourceId> = emptyList(),
+    /** Canonical edges retain the source location that requested each import. */
+    val sourceImports: List<SourceImportEdge> = emptyList()
 )
 
 /** Emits C-plus text and inserts compiler-visible source locations at mapped line boundaries. */

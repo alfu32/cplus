@@ -6,6 +6,7 @@ import cplus.SourceManager
 import cplus.CPlusAstAdapter
 import cplus.CPlusSemanticAnalyzer
 import cplus.CPlusSymbolKind
+import cplus.CPlusThrowsConvention
 import cplus.CPlusDeferLoweringPass
 import cplus.CPlusComptimeIndexer
 import cplus.CPlusMethodCallLoweringPass
@@ -48,6 +49,39 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(methods.all { snapshot.text.substring(it.span.startOffset, it.span.endOffset).contains("pub") })
         assertTrue(result.root.descendants().any { it.kind == "call_expression" })
         assertTrue(result.diagnostics.isEmpty())
+    }
+
+    @Test
+    fun normalizesCommonCDeclarationAndStatementKinds() {
+        val text = """
+            #include <stddef.h>
+            typedef struct record_t { int field; } record_t;
+            union payload { int number; char byte; };
+            enum state { STATE_OFF, STATE_ON };
+            int global_value;
+            int prototype(int value);
+            int main(void) { while (global_value) { global_value--; } return 0; }
+        """.trimIndent()
+        val snapshot = sources.open(SourceId.named("normalized-c.c"), text)
+        val parsed = backend.parse(snapshot)
+        val ast = CPlusAstAdapter().adapt(parsed)
+
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val kinds = ast.root.descendantsAndSelf().map { it.kind }.toList()
+        val editorJson = CPlusParseJson.encode(parsed)
+        assertTrue(editorJson.contains("\"kind\":\"type_alias\""), editorJson)
+        assertTrue(editorJson.contains("\"kind\":\"union_declaration\""), editorJson)
+        assertTrue(editorJson.contains("\"kind\":\"control_flow\""), editorJson)
+        assertTrue(cplus.CPlusAstKind.TYPE_ALIAS in kinds)
+        assertTrue(cplus.CPlusAstKind.STRUCT_DECLARATION in kinds)
+        assertTrue(cplus.CPlusAstKind.UNION_DECLARATION in kinds)
+        assertTrue(cplus.CPlusAstKind.ENUM_DECLARATION in kinds)
+        assertTrue(cplus.CPlusAstKind.FIELD_DECLARATION in kinds)
+        assertTrue(cplus.CPlusAstKind.VARIABLE_DECLARATION in kinds)
+        assertTrue(cplus.CPlusAstKind.FUNCTION_DECLARATION in kinds)
+        assertTrue(cplus.CPlusAstKind.PREPROCESSOR in kinds)
+        assertTrue(cplus.CPlusAstKind.CONTROL_FLOW in kinds)
+        assertTrue(cplus.CPlusAstKind.LITERAL in kinds)
     }
 
     @Test
@@ -212,8 +246,16 @@ class TreeSitterCPlusParserBackendTest {
         assertEquals(2, astNodes.count { it.kind == cplus.CPlusAstKind.THROWS_ANNOTATION })
 
         val index = CPlusSemanticAnalyzer().analyze(ast)
-        assertEquals("error", index.symbols.single { it.name == "load" }.throwsParameter)
-        assertEquals("", index.symbols.single { it.name == "open" }.throwsParameter)
+        val load = index.symbols.single { it.name == "load" }
+        assertEquals("error", load.throwsParameter)
+        assertEquals(CPlusThrowsConvention.ERROR_OUT_PARAMETER, load.throwsMetadata?.convention)
+        assertEquals("error", load.throwsMetadata?.errorParameterName)
+        assertEquals("error", load.parameters.last().name)
+        val open = index.symbols.single { it.name == "open" }
+        assertEquals("", open.throwsParameter)
+        assertEquals(CPlusThrowsConvention.ERROR_RETURN, open.throwsMetadata?.convention)
+        assertEquals(null, open.throwsMetadata?.errorParameterName)
+        assertEquals(null, index.symbols.single { it.name == "run" }.throwsMetadata)
         assertEquals(listOf(listOf("ERROR_IO", "ERROR_INVALID_ARGUMENT"), null), index.catchBindings.map { it.codes })
         assertTrue(index.catchBindings.all { it.typeName == "error_t" && it.parameterName == "error" })
     }
@@ -355,6 +397,148 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(result.unsupportedNodes.any { it.syntaxKind == "cplus_comptime_declaration" }, result.unsupportedNodes.toString())
         assertTrue(result.unsupportedNodes.any { it.syntaxKind == "cplus_test_declaration" }, result.unsupportedNodes.toString())
         assertTrue(result.unsupportedNodes.all { it.span.file == source.id.value })
+    }
+
+    @Test
+    fun prototypeExtractsThrowsConventionsAndEmitsAnnotatedFunctionsAsC() {
+        val text = """
+            typedef int error_t;
+            @throws() pub error_t status(void);
+            @throws() pub error_t status(void) { return 0; }
+            typedef struct counter_t {
+                @throws(error) pub int load(borrowed mut *self, borrowed mut error_t *error) {
+                    *error = 0;
+                    return 9;
+                }
+            } counter_t;
+            int main(void) {
+                counter_t counter = {0};
+                error_t error = -1;
+                return status() != 0 || counter.load(&error) != 9 || error != 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("throws-prototype.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        assertFalse("@throws" in result.cSource!!.text, result.cSource.text)
+        assertEquals(cplus.CPlusThrowsConvention.ERROR_RETURN, result.throwsFunctions["status"]?.convention)
+        assertEquals(cplus.CPlusThrowsConvention.ERROR_OUT_PARAMETER, result.throwsFunctions["counter__load"]?.convention)
+        assertEquals("error", result.throwsFunctions["counter__load"]?.errorParameterName)
+        compileAndRunC(result.cSource.text)
+    }
+
+    @Test
+    fun astThrowsPassRejectsInvalidReturnAndErrorOutSignatures() {
+        val text = """
+            typedef int error_t;
+            @throws() pub int invalid_return(void);
+            @throws(error) pub int invalid_out(int value, borrowed mut int *error);
+        """.trimIndent()
+        val source = sources.open(SourceId.named("bad-throws.cp"), text)
+        val ast = CPlusAstAdapter().adapt(backend.parse(source))
+
+        val result = cplus.CPlusThrowsLoweringPass().lower(ast, MappedText.identity(source.sourceFile))
+
+        assertEquals(
+            setOf("CPLUS_THROWS_RETURN_TYPE", "CPLUS_THROWS_ERROR_PARAMETER"),
+            result.diagnostics.map { it.code }.toSet()
+        )
+        assertEquals(text, result.source.text)
+    }
+
+    @Test
+    fun prototypeLowersCheckedCallsAndNestedTryCatchWithRuntimeErrorPropagation() {
+        val text = """
+            typedef int error_t;
+            enum { ERROR_NONE = 0, ERROR_BAD = 1, ERROR_IO = 2 };
+            @throws() pub error_t check(error_t code) { return code; }
+            @throws(error) pub int make(int value, borrowed mut error_t *error) {
+                *error = value < 0 ? ERROR_IO : ERROR_NONE;
+                return value;
+            }
+            typedef struct meter_t {
+                @throws(error) pub int read(borrowed mut *self, borrowed mut error_t *error) {
+                    *error = ERROR_IO;
+                    return 11;
+                }
+            } meter_t;
+            int main(void) {
+                int value = 0;
+                @try {
+                    value = make(7);
+                    check(ERROR_BAD);
+                    value = 99;
+                }
+                @catch (ERROR_BAD, error_t error) { value = error; }
+                @catch (error_t error) { return 3; }
+                if (value != ERROR_BAD) return 4;
+
+                @try {
+                    @try { check(ERROR_IO); }
+                    @catch (ERROR_BAD, error_t nested) { return 5; }
+                    value = make(9);
+                }
+                @catch (ERROR_IO, error_t outer) { value = outer; }
+                @catch (error_t error) { return 6; }
+                if (value != ERROR_IO) return 7;
+
+                meter_t meter = {0};
+                @try { value = meter.read(); }
+                @catch (ERROR_IO, error_t method_error) { value = method_error; }
+                @catch (error_t error) { return 8; }
+                return value == ERROR_IO ? 0 : 9;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("try-catch-prototype.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        assertFalse("@try" in result.cSource!!.text, result.cSource.text)
+        assertFalse("@catch" in result.cSource.text, result.cSource.text)
+        assertTrue(result.cSource.text.contains("goto cplus_catch_"), result.cSource.text)
+        compileAndRunC(result.cSource.text)
+    }
+
+    @Test
+    fun astTryLoweringRejectsEmbeddedCheckedCallExpressionsWithOriginalSpan() {
+        val text = """
+            typedef int error_t;
+            @throws() pub error_t checked(void) { return 0; }
+            int main(void) {
+                @try { if (checked()) return 1; }
+                @catch (error_t error) { return 0; }
+                return 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("unsupported-checked-expression.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_TRY_CALL_CONTEXT", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertTrue(text.substring(diagnostic.span.startOffset, diagnostic.span.endOffset).contains("checked()"))
+    }
+
+    private fun compileAndRunC(code: String) {
+        val cc = runCatching { ProcessBuilder("cc", "--version").start().waitFor() == 0 }.getOrDefault(false)
+        if (!cc) return
+        val temporaryDirectory = Files.createTempDirectory("cplus-tree-sitter-throws")
+        try {
+            val executableName = "throws-prototype" + if (System.getProperty("os.name").startsWith("Windows", true)) ".exe" else ""
+            val executable = temporaryDirectory.resolve(executableName)
+            val compile = ProcessBuilder("cc", "-std=c11", "-x", "c", "-", "-o", executable.toString()).start()
+            compile.outputStream.bufferedWriter().use { it.write(code) }
+            val errors = compile.errorStream.bufferedReader().use { it.readText() }
+            assertEquals(0, compile.waitFor(), errors + "\n" + code)
+            val run = ProcessBuilder(executable.toString()).start()
+            assertEquals(0, run.waitFor(), run.errorStream.bufferedReader().use { it.readText() })
+        } finally {
+            Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
     }
 
     @Test

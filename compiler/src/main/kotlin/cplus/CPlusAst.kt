@@ -4,7 +4,11 @@ package cplus
 enum class CPlusAstKind {
     TRANSLATION_UNIT,
     STRUCT_DECLARATION,
+    UNION_DECLARATION,
+    ENUM_DECLARATION,
+    TYPE_ALIAS,
     FIELD_DECLARATION,
+    VARIABLE_DECLARATION,
     METHOD_DECLARATION,
     FUNCTION_DECLARATION,
     COMPTIME_DECLARATION,
@@ -16,8 +20,13 @@ enum class CPlusAstKind {
     PARAMETER,
     BLOCK,
     DEFER,
+    CONTROL_FLOW,
+    PREPROCESSOR,
     CALL_EXPRESSION,
     FIELD_ACCESS,
+    TYPE,
+    IDENTIFIER,
+    LITERAL,
     EXPRESSION,
     STATEMENT,
     ERROR,
@@ -51,26 +60,42 @@ class CPlusAstAdapter {
         structurallyComplete = parsed.coverage == ParseCoverage.STRUCTURAL && parsed.diagnostics.isEmpty()
     )
 
-    private fun CPlusSyntaxNode.toAstNode(): CPlusAstNode = CPlusAstNode(
-        kind = categoryFor(kind, isError, isMissing),
-        syntaxKind = kind,
-        span = span,
-        fieldName = fieldName,
-        children = children.map { it.toAstNode() },
-        named = named,
-        opaque = opaque,
-        recovered = isError || isMissing
-    )
+    private fun CPlusSyntaxNode.toAstNode(): CPlusAstNode {
+        val adaptedChildren = children.map { it.toAstNode() }
+        return CPlusAstNode(
+            kind = categoryFor(kind, isError, isMissing, adaptedChildren),
+            syntaxKind = kind,
+            span = span,
+            fieldName = fieldName,
+            children = adaptedChildren,
+            named = named,
+            opaque = opaque,
+            recovered = isError || isMissing
+        )
+    }
 
-    private fun categoryFor(syntaxKind: String, isError: Boolean, isMissing: Boolean): CPlusAstKind {
+    private fun categoryFor(
+        syntaxKind: String,
+        isError: Boolean,
+        isMissing: Boolean,
+        children: List<CPlusAstNode>
+    ): CPlusAstKind {
         if (isError || isMissing) return CPlusAstKind.ERROR
         return when (syntaxKind) {
             "translation_unit" -> CPlusAstKind.TRANSLATION_UNIT
-            "struct_specifier", "union_specifier" -> CPlusAstKind.STRUCT_DECLARATION
+            "struct_specifier" -> CPlusAstKind.STRUCT_DECLARATION
+            "union_specifier" -> CPlusAstKind.UNION_DECLARATION
+            "enum_specifier" -> CPlusAstKind.ENUM_DECLARATION
+            "type_definition" -> CPlusAstKind.TYPE_ALIAS
             "field_declaration" -> CPlusAstKind.FIELD_DECLARATION
             "cplus_method_definition" -> CPlusAstKind.METHOD_DECLARATION
             "function_definition" -> CPlusAstKind.FUNCTION_DECLARATION
             "cplus_function_declaration" -> CPlusAstKind.FUNCTION_DECLARATION
+            "declaration" -> if (children.any { it.containsSyntax("function_declarator") }) {
+                CPlusAstKind.FUNCTION_DECLARATION
+            } else {
+                CPlusAstKind.VARIABLE_DECLARATION
+            }
             "cplus_comptime_declaration", "cplus_comptime_block" -> CPlusAstKind.COMPTIME_DECLARATION
             "cplus_at_import", "cplus_comptime_import" -> CPlusAstKind.IMPORT
             "cplus_test_declaration" -> CPlusAstKind.TEST
@@ -82,15 +107,26 @@ class CPlusAstAdapter {
             "cplus_defer_statement" -> CPlusAstKind.DEFER
             "call_expression" -> CPlusAstKind.CALL_EXPRESSION
             "field_expression" -> CPlusAstKind.FIELD_ACCESS
-            "expression_statement", "return_statement", "if_statement", "for_statement",
-            "while_statement", "do_statement", "switch_statement", "break_statement",
-            "continue_statement", "declaration" -> CPlusAstKind.STATEMENT
+            "if_statement", "for_statement", "while_statement", "do_statement", "switch_statement",
+            "case_statement", "labeled_statement", "break_statement", "continue_statement",
+            "goto_statement" -> CPlusAstKind.CONTROL_FLOW
+            "preproc_include", "preproc_def", "preproc_function_def", "preproc_call",
+            "preproc_if", "preproc_ifdef", "preproc_else", "preproc_elif", "preproc_elifdef",
+            "preproc_elifndef", "preproc_endif" -> CPlusAstKind.PREPROCESSOR
+            "expression_statement", "return_statement", "empty_statement" -> CPlusAstKind.STATEMENT
             "binary_expression", "assignment_expression", "conditional_expression",
-            "unary_expression", "update_expression", "cast_expression", "identifier",
-            "field_identifier", "number_literal", "string_literal", "char_literal" -> CPlusAstKind.EXPRESSION
+            "unary_expression", "update_expression", "cast_expression", "comma_expression",
+            "parenthesized_expression", "sizeof_expression", "alignof_expression" -> CPlusAstKind.EXPRESSION
+            "identifier", "field_identifier", "type_identifier" -> CPlusAstKind.IDENTIFIER
+            "primitive_type", "sized_type_specifier", "type_qualifier", "storage_class_specifier",
+            "type_qualifier_list", "type_descriptor" -> CPlusAstKind.TYPE
+            "number_literal", "string_literal", "char_literal", "true", "false", "null" -> CPlusAstKind.LITERAL
             else -> CPlusAstKind.OTHER
         }
     }
+
+    private fun CPlusAstNode.containsSyntax(expected: String): Boolean =
+        syntaxKind == expected || children.any { it.containsSyntax(expected) }
 }
 
 /** Deterministic, source-spanned tree text for focused parser/adapter golden tests. */

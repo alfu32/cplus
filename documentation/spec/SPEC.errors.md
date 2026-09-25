@@ -75,3 +75,7 @@ Nested try bodies are handled inside-out. An unmatched inner status is assigned 
 ## Examples and tests
 
 The executable example is in [`../examples/error_handling.cp`](../examples/error_handling.cp). Compiler/runtime regressions live in [`../../cli/src/test/kotlin/cplus/TranspilerTest.kt`](../../cli/src/test/kotlin/cplus/TranspilerTest.kt). Run `./gradlew test` to validate generated C and diagnostics.
+
+## Tree-sitter migration status
+
+The opt-in `TreeSitterCPlusPrototypeTranspiler` now has AST-backed extraction and signature validation for both `@throws` conventions and AST-based lowering for standalone checked calls, error-out assignment/initializer values, ordered catches, and nested unmatched-error propagation. It resolves annotated methods against the semantic index before receiver lowering. Its tests compile and execute generated C with the host compiler. This is not yet the CLI's production frontend; the legacy compiler remains authoritative while output parity, broader expression cases, source-map comparisons, and platform gates are completed.

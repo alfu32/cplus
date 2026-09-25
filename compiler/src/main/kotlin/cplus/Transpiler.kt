@@ -72,7 +72,7 @@ class CPlusTranspiler {
                 CPlusPreamble.text,
                 allocationAnalysis,
                 comptime.compilerOptions
-            )
+            ).copy(sourceOrder = comptime.sourceOrder, sourceImports = comptime.imports)
         }
         return TranscodedTestSource(emitted, input.fixtures.map { it.name }, input.fixtures)
     }

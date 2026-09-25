@@ -2,6 +2,13 @@ package cplus
 
 enum class CPlusSymbolKind { STRUCT, TYPE_ALIAS, FIELD, INSTANCE_METHOD, STATIC_METHOD, FUNCTION }
 
+enum class CPlusThrowsConvention { ERROR_RETURN, ERROR_OUT_PARAMETER }
+
+data class CPlusThrowsMetadata(
+    val convention: CPlusThrowsConvention,
+    val errorParameterName: String?
+)
+
 data class CPlusSymbol(
     val name: String,
     val kind: CPlusSymbolKind,
@@ -11,7 +18,8 @@ data class CPlusSymbol(
     val annotations: Set<String>,
     val parameters: List<CPlusParameterSymbol>,
     val span: SourceSpan,
-    val throwsParameter: String? = null
+    val throwsParameter: String? = null,
+    val throwsMetadata: CPlusThrowsMetadata? = null
 )
 
 data class CPlusParameterSymbol(
@@ -128,6 +136,12 @@ class CPlusSemanticAnalyzer {
                                         span = parameter.span
                                     )
                                 }
+                                val throwsAnnotation = member.descendants()
+                                    .firstOrNull { it.syntaxKind == "cplus_throws_annotation" }
+                                val throwsParameterName = throwsAnnotation?.children
+                                    ?.firstOrNull { it.syntaxKind == "identifier" }
+                                    ?.text(ast.source.text)
+                                val throwsParameter = throwsAnnotation?.let { throwsParameterName.orEmpty() }
                                 val symbol = CPlusSymbol(
                                     name,
                                     if (isStatic) CPlusSymbolKind.STATIC_METHOD else CPlusSymbolKind.INSTANCE_METHOD,
@@ -137,9 +151,8 @@ class CPlusSemanticAnalyzer {
                                     annotations,
                                     parameters,
                                     member.span,
-                                    member.descendants().firstOrNull { it.syntaxKind == "cplus_throws_annotation" }?.let { annotation ->
-                                        annotation.children.firstOrNull { it.syntaxKind == "identifier" }?.text(ast.source.text).orEmpty()
-                                    }
+                                    throwsParameter,
+                                    throwsAnnotation?.toThrowsMetadata(throwsParameterName)
                                 )
                                 symbols += symbol
                                 methodsByType.getOrPut(typeName, ::mutableListOf) += symbol
@@ -151,13 +164,41 @@ class CPlusSemanticAnalyzer {
                 val functionDeclarator = node.descendants().firstOrNull { it.syntaxKind == "function_declarator" }
                 val name = functionDeclarator?.children?.firstOrNull { it.syntaxKind == "identifier" }
                     ?.text(ast.source.text)
+                val parameterNodes = functionDeclarator?.descendantsAndSelf()
+                    ?.firstOrNull { it.syntaxKind == "parameter_list" }
+                    ?.children.orEmpty()
+                    .filter { it.syntaxKind in setOf("parameter_declaration", "cplus_parameter_declaration") }
+                val parameters = parameterNodes.map { parameter ->
+                    val declarator = parameter.children.firstOrNull { it.fieldName == "declarator" }
+                    val parameterName = (declarator ?: parameter).descendantsAndSelf()
+                        .firstOrNull { it.syntaxKind == "identifier" }
+                        ?.text(ast.source.text).orEmpty()
+                    val parameterType = parameter.children.firstOrNull { it.fieldName == "type" }
+                        ?.descendantsAndSelf()?.firstOrNull {
+                            it.syntaxKind in setOf("type_identifier", "primitive_type")
+                        }?.text(ast.source.text)
+                    CPlusParameterSymbol(
+                        parameterName,
+                        parameterType,
+                        parameter.descendants()
+                            .filter { it.syntaxKind == "cplus_parameter_annotation" }
+                            .map { it.text(ast.source.text) }
+                            .toSet(),
+                        receiver = false,
+                        span = parameter.span
+                    )
+                }
+                val throwsAnnotation = node.descendants().firstOrNull { it.syntaxKind == "cplus_throws_annotation" }
+                val throwsParameterName = throwsAnnotation?.children
+                    ?.firstOrNull { it.syntaxKind == "identifier" }
+                    ?.text(ast.source.text)
+                val throwsParameter = throwsAnnotation?.let { throwsParameterName.orEmpty() }
                 if (name != null) symbols += CPlusSymbol(
                     name, CPlusSymbolKind.FUNCTION, null, null,
                     node.descendants().firstOrNull { it.syntaxKind == "cplus_access_modifier" }?.text(ast.source.text),
-                    emptySet(), emptyList(), node.span,
-                    node.descendants().firstOrNull { it.syntaxKind == "cplus_throws_annotation" }?.let { annotation ->
-                        annotation.children.firstOrNull { it.syntaxKind == "identifier" }?.text(ast.source.text).orEmpty()
-                    }
+                    emptySet(), parameters, node.span,
+                    throwsParameter,
+                    throwsAnnotation?.toThrowsMetadata(throwsParameterName)
                 )
             }
             node.children.forEach(::collectDeclarations)
@@ -257,6 +298,13 @@ class CPlusSemanticAnalyzer {
     }
 
     private fun CPlusAstNode.text(source: String): String = source.substring(span.startOffset, span.endOffset)
+
+    private fun CPlusAstNode.toThrowsMetadata(parameterName: String?): CPlusThrowsMetadata =
+        if (parameterName == null) {
+            CPlusThrowsMetadata(CPlusThrowsConvention.ERROR_RETURN, null)
+        } else {
+            CPlusThrowsMetadata(CPlusThrowsConvention.ERROR_OUT_PARAMETER, parameterName)
+        }
 
     private fun registerVariable(
         node: CPlusAstNode,

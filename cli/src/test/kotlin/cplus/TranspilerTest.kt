@@ -1944,6 +1944,12 @@ class TranspilerTest {
                 },
                 result.sourceMap.entries.toString()
             )
+            assertEquals(
+                listOf(SourceId.fromPath(imported), SourceId.fromPath(source)),
+                result.sourceOrder
+            )
+            assertEquals(SourceId.fromPath(source), result.sourceImports.single().importer)
+            assertEquals(SourceId.fromPath(imported), result.sourceImports.single().imported)
         } finally {
             Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
