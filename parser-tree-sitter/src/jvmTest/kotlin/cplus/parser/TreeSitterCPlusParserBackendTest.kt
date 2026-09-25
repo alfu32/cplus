@@ -191,6 +191,9 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(result.diagnostics.any { it.message.contains("'outer_mismatch' is declared warm") })
         assertTrue(result.diagnostics.any { it.message.contains("argument for 'consume.value' is scratch but the parameter expects warm") })
         assertEquals(snapshot.text.lastIndexOf("alias"), result.diagnostics.single { it.message.contains("argument for 'consume.value'") }.sourceSpan.startOffset)
+        val parameter = result.symbols.single { it.kind == AllocationSymbolKind.PARAMETER && it.name == "value" }
+        assertEquals(AllocationIntent.WARM, parameter.intent)
+        assertEquals(AllocationOwnership.BORROWED, parameter.ownership)
         assertFalse(result.diagnostics.any { it.message.contains("'local'") })
         assertFalse(result.diagnostics.any { it.message.contains("'after_conditional'") })
         assertEquals(AllocationIntent.SCRATCH, result.symbols.single { it.name == "alias" && it.sourceSpan.startLine == 3 }.knownProvenance)
@@ -219,6 +222,30 @@ class TreeSitterCPlusParserBackendTest {
         assertEquals(AllocationIntent.WARM, returned.intent)
         assertEquals(AllocationOwnership.OWNED, returned.ownership)
         assertEquals(AllocationIntent.COLD, result.symbols.single { it.kind == AllocationSymbolKind.FUNCTION_RETURN && it.name == "make_cold" }.intent)
+    }
+
+    @Test
+    fun checksOwnedOutputPointerAllocationAndSkipsTheCallArgumentAsAnInput() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-output.cp"),
+            """
+                int fill(owned warm char** out) { *out = alloc_cold(8); return 0; }
+                int fill_matching(owned cold char** out) { *out = alloc_cold(8); return 0; }
+                int main(void) { char* value = 0; fill(&value); fill_matching(&value); return 0; }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.single().message.contains("'out' is declared warm but receives memory from alloc_cold()"))
+        assertFalse(result.diagnostics.single().message.contains("argument for"))
+        val outputs = result.symbols.filter { it.kind == AllocationSymbolKind.PARAMETER && it.name == "out" }
+        assertEquals(2, outputs.size)
+        assertEquals(setOf(AllocationIntent.WARM, AllocationIntent.COLD), outputs.map { it.intent }.toSet())
+        assertTrue(outputs.all { it.ownership == AllocationOwnership.OWNED })
+        assertTrue(outputs.all { it.knownProvenance == AllocationIntent.NONE })
     }
 
     @Test

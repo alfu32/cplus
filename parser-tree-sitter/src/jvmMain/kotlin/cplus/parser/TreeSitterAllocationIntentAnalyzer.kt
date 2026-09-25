@@ -33,6 +33,19 @@ class TreeSitterAllocationIntentAnalyzer {
                     ast.source.sourceFile.span(contract.nameSpan.startOffset, contract.nameSpan.endOffset)
                 )
             }
+            contract.parameters.forEach parameterLoop@{ parameter ->
+                val parameterSpan = parameter.nameSpan ?: return@parameterLoop
+                if (parameter.intent != AllocationIntent.NONE || parameter.ownership != AllocationOwnership.NONE) {
+                    symbols += AllocationSymbol(
+                        parameter.name,
+                        AllocationSymbolKind.PARAMETER,
+                        parameter.intent,
+                        parameter.ownership,
+                        parameter.intent.takeUnless { parameter.isOutputPointer } ?: AllocationIntent.NONE,
+                        ast.source.sourceFile.span(parameterSpan.startOffset, parameterSpan.endOffset)
+                    )
+                }
+            }
         }
 
         fun visitDeclaration(declaration: CPlusAstNode, scope: MutableMap<String, VariableState>) {
@@ -74,11 +87,34 @@ class TreeSitterAllocationIntentAnalyzer {
             }
         }
 
-        fun applySimpleAssignment(node: CPlusAstNode, scope: MutableMap<String, VariableState>) {
-            val targetNode = node.children.firstOrNull { it.fieldName == "left" }
-                ?.takeIf { it.syntaxKind == "identifier" }
+        fun applySimpleAssignment(
+            node: CPlusAstNode,
+            scope: MutableMap<String, VariableState>,
+            currentFunction: FunctionContract?
+        ) {
+            val leftNode = node.children.firstOrNull { it.fieldName == "left" }
             val valueNode = node.children.firstOrNull { it.fieldName == "right" }
-            if (targetNode == null || valueNode == null) return
+            if (leftNode == null || valueNode == null) return
+            val outputParameter = if (leftNode.syntaxKind == "pointer_expression" &&
+                leftNode.children.firstOrNull { it.fieldName == "operator" }?.let { text(source, it) } == "*"
+            ) {
+                leftNode.children.firstOrNull { it.fieldName == "argument" }
+                    ?.takeIf { it.syntaxKind == "identifier" }
+                    ?.let { identifier -> currentFunction?.parameters?.firstOrNull { it.name == text(source, identifier) && it.isOutputPointer } }
+                    ?.let { parameter -> parameter to leftNode }
+            } else null
+            if (outputParameter != null) {
+                val (parameter, target) = outputParameter
+                val provenance = infer(valueNode, scope, source)
+                if (parameter.intent != AllocationIntent.NONE && provenance != null && parameter.intent != provenance.intent) {
+                    diagnostics += CPlusDiagnostic(
+                        "allocation intent mismatch: '${parameter.name}' is declared ${parameter.intent.label()} but receives memory from ${provenance.source}",
+                        ast.source.sourceFile.span(target.span.startOffset, target.span.endOffset)
+                    )
+                }
+                return
+            }
+            val targetNode = leftNode.takeIf { it.syntaxKind == "identifier" } ?: return
             val name = text(source, targetNode)
             val current = scope[name] ?: return
             val provenance = infer(valueNode, scope, source)
@@ -97,6 +133,7 @@ class TreeSitterAllocationIntentAnalyzer {
             val argumentList = node.children.firstOrNull { it.fieldName == "arguments" } ?: return
             val arguments = argumentList.children.filter { it.named }
             signature.parameters.zip(arguments).forEach { (parameter, argument) ->
+                if (parameter.isOutputPointer) return@forEach
                 if (parameter.intent == AllocationIntent.NONE) return@forEach
                 val actual = infer(argument, scope, source) ?: return@forEach
                 if (actual.intent == parameter.intent) return@forEach
@@ -126,7 +163,7 @@ class TreeSitterAllocationIntentAnalyzer {
                 "expression_statement" -> {
                     val expressions = node.children.filter { it.named }
                     if (expressions.size == 1 && expressions.single().syntaxKind == "assignment_expression") {
-                        applySimpleAssignment(expressions.single(), scope)
+                        applySimpleAssignment(expressions.single(), scope, currentFunction)
                     }
                     node.children.forEach { visit(it, scope, currentFunction) }
                 }
@@ -154,6 +191,18 @@ class TreeSitterAllocationIntentAnalyzer {
                         ?.firstOrNull { it.syntaxKind == "identifier" }
                         ?.let { text(source, it) }
                     val function = name?.let(functionContracts::get)
+                    function?.parameters.orEmpty().forEach { parameter ->
+                        if (parameter.name.isNotEmpty()) {
+                            val initialProvenance = parameter.intent.takeIf {
+                                it != AllocationIntent.NONE && !parameter.isOutputPointer
+                            }?.let { Provenance(it, "${it.label()} parameter '${parameter.name}'") }
+                            functionScope[parameter.name] = VariableState(
+                                parameter.intent,
+                                parameter.ownership,
+                                initialProvenance
+                            )
+                        }
+                    }
                     node.children.forEach { child ->
                         if (child.syntaxKind == "compound_statement") visit(child, functionScope, function)
                     }
@@ -218,14 +267,22 @@ class TreeSitterAllocationIntentAnalyzer {
                     .filter { it.syntaxKind in setOf("parameter_declaration", "cplus_parameter_declaration") }
                     .map { parameter ->
                         val parameterDeclarator = parameter.children.firstOrNull { it.fieldName == "declarator" }
-                        val parameterName = parameterDeclarator?.descendantsAndSelf()
+                        val parameterNameNode = parameterDeclarator?.descendantsAndSelf()
                             ?.firstOrNull { it.syntaxKind == "identifier" }
-                            ?.let { source.substring(it.span.startOffset, it.span.endOffset) }.orEmpty()
+                        val parameterName = parameterNameNode?.let { source.substring(it.span.startOffset, it.span.endOffset) }.orEmpty()
                         val intent = parameter.descendantsAndSelf()
                             .filter { it.syntaxKind == "cplus_parameter_annotation" }
                             .mapNotNull { allocationIntent(source.substring(it.span.startOffset, it.span.endOffset)) }
                             .firstOrNull { it != AllocationIntent.NONE } ?: AllocationIntent.NONE
-                        ParameterContract(parameterName, intent)
+                        val ownership = parameter.descendantsAndSelf()
+                            .filter { it.syntaxKind == "cplus_parameter_annotation" }
+                            .map { source.substring(it.span.startOffset, it.span.endOffset) }
+                            .map(::allocationOwnership)
+                            .firstOrNull { it != AllocationOwnership.NONE } ?: AllocationOwnership.NONE
+                        val pointerDepth = parameterDeclarator?.let { declarator ->
+                            source.substring(declarator.span.startOffset, declarator.span.endOffset).count { it == '*' }
+                        } ?: 0
+                        ParameterContract(parameterName, parameterNameNode?.span, intent, ownership, pointerDepth)
                     }
                 val resultAnnotations = declaration.children
                     .filter { it.syntaxKind == "cplus_result_annotation" }
@@ -247,7 +304,13 @@ class TreeSitterAllocationIntentAnalyzer {
                         name,
                         selected.nameSpan,
                         selected.parameters.zip(candidate.parameters).map { (left, right) ->
-                            ParameterContract(left.name.ifEmpty { right.name }, left.intent.takeUnless { it == AllocationIntent.NONE } ?: right.intent)
+                            ParameterContract(
+                                left.name.ifEmpty { right.name },
+                                left.nameSpan ?: right.nameSpan,
+                                left.intent.takeUnless { it == AllocationIntent.NONE } ?: right.intent,
+                                left.ownership.takeUnless { it == AllocationOwnership.NONE } ?: right.ownership,
+                                maxOf(left.pointerDepth, right.pointerDepth)
+                            )
                         },
                         selected.returnIntent.takeUnless { it == AllocationIntent.NONE } ?: candidate.returnIntent,
                         selected.returnOwnership.takeUnless { it == AllocationOwnership.NONE } ?: candidate.returnOwnership
@@ -294,7 +357,16 @@ class TreeSitterAllocationIntentAnalyzer {
         val returnOwnership: AllocationOwnership
     )
 
-    private data class ParameterContract(val name: String, val intent: AllocationIntent)
+    private data class ParameterContract(
+        val name: String,
+        val nameSpan: cplus.SourceSpan?,
+        val intent: AllocationIntent,
+        val ownership: AllocationOwnership,
+        val pointerDepth: Int
+    ) {
+        val isOutputPointer: Boolean
+            get() = ownership == AllocationOwnership.OWNED && pointerDepth >= 2
+    }
 
     private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =
         sequenceOf(this) + children.asSequence().flatMap { it.descendantsAndSelf() }
