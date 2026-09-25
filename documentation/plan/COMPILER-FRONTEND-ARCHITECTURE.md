@@ -36,7 +36,7 @@ Initial implementation adds `SourceId`, `SourceSnapshot`, `SourceCoordinateMap`,
 
 Expose a narrow compiler API: parse a `SourceSnapshot` under an explicit dialect/target/options value and return a backend-neutral parse result, diagnostics, and backend identity. Backend implementations own lexing where their parser combines lexing and parsing. Selection is explicit (`legacy` or `tree-sitter`) through an internal compiler option, with the current backend as the default until promotion. Do not expose Tree-sitter `Node` or numeric symbol IDs to compiler passes. Keep CLI/parser selection experimental until output behavior is stable.
 
-Migration implementation: `CPlusParserShadowRunner` can parse with an authoritative backend and an observational backend in one call. Its report records coverage, diagnostic, and normalized-node fingerprint differences while preserving the authoritative result as-is. This is measurement groundwork only: the legacy adapter currently models ordinary C/C-plus source as opaque regions, so a mismatch is expected and no output or diagnostic policy should switch based on this prototype.
+Migration implementation: `CPlusParserShadowRunner` parses with an authoritative backend and an observational backend in one call. It records coverage, diagnostics, and normalized-node fingerprint differences, plus exact-span parity for the comptime/test subset both implementations recognize, while preserving the authoritative result as-is. Ordinary C/C-plus remains opaque in the legacy adapter, so whole-tree differences are expected and no output or diagnostic policy switches based on this prototype. Broader parity still requires comparison over representative repository sources.
 
 ### 3. Tree-sitter C-plus grammar module
 

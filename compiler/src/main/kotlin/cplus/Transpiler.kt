@@ -21,6 +21,36 @@ class CPlusTranspiler {
         targetOs: String = CPlusTarget.hostOs()
     ): TranscodedTestSource = transpileInternal(source, sourceName, logger, testMode = true, importPaths, targetOs)
 
+    /**
+     * Emits the established runnable test harness for fixtures extracted by another frontend.
+     * This bridge deliberately reuses only harness/assertion generation; fixture discovery is
+     * supplied by the caller and does not invoke the legacy comptime test scanner.
+     */
+    fun transpileExtractedTests(
+        runtime: MappedText,
+        fixtures: List<CPlusExtractedTestFixture>,
+        logger: CompilationLogger = SilentCompilationLogger
+    ): TranscodedTestSource {
+        val sourceFile = runtime.firstOrigin()?.file
+            ?: fixtures.firstNotNullOfOrNull { it.body.firstOrigin()?.file }
+            ?: SourceFile(runtime.text)
+        val testBlocks = fixtures.map { fixture ->
+            ComptimeTestBlock(fixture.name, fixture.body, sourceFile, fixture.span.startOffset)
+        }
+        val testProgram = logger.pass("emit-extracted-test-harness") { testProgram(runtime, testBlocks) }
+        val annotated = logger.pass("collect-error-annotations") { ErrorAnnotationCollector().collect(testProgram.source) }
+        val deferred = logger.pass("lower-defer-statements") { DeferLowerer().lower(annotated.source) }
+        val typeNames = logger.pass("collect-struct-types") { StructTypeCollector().collect(deferred.text) }
+        val calls = logger.pass("lower-method-calls") { MethodCallLowerer(typeNames).lower(deferred) }
+        val structs = logger.pass("lower-struct-methods") { StructLowerer().lower(calls) }
+        val errors = logger.pass("lower-try-catch") { TryCatchLowerer(annotated.functions).lower(structs) }
+        val allocationAnalysis = logger.pass("allocation-intent-analysis") { AllocationIntentAnalyzer().analyze(errors) }
+        val emitted = logger.pass("emit-mapped-c") {
+            MappedEmitter(sourceFile).emit(errors, CPlusPreamble.text, allocationAnalysis)
+        }
+        return TranscodedTestSource(emitted, testProgram.fixtures.map { it.name }, testProgram.fixtures)
+    }
+
     private fun transpileInternal(
         source: String,
         sourceName: String?,

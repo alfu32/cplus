@@ -1,5 +1,6 @@
 /build/
 /.gradle/
+/.kotlin/
 *.class
 *.jar
 !gradle/wrapper/gradle-wrapper.jar

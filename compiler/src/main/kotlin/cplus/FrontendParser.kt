@@ -89,6 +89,10 @@ data class CPlusParserShadowReport(
     val shadow: CPlusParseResult,
     val coverageMatches: Boolean,
     val diagnosticsMatch: Boolean,
+    /** Equality for the deliberately shared comptime/test syntax subset only. */
+    val recognizedConstructsMatch: Boolean,
+    val authoritativeRecognizedConstructs: List<String>,
+    val shadowRecognizedConstructs: List<String>,
     val authoritativeOnlyNodeCount: Int,
     val shadowOnlyNodeCount: Int,
     val authoritativeOnlyNodeSamples: List<String>,
@@ -121,11 +125,16 @@ class CPlusParserShadowRunner(
         val diagnosticSignature: (ParserDiagnostic) -> List<Any?> = { diagnostic ->
             listOf(diagnostic.code, diagnostic.message, diagnostic.severity, diagnostic.span)
         }
+        val authoritativeRecognized = recognizedConstructs(authoritative)
+        val shadowRecognized = recognizedConstructs(shadow)
         return CPlusParserShadowReport(
             authoritative = authoritative,
             shadow = shadow,
             coverageMatches = authoritative.coverage == shadow.coverage,
             diagnosticsMatch = authoritative.diagnostics.map(diagnosticSignature) == shadow.diagnostics.map(diagnosticSignature),
+            recognizedConstructsMatch = authoritativeRecognized == shadowRecognized,
+            authoritativeRecognizedConstructs = authoritativeRecognized,
+            shadowRecognizedConstructs = shadowRecognized,
             authoritativeOnlyNodeCount = primaryOnly.size,
             shadowOnlyNodeCount = shadowOnly.size,
             authoritativeOnlyNodeSamples = primaryOnly.take(sampleLimit),
@@ -139,6 +148,41 @@ class CPlusParserShadowRunner(
             node.children.forEach(::visit)
         }
         visit(root)
+    }
+
+    private fun recognizedConstructs(result: CPlusParseResult): List<String> = result.root.children.mapNotNull { node ->
+        if (result.backend == ParserBackendId.LEGACY) {
+            node.kind.takeIf { it in LEGACY_RECOGNIZED }?.let { "$it@${node.span.startOffset}:${node.span.endOffset}" }
+        } else {
+            val kind = when (node.kind) {
+                "cplus_test_declaration" -> "test_declaration"
+                "cplus_at_import" -> "c_import_expression"
+                "cplus_comptime_block" -> "comptime_block"
+                "cplus_comptime_declaration" -> when (node.children.firstOrNull()?.kind) {
+                    "cplus_comptime_value" -> "comptime_value_declaration"
+                    "cplus_comptime_flags" -> "comptime_flags"
+                    "cplus_comptime_import" -> "comptime_import"
+                    "cplus_comptime_invocation" -> "comptime_invocation"
+                    "cplus_comptime_function_definition" -> when {
+                        result.source.text.substring(node.span.startOffset, node.span.endOffset)
+                            .startsWith("comptime type") -> "comptime_type_declaration"
+                        else -> "comptime_function_declaration"
+                    }
+                    else -> null
+                }
+                else -> null
+            }
+            kind?.takeIf { it in LEGACY_RECOGNIZED }?.let { "$it@${node.span.startOffset}:${node.span.endOffset}" }
+        }
+    }.sorted()
+
+    private companion object {
+        val LEGACY_RECOGNIZED = setOf(
+            "comptime_import", "c_import_expression", "comptime_flags", "comptime_block",
+            "test_declaration", "comptime_value_declaration", "comptime_function_declaration",
+            "comptime_type_declaration", "comptime_struct_declaration", "comptime_invocation",
+            "comptime_reference"
+        )
     }
 }
 

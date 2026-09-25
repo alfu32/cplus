@@ -9,6 +9,7 @@ import cplus.CPlusSemanticAnalyzer
 import cplus.CPlusStructMethodLoweringPass
 import cplus.CPlusThrowingFunction
 import cplus.CPlusThrowsLoweringPass
+import cplus.CPlusTestExtractionPass
 import cplus.CPlusTryCatchLoweringPass
 import cplus.CPlusSyntaxNode
 import cplus.MappedText
@@ -24,7 +25,8 @@ data class TreeSitterPrototypeResult(
     val parserDiagnostics: List<ParserDiagnostic>,
     val loweringDiagnostics: List<CPlusLoweringDiagnostic>,
     val unsupportedNodes: List<TreeSitterUnsupportedConstruct>,
-    val throwsFunctions: Map<String, CPlusThrowingFunction> = emptyMap()
+    val throwsFunctions: Map<String, CPlusThrowingFunction> = emptyMap(),
+    val testFixtures: List<cplus.CPlusExtractedTestFixture> = emptyList()
 ) {
     val successful: Boolean
         get() = cSource != null && parserDiagnostics.isEmpty() && loweringDiagnostics.isEmpty() && unsupportedNodes.isEmpty()
@@ -35,8 +37,8 @@ data class TreeSitterUnsupportedConstruct(val syntaxKind: String, val span: cplu
 /**
  * Experimental phase-7 vertical slice. The production CPlusTranspiler remains authoritative.
  * This pipeline lowers ordinary C plus struct methods, explicit receiver calls, simple defer, and
- * extracts/removes @throws declarations and lowers statement-oriented @try/@catch. Comptime,
- * tests, and C-plus imports still fail closed.
+ * extracts/removes @throws declarations and @test fixtures, and lowers statement-oriented
+ * @try/@catch. Comptime and C-plus imports still fail closed.
  */
 class TreeSitterCPlusPrototypeTranspiler(
     private val backend: CPlusParserBackend = TreeSitterCPlusParserBackend(),
@@ -55,10 +57,22 @@ class TreeSitterCPlusPrototypeTranspiler(
             return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mappedIdentity(source), it.span) }, emptyList(), emptyList())
         }
         var ast = CPlusAstAdapter().adapt(parsed)
-        val unsupported = unsupportedConstructs(parsed.root)
-        if (unsupported.isNotEmpty()) return TreeSitterPrototypeResult(null, emptyList(), emptyList(), unsupported)
-
         var mapped = MappedText.identity(source.sourceFile)
+        val extractedTests = CPlusTestExtractionPass().extract(ast, mapped)
+        if (extractedTests.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, emptyList(), extractedTests.diagnostics, emptyList())
+        }
+        mapped = extractedTests.source
+        snapshot = snapshotFor(mapped.text)
+        parsed = backend.parse(snapshot)
+        if (parsed.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
+        }
+        ast = CPlusAstAdapter().adapt(parsed)
+        val unsupported = unsupportedConstructs(parsed.root).map { it.copy(span = mapped.toOriginalSpan(it.span)) }
+        if (unsupported.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, emptyList(), emptyList(), unsupported, testFixtures = extractedTests.fixtures)
+        }
         val throws = CPlusThrowsLoweringPass().lower(ast, mapped)
         if (throws.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(null, emptyList(), throws.diagnostics, emptyList())
@@ -135,7 +149,9 @@ class TreeSitterCPlusPrototypeTranspiler(
         val output = MappedTextBuilder()
         output.appendGenerated(preamble, cplus.SourceOrigin(source.sourceFile, 0))
         output.append(mapped)
-        return TreeSitterPrototypeResult(output.build(), emptyList(), emptyList(), emptyList(), throws.functions)
+        return TreeSitterPrototypeResult(
+            output.build(), emptyList(), emptyList(), emptyList(), throws.functions, extractedTests.fixtures
+        )
     }
 
     private fun unsupportedConstructs(root: CPlusSyntaxNode): List<TreeSitterUnsupportedConstruct> {
@@ -143,7 +159,7 @@ class TreeSitterCPlusPrototypeTranspiler(
             "cplus_comptime_declaration", "cplus_comptime_block", "cplus_comptime_function_definition",
             "cplus_comptime_invocation", "cplus_comptime_value", "cplus_comptime_import", "cplus_comptime_flags",
             "cplus_comptime_expression", "cplus_code_fragment", "cplus_at_call_expression",
-            "cplus_test_declaration", "cplus_at_import"
+            "cplus_at_import"
         )
         val nodes = sequenceOf(root) + root.children.asSequence().flatMap { descendants(it) }
         return nodes.filter { it.kind in unsupportedKinds }

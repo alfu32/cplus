@@ -98,6 +98,31 @@ class TreeSitterCPlusParserBackendTest {
         assertFalse(report.coverageMatches)
         assertTrue(report.shadowOnlyNodeCount > 0)
         assertTrue(report.authoritativeOnlyNodeSamples.any { it.contains("legacy_text_region") })
+        assertTrue(
+            report.recognizedConstructsMatch,
+            "legacy=${report.authoritativeRecognizedConstructs}; tree-sitter=${report.shadowRecognizedConstructs}; diagnostics=${report.shadow.diagnostics}; root=${report.shadow.root}"
+        )
+    }
+
+    @Test
+    fun shadowDifferentialGateMatchesAllSharedTopLevelCPlusConstructs() {
+        val text = """
+            comptime int answer = 42;
+            comptime flags -lm;
+            @test "answer is materialized" { @assert(1); }
+        """.trimIndent()
+        val snapshot = sources.open(SourceId.named("shadow-shared-constructs.cp"), text)
+
+        val report = CPlusParserShadowRunner(LegacyCPlusParserBackend(), backend).parse(snapshot)
+
+        assertTrue(
+            report.recognizedConstructsMatch,
+            "legacy=${report.authoritativeRecognizedConstructs}; tree-sitter=${report.shadowRecognizedConstructs}; diagnostics=${report.shadow.diagnostics}; root=${report.shadow.root}"
+        )
+        assertEquals(
+            listOf("comptime_flags", "comptime_value_declaration", "test_declaration"),
+            report.authoritativeRecognizedConstructs.map { it.substringBefore('@') }.sorted()
+        )
     }
 
     @Test
@@ -384,7 +409,7 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
-    fun prototypeTranspilerFailsClosedOnUnimplementedComptimeAndTestNodes() {
+    fun prototypeTranspilerFailsClosedOnComptimeButExtractsTestFixtures() {
         val source = sources.open(
             SourceId.named("prototype-unsupported.cp"),
             "comptime int answer = 42; @test answer { return 0; }"
@@ -395,8 +420,48 @@ class TreeSitterCPlusParserBackendTest {
         assertFalse(result.successful)
         assertEquals(null, result.cSource)
         assertTrue(result.unsupportedNodes.any { it.syntaxKind == "cplus_comptime_declaration" }, result.unsupportedNodes.toString())
-        assertTrue(result.unsupportedNodes.any { it.syntaxKind == "cplus_test_declaration" }, result.unsupportedNodes.toString())
         assertTrue(result.unsupportedNodes.all { it.span.file == source.id.value })
+    }
+
+    @Test
+    fun prototypeExtractsNamedTestsWithoutEmittingThemIntoProgramC() {
+        val text = """
+            int main(void) { return 0; }
+            @test "string fixture" { int value = 42; @assert(value == 42); }
+            @test identifier_fixture { return; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("tests-extraction.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        assertEquals(listOf("string fixture", "identifier_fixture"), result.testFixtures.map { it.name })
+        assertTrue(result.cSource!!.text.contains("int main(void)"), result.cSource.text)
+        assertFalse(result.cSource.text.contains("string fixture"), result.cSource.text)
+        assertFalse(result.cSource.text.contains("identifier_fixture"), result.cSource.text)
+        val fixtureBody = result.testFixtures.first().body
+        assertTrue(fixtureBody.text.contains("value = 42"), fixtureBody.text)
+        assertEquals(text.indexOf("int value"), fixtureBody.originAt(fixtureBody.text.indexOf("int value"))?.offset)
+        assertTrue(result.testFixtures.all { it.span.file == source.id.value })
+
+        val testProgram = cplus.CPlusTranspiler().transpileExtractedTests(result.cSource!!, result.testFixtures)
+        assertEquals(listOf("string fixture", "identifier_fixture"), testProgram.testNames)
+        assertTrue(testProgram.source.code.contains("========== BEGIN TEST"), testProgram.source.code)
+        assertTrue(testProgram.source.code.contains("CPLUS_TEST_ASSERT_AT(1, 1, value == 42)"), testProgram.source.code)
+        compileAndRunC(testProgram.source.code)
+    }
+
+    @Test
+    fun prototypeDiagnosesBlankTestFixtureNamesAtTheirSourceLocation() {
+        val text = "@test \"\" { return; }"
+        val source = sources.open(SourceId.named("blank-test-name.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful)
+        assertEquals("CPLUS_TEST_NAME", result.loweringDiagnostics.single().code)
+        assertEquals(source.id.value, result.loweringDiagnostics.single().span.file)
+        assertTrue(result.testFixtures.isEmpty())
     }
 
     @Test
