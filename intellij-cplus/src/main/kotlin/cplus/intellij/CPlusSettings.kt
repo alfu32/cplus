@@ -5,7 +5,9 @@ import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
-import java.awt.GridLayout
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
+import java.awt.Insets
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
@@ -14,9 +16,9 @@ import javax.swing.JTextField
 @State(name = "CPlusSettings", storages = [Storage("cplus.xml")])
 class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
     data class State(
-        var compilerCommand: String = "cplus",
-        var runnerCommand: String = "cplus test",
-        var testProgram: String = ""
+        var compilerCommand: String = "cplus compile",
+        var runnerCommand: String = "cplus run",
+        var testProgram: String = "cplus test"
     )
 
     private var state = State()
@@ -44,10 +46,23 @@ class CPlusSettingsConfigurable : Configurable {
         compiler = JTextField(CPlusSettings.getInstance().current().compilerCommand)
         runner = JTextField(CPlusSettings.getInstance().current().runnerCommand)
         testProgram = JTextField(CPlusSettings.getInstance().current().testProgram)
-        return JPanel(GridLayout(0, 2, 8, 8)).apply {
-            add(JLabel("Compiler command")); add(compiler)
-            add(JLabel("Runner command")); add(runner)
-            add(JLabel("Test program")); add(testProgram)
+        return JPanel(GridBagLayout()).apply {
+            val fields = listOf("Compiler command" to compiler, "Runner command" to runner, "Test program command" to testProgram)
+            fields.forEachIndexed { row, (label, field) ->
+                val labelConstraints = GridBagConstraints().apply {
+                    gridx = 0; gridy = row * 2; anchor = GridBagConstraints.WEST
+                    insets = Insets(if (row == 0) 0 else 12, 0, 4, 0)
+                }
+                add(JLabel(label), labelConstraints)
+                val fieldConstraints = GridBagConstraints().apply {
+                    gridx = 0; gridy = row * 2 + 1; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
+                    insets = Insets(0, 0, 0, 0)
+                }
+                add(field, fieldConstraints)
+            }
+            add(JPanel(), GridBagConstraints().apply {
+                gridx = 0; gridy = fields.size * 2; weighty = 1.0; fill = GridBagConstraints.VERTICAL
+            })
             panel = this
         }
     }

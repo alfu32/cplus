@@ -257,11 +257,11 @@ async function compilerDiagnostics(document: vscode.TextDocument, collection: vs
     if (!configuration.get<boolean>("compilerDiagnostics", false) || document.uri.scheme !== "file") return;
     const local = localDiagnostics(document);
     collection.set(document.uri, local);
-    const command = configuration.get<string>("compilerCommand", "cplus");
+    const command = splitCommand(configuration.get<string>("compilerCommand", "cplus compile"));
     const extraArgs = configuration.get<string[]>("compilerArguments", []);
     const output = join(tmpdir(), "cplus-vscode-" + Date.now());
     await new Promise<void>((resolve) => {
-        execFile(command, ["compile", document.uri.fsPath, "-o", output, ...extraArgs], {
+        execFile(command[0], [...command.slice(1), document.uri.fsPath, "-o", output, ...extraArgs], {
             cwd: vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath,
             maxBuffer: 1024 * 1024
         }, (error, stdout, stderr) => {
@@ -280,21 +280,23 @@ async function compilerDiagnostics(document: vscode.TextDocument, collection: vs
 }
 
 function registerCommands(context: vscode.ExtensionContext, diagnostics: vscode.DiagnosticCollection): void {
-    const runCli = (subcommand: string): void => {
+    const runCli = (setting: "compilerCommand" | "runnerCommand", replaceLast?: string): void => {
         const editor = vscode.window.activeTextEditor;
         if (!editor || editor.document.languageId !== "cplus") {
             void vscode.window.showWarningMessage("Open a C-plus source file first.");
             return;
         }
-        const command = vscode.workspace.getConfiguration("cplus").get<string>("compilerCommand", "cplus");
-        const terminal = vscode.window.createTerminal("C-plus " + subcommand);
+        const configuration = vscode.workspace.getConfiguration("cplus");
+        const command = splitCommand(configuration.get<string>(setting, setting === "runnerCommand" ? "cplus run" : "cplus compile"));
+        if (replaceLast && command.length > 1) command[command.length - 1] = replaceLast;
+        const terminal = vscode.window.createTerminal("C-plus " + setting);
         terminal.show();
-        terminal.sendText(command + " " + subcommand + " " + JSON.stringify(editor.document.uri.fsPath));
+        terminal.sendText([...command, editor.document.uri.fsPath].map(shellQuote).join(" "));
     };
     context.subscriptions.push(
-        vscode.commands.registerCommand("cplus.transcode", () => runCli("transcode")),
-        vscode.commands.registerCommand("cplus.compile", () => runCli("compile")),
-        vscode.commands.registerCommand("cplus.run", () => runCli("run")),
+        vscode.commands.registerCommand("cplus.transcode", () => runCli("compilerCommand", "transcode")),
+        vscode.commands.registerCommand("cplus.compile", () => runCli("compilerCommand")),
+        vscode.commands.registerCommand("cplus.run", () => runCli("runnerCommand")),
         vscode.commands.registerCommand("cplus.check", async () => {
             const editor = vscode.window.activeTextEditor;
             if (editor) {
@@ -358,9 +360,9 @@ function registerTestSupport(context: vscode.ExtensionContext): void {
             const document = await vscode.workspace.openTextDocument(job.location.uri);
             await document.save();
             const configuration = vscode.workspace.getConfiguration("cplus");
-            const command = configuration.get<string>("compilerCommand", "cplus");
-            const args = ["test", ...(configuration.get<string[]>("compilerArguments", [])), job.location.uri.fsPath, job.location.fixture.name];
-            const result = await execute(command, args, token);
+            const command = splitCommand(configuration.get<string>("testProgramCommand", "cplus test"));
+            const args = [...command.slice(1), ...(configuration.get<string[]>("compilerArguments", [])), job.location.uri.fsPath, job.location.fixture.name];
+            const result = await execute(command[0] ?? "cplus", args, token);
             if (result.output) run.appendOutput(result.output.replace(/\r?\n/g, "\r\n"), undefined, job.item);
             if (result.cancelled) run.skipped(job.item);
             else if (result.code === 0) run.passed(job.item);
@@ -411,6 +413,44 @@ function execute(command: string, args: string[], token: vscode.CancellationToke
     });
 }
 
+function splitCommand(command: string): string[] {
+    return [...command.matchAll(/"([^\"]*)"|'([^']*)'|([^\s]+)/g)]
+        .map((match) => match[1] ?? match[2] ?? match[3] ?? "");
+}
+
+function shellQuote(value: string): string {
+    return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+class CPlusMainCodeLensProvider implements vscode.CodeLensProvider {
+    provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+        if (document.languageId !== "cplus") return [];
+        const main = /\bmain\s*\([^)]*\)\s*\{/g.exec(document.getText());
+        if (!main) return [];
+        const position = document.positionAt(main.index);
+        return [new vscode.CodeLens(new vscode.Range(position, position), {
+            title: "▶ Run main",
+            command: "cplus.runMain",
+            arguments: [document.uri]
+        })];
+    }
+}
+
+function registerMainRun(context: vscode.ExtensionContext): void {
+    context.subscriptions.push(
+        vscode.languages.registerCodeLensProvider("cplus", new CPlusMainCodeLensProvider()),
+        vscode.commands.registerCommand("cplus.runMain", async (uri?: vscode.Uri) => {
+            const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+            if (!target || target.scheme !== "file") return;
+            const command = splitCommand(vscode.workspace.getConfiguration("cplus").get<string>("runnerCommand", "cplus run"));
+            if (!command.length) return;
+            const terminal = vscode.window.createTerminal("C-plus run main");
+            terminal.show();
+            terminal.sendText([...command, target.fsPath].map(shellQuote).join(" "));
+        })
+    );
+}
+
 export function activate(context: vscode.ExtensionContext): void {
     const diagnostics = vscode.languages.createDiagnosticCollection("cplus");
     context.subscriptions.push(
@@ -425,6 +465,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.workspace.onDidSaveTextDocument((document) => compilerDiagnostics(document, diagnostics))
     );
     registerCommands(context, diagnostics);
+    registerMainRun(context);
     registerTestSupport(context);
     for (const document of vscode.workspace.textDocuments) {
         if (document.languageId === "cplus") diagnostics.set(document.uri, localDiagnostics(document));

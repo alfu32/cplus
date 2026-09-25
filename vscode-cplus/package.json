@@ -65,8 +65,18 @@
       "properties": {
         "cplus.compilerCommand": {
           "type": "string",
-          "default": "cplus",
-          "description": "C-plus CLI command used by compiler-backed checks and build commands."
+          "default": "cplus compile",
+          "description": "Compiler command, including its subcommand and any fixed arguments."
+        },
+        "cplus.runnerCommand": {
+          "type": "string",
+          "default": "cplus run",
+          "description": "Runner command used for Run and Run main, including fixed arguments."
+        },
+        "cplus.testProgramCommand": {
+          "type": "string",
+          "default": "cplus test",
+          "description": "Test command used to run individual fixtures, including fixed arguments."
         },
         "cplus.compilerArguments": {
           "type": "array",

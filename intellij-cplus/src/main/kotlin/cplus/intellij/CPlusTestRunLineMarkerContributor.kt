@@ -11,36 +11,41 @@ import com.intellij.execution.lineMarker.RunLineMarkerContributor
 
 class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
     override fun getInfo(element: PsiElement): Info? {
-        if (element.text != "@test") return null
         val file = element.containingFile
-        val fixture = CPlusTestFixtures.find(file.text).firstOrNull { it.start == element.textOffset } ?: return null
         val virtualFile = file.virtualFile ?: return null
-        val action = object : AnAction("Run '${fixture.name}'", "Run this C-plus test fixture", AllIcons.RunConfigurations.TestState.Run) {
+        val fixture = if (element.text == "@test") {
+            CPlusTestFixtures.find(file.text).firstOrNull { it.start == element.textOffset }
+        } else null
+        val isMain = element.text == "main" && Regex("\\bmain\\s*\\([^)]*\\)\\s*\\{")
+            .containsMatchIn(file.text.substring(element.textOffset.coerceAtMost(file.text.length)))
+        if (fixture == null && !isMain) return null
+        val title = fixture?.name ?: "main"
+        val action = object : AnAction("Run '$title'", "Run this C-plus ${if (fixture == null) "program" else "test fixture"}", AllIcons.RunConfigurations.TestState.Run) {
             override fun actionPerformed(event: AnActionEvent) {
                 val project = event.project ?: return
                 val settings = CPlusSettings.getInstance().current()
-                val runner = settings.runnerCommand.ifBlank { "cplus test" }
-                val program = settings.testProgram.ifBlank { virtualFile.path }
-                object : Task.Backgroundable(project, "C-plus: ${fixture.name}", true) {
+                val commandText = if (fixture != null) settings.testProgram.ifBlank { "cplus test" }
+                    else settings.runnerCommand.ifBlank { "cplus run" }
+                val command = splitCommand(commandText) + virtualFile.path + listOfNotNull(fixture?.name)
+                object : Task.Backgroundable(project, "C-plus: $title", true) {
                     override fun run(indicator: ProgressIndicator) {
                         val process = try {
-                            val command = splitCommand(runner) + program + fixture.name
                             val builder = ProcessBuilder(command)
                                 .redirectErrorStream(true)
                             virtualFile.parent?.path?.let { builder.directory(java.io.File(it)) }
                             builder.start()
                         } catch (error: Exception) {
-                            showResult(project, fixture.name, "Could not start '$runner': ${error.message}", false)
+                            showResult(project, title, "Could not start '$commandText': ${error.message}", false)
                             return
                         }
                         val output = process.inputStream.bufferedReader().use { it.readText() }
                         val exitCode = process.waitFor()
-                        showResult(project, fixture.name, output.ifBlank { "cplus test exited with status $exitCode" }, exitCode == 0)
+                        showResult(project, title, output.ifBlank { "C-plus command exited with status $exitCode" }, exitCode == 0)
                     }
                 }.queue()
             }
         }
-        return Info(AllIcons.RunConfigurations.TestState.Run, { "Run C-plus test: ${fixture.name}" }, action)
+        return Info(AllIcons.RunConfigurations.TestState.Run, { "Run C-plus ${if (fixture == null) "program" else "test"}: $title" }, action)
     }
 
     private fun showResult(project: com.intellij.openapi.project.Project, name: String, output: String, passed: Boolean) {
