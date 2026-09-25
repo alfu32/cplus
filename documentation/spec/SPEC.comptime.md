@@ -161,7 +161,7 @@ Comptime control flow uses the `@` forms and operates only on comptime values. `
 comptime import "math.cp";
 ```
 
-Ordinary paths are relative to the importing file. Stable `stdlib:/path` and `module:/path` prefixes search the standard-library and project module roots selected by the CLI/project. `.cp` or `.c+` may be omitted and is resolved in that order. Paths are canonicalized, constrained to their configured root for prefixed imports, and loaded once per compilation graph. Imported comptime declarations become available to the importer; materialized runtime declarations are emitted once in dependency order. Comptime imports are not C `#include`s and do not reach the C preprocessor. The legacy `@import` spelling remains accepted.
+Ordinary paths are relative to the importing file. Stable `stdlib:/path` prefixes search the standard-library root selected by the CLI/project. `module:/path` and its `project:/path` alias search project module roots. `.cp` or `.c+` may be omitted and is resolved in that order. Paths are canonicalized, constrained to their configured root for prefixed imports, and loaded once per compilation graph. Imported comptime declarations become available to the importer; materialized runtime declarations are emitted once in dependency order. Comptime imports are not C `#include`s and do not reach the C preprocessor. The legacy `@import` spelling remains accepted.
 
 For unchanged C implementation files, `@import("fixture.c")` instead resolves the path and emits an absolute `#include` directive. The C file is processed by the C preprocessor/compiler rather than the comptime evaluator. `#include "fixture.c"` remains equally valid and is the direct C spelling.
 

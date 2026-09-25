@@ -45,7 +45,7 @@ java -jar c-plus.jar -v2 test test/folder/some_file.cp
 
 `new` creates `cplus.toml`, `src/main.cp`, and `modules/`/`tests/` directories. It accepts a new directory or `.` for the current directory; it never overwrites an existing manifest, main source, or README. `--stdlib directory` overrides the standard-library root. Otherwise the CLI checks `--stdlib`, the project manifest, `CPLUS_STDLIB`, `CPLUS_HOME`, jar/bundle location, repository ancestors, and conventional user/system install paths, in that order.
 
-C-plus module imports support stable search prefixes: `comptime import "stdlib:/memory/xmem.cp"` searches the standard library; `comptime import "module:/shared/types.cp"` searches project module paths. The `.cp`/`.c+` suffix may be omitted. Ordinary relative imports remain relative to the importing file. C `@import` continues to emit a C preprocessor include and may resolve `stdlib:/...` paths as well.
+C-plus module imports support stable search prefixes: `comptime import "stdlib:/memory/xmem.cp"` searches the standard library; `comptime import "module:/shared/types.cp"` and its `project:/shared/types.cp` alias search project module paths. The `.cp`/`.c+` suffix may be omitted. Ordinary relative imports remain relative to the importing file. Prefixed paths cannot escape their configured search root. C `@import` continues to emit a C preprocessor include and may resolve `stdlib:/...` paths as well.
 
 ## Diagnostics and Passes
 
