@@ -240,3 +240,12 @@ cpc test stdlib/tests/*.cp
 ```
 
 For a source checkout before installing `cpc`, use `./gradlew run --args='test stdlib/tests/containers.cp'` or the equivalent `run`/`test` command for another fixture.
+
+### Concurrency and networking examples
+
+- [`examples/thread_pool.cp`](examples/thread_pool.cp) submits three bounded cooperative jobs to a two-worker pool. Each callback saves progress in stable caller-owned state and yields after a short slice.
+- [`examples/http_server.cp`](examples/http_server.cp) serves `GET /hello` on port 18081 with a resumable route callback. Start it in one terminal; press Enter there to stop it cleanly.
+- [`examples/http_client.cp`](examples/http_client.cp) sends a raw HTTP request to that server with a three-second total socket timeout and prints the complete response.
+- [`examples/tcp_server.cp`](examples/tcp_server.cp) is a single-client echo server on port 9090. Connect with `nc 127.0.0.1 9090`; it echoes bytes until the client closes, then exits.
+
+Run an example with `cpc run stdlib/examples/<name>.cp`. The HTTP pair can be exercised together by starting the server first and then running the client. The TCP example intentionally serves one connection at a time and is a socket-facade demonstration, not a production server.
