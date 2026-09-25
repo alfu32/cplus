@@ -16,13 +16,13 @@ comptime {
 #include <stdlib.h>
 #include <stdlib.h>
 
-#define LIFE_BOARD_WIDTH 40
-#define LIFE_BOARD_HEIGHT 25
-#define LIFE_CELL_SIZE 24
+#define LIFE_BOARD_WIDTH 195
+#define LIFE_BOARD_HEIGHT 135
+#define LIFE_CELL_SIZE 6
 #define LIFE_BOARD_LEFT 60
 #define LIFE_BOARD_TOP 104
-#define LIFE_SCREEN_WIDTH 1080
-#define LIFE_SCREEN_HEIGHT 760
+#define LIFE_SCREEN_WIDTH 1280
+#define LIFE_SCREEN_HEIGHT 960
 
 typedef enum life_state_t {
     LIFE_PAUSED,

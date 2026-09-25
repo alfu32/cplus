@@ -7,7 +7,7 @@ const { resolveVersion } = require("../scripts/package.js");
 for (const value of ["pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"]) {
   assert.ok(builtins.cplusAnnotations.includes(value), `missing annotation completion: ${value}`);
 }
-for (const value of ["@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@code", "@test", "@assert", "@assertEquals"]) {
+for (const value of ["@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@code", "@test", "@assert", "@assertEquals", "@throws", "@try", "@catch"]) {
   assert.ok(builtins.comptimeAtForms.includes(value), `missing comptime completion: ${value}`);
 }
 for (const value of ["comptime", "defer", "type", "variable", "function", "code", "test", "var", "fn", "flags"]) {

@@ -135,7 +135,7 @@ class CPlusCompletionContributor : CompletionContributor() {
         private val comptimeResultKinds = listOf("type", "variable", "function", "code", "string", "int", "float", "void")
         private val comptimeAtBuiltins = listOf(
             "@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@code", "@test",
-            "@assert", "@assertEquals"
+            "@assert", "@assertEquals", "@throws", "@try", "@catch"
         )
         private val comptimeProperties = listOf("name", "size", "align", "fields", "type")
         private val builtinTestMacros = listOf("CPLUS_TEST_ASSERT", "CPLUS_TEST_ASSERT_EQUALS", "CPLUS_TEST_FAIL")

@@ -90,6 +90,64 @@ The generated C-plus body ends conceptually as:
 
 This is a source transformation, not runtime stack unwinding: in particular, an explicit `return` before the inserted tail skips the deferred statements. Put defers in functions that reach their closing brace, or arrange control flow accordingly. A defer without a complete statement/block, or outside a function/method body, is diagnosed. Moved text retains its original source-map locations.
 
+## Error propagation with `@throws`, `@try`, and `@catch`
+
+Error propagation is an opt-in lowering convention over ordinary C return values and output parameters. It does not change the C ABI or enforce ownership. Define `error_t` in the usual way and reserve zero for success.
+
+Annotate an error-returning function with empty `@throws()` metadata:
+
+```c
+@throws()
+pub error_t read_count(borrowed FILE *file, borrowed mut int *out_count) {
+    if (fscanf(file, "%d", out_count) != 1) return ERROR_IO;
+    return ERROR_NONE;
+}
+```
+
+Annotate a function that returns a value and reports failure through a final writable `error_t *` parameter by naming that parameter:
+
+```c
+@throws(error)
+pub counter_t *create__counter(int initial, borrowed mut error_t *error) {
+    counter_t *self = malloc(sizeof *self);
+    if (self == NULL) {
+        *error = ERROR_ALLOCATION;
+        return NULL;
+    }
+    *error = ERROR_NONE;
+    self->value = initial;
+    return self;
+}
+```
+
+The error-out parameter must be last and is supplied automatically when omitted at a checked call site. Both conventions treat `ERROR_NONE`/zero as success. An explicitly provided error-out argument requests manual handling for that call.
+
+Use `@try` with ordered catches; the outermost try must end in a catch-all. Nested tries may omit it to propagate unmatched errors outward:
+
+```c
+@try {
+    read_count(file, &count);
+    counter = create__counter(count);
+    printf("count=%d\n", count);
+}
+@catch (ERROR_ALLOCATION, error_t error) {
+    report_allocation_error(error);
+}
+@catch (ERROR_IO | ERROR_INVALID_ARGUMENT, error_t error) {
+    report_input_error(error);
+}
+@catch (error_t error) {
+    report_unexpected_error(error);
+}
+continue_after_try();
+```
+
+The first failed checked call skips the remaining try-body statements and dispatches to the first matching catch. The binding contains the actual returned/reported code; execution resumes after the whole construct when the catch finishes. `|` separates alternatives (it is not a C bitwise expression).
+
+The current lowering supports annotated calls as complete expression statements, and error-out calls as complete assignment or declaration-initializer right-hand sides. Error-returning calls used as explicit assignments are intentionally manual. Each call argument and assignment destination is evaluated once. `@throws` declarations are matched by their canonical C identifier, including methods after receiver-call lowering; this initial pass is not full C type/scope resolution. A call outside `@try` remains an ordinary C call.
+
+The first implementation rejects annotated calls embedded in conditions, return expressions, other call arguments, comma/short-circuit expressions, or other larger expressions. Nested tries handle their own body first; an unmatched error, or an error from a nested catch body, is forwarded to the enclosing try. Calls from a top-level catch body are not caught by that same try. `@try` is not stack unwinding: it does not release resources or alter `return`, `break`, or `continue`. A catch block must handle or explicitly manage its own errors. The compiler diagnoses malformed signatures, catch lists, unmatched constructs, and unsupported checked-call contexts at the originating `.cp` location. See [`SPEC.errors.md`](SPEC.errors.md) for generated-C behavior and compiler limitations.
+
 ## Source Mapping
 
 Generated C contains `#line` directives referencing the original C-plus file so compiler diagnostics point back to `.cp` source locations.

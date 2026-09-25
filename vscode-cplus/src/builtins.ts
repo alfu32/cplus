@@ -14,7 +14,7 @@ export const comptimeForms = ["import", "flags"];
 
 export const comptimeAtForms = [
     "@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@code", "@test",
-    "@assert", "@assertEquals"
+    "@assert", "@assertEquals", "@throws", "@try", "@catch"
 ];
 
 export const comptimeValues = ["os"];

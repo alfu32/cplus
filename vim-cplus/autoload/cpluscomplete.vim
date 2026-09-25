@@ -42,7 +42,7 @@ function! cpluscomplete#Complete(findstart, base) abort
   endif
 
   if line =~# '@\a\w*$'
-    for keyword in ['@import', '@if', '@else', '@for', '@type', '@var', '@fn', '@code', '@test', '@assert', '@assertEquals']
+    for keyword in ['@import', '@if', '@else', '@for', '@type', '@var', '@fn', '@code', '@test', '@assert', '@assertEquals', '@throws', '@try', '@catch']
       call AddCandidate(keyword, '[C-plus comptime]', 'k')
     endfor
     for symbol in s:ComptimeSymbols()
@@ -160,7 +160,7 @@ function! s:ComptimeSymbols() abort
       if empty(match[0])
         break
       endif
-      if index(['@import', '@if', '@else', '@for', '@type', '@var', '@fn', '@code', '@test', '@assert', '@assertEquals'], match[0]) < 0
+      if index(['@import', '@if', '@else', '@for', '@type', '@var', '@fn', '@code', '@test', '@assert', '@assertEquals', '@throws', '@try', '@catch'], match[0]) < 0
         call add(result, match[0])
       endif
       let start = match[2]

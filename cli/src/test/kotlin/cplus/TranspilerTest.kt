@@ -10,6 +10,272 @@ import java.nio.file.Files
 
 class TranspilerTest {
     @Test
+    fun lowersErrorReturnAndErrorOutCallsWithOrderedCatchDispatch() {
+        val directory = Files.createTempDirectory("cplus-try-catch")
+        try {
+            val source = CPlusTranspiler().transpile(
+                """
+                    typedef int error_t;
+                    enum { ERROR_NONE = 0, ERROR_BAD = 1, ERROR_OTHER = 2 };
+
+                    @throws()
+                    pub error_t validate(int should_fail) {
+                        return should_fail ? ERROR_BAD : ERROR_NONE;
+                    }
+
+                    @throws(error)
+                    pub int make_value(int value, borrowed mut error_t *error) {
+                        *error = value < 0 ? ERROR_OTHER : ERROR_NONE;
+                        return value;
+                    }
+
+                    @throws(error)
+                    pub int make_default(borrowed mut error_t *error) {
+                        *error = ERROR_NONE;
+                        return 23;
+                    }
+
+                    int main(void) {
+                        int value = 0;
+                        int reached = 0;
+                        error_t manual_error = ERROR_BAD;
+                        int manual_value = make_value(4, &manual_error);
+                        if (manual_error != ERROR_NONE || manual_value != 4) return 8;
+                        @try {
+                            error_t captured = validate(1);
+                            reached = captured == ERROR_BAD ? 3 : 4;
+                        }
+                        @catch (ERROR_BAD, error_t error) { return 13; }
+                        @catch (error_t error) { return 14; }
+                        if (reached != 3) return 15;
+                        reached = 0;
+                        @try {
+                            validate(1);
+                            value = make_value(9);
+                            reached = 1;
+                        }
+                        @catch (ERROR_BAD | ERROR_OTHER, error_t error) {
+                            if (error != ERROR_BAD) return 1;
+                        }
+                        @catch (error_t error) { return error == 0 ? 2 : 3; }
+                        if (reached || value != 0) return 4;
+
+                        @try {
+                            validate(0);
+                            int made = make_value(17);
+                            int default_value = make_default();
+                            value = made + default_value;
+                            reached = 1;
+                        }
+                        @catch (ERROR_OTHER, error_t error) { return 5; }
+                        @catch (error_t error) { return error == 0 ? 6 : 7; }
+                        if (!(reached && value == 40)) return 9;
+
+                        reached = 0;
+                        @try { value = make_value(-8); reached = 2; }
+                        @catch (ERROR_OTHER, error_t error) { if (error != ERROR_OTHER) return 10; }
+                        @catch (error_t error) { return error == 0 ? 11 : 12; }
+                        return reached != 0 || value != -8;
+                    }
+                """.trimIndent(),
+                "error-handling.cp"
+            )
+            assertFalse("@throws" in source.code, source.code)
+            assertFalse("@try" in source.code, source.code)
+            assertTrue("validate(1)" in source.code, source.code)
+            assertTrue(Regex("make_value\\(9, &cplus_status_\\d+\\)").containsMatchIn(source.code), source.code)
+            assertTrue("goto cplus_catch_" in source.code, source.code)
+            val generatedCheckLine = source.code.lines().indexOfFirst { "if (cplus_status_" in it } + 1
+            assertTrue(generatedCheckLine > 0, source.code)
+            val mappedCheck = source.sourceMap.sourceForGeneratedLine(generatedCheckLine)
+            assertEquals("error-handling.cp", mappedCheck?.file)
+            assertTrue((mappedCheck?.startLine ?: 0) > 0, mappedCheck.toString())
+            val executable = directory.resolve("error-handling")
+            val compilation = TccCompiler().compileExecutable(source, executable, emptyList())
+            assertEquals(0, compilation.exitCode, compilation.diagnostics.joinToString("\n") + "\n" + source.code)
+            assertEquals(0, ProcessBuilder(executable.toString()).start().waitFor())
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun lowersAnnotatedStructMethodsAfterReceiverResolution() {
+        val result = CPlusTranspiler().transpile(
+            """
+                typedef int error_t;
+                enum { ERROR_NONE = 0, ERROR_BAD = 1 };
+                typedef struct meter_t {
+                    int value;
+                    @throws()
+                    pub error_t add(borrowed mut *self, int amount) {
+                        if (amount < 0) return ERROR_BAD;
+                        self->value += amount;
+                        return ERROR_NONE;
+                    }
+                } meter_t;
+                int main(void) {
+                    meter_t meter = {0};
+                    @try { meter.add(3); }
+                    @catch (ERROR_BAD, error_t error) { return error; }
+                    @catch (error_t error) { return error == 0 ? 2 : 3; }
+                    return meter.value != 3;
+                }
+            """.trimIndent(),
+            "annotated-method.cp"
+        )
+        assertTrue(Regex("cplus_status_\\d+ =\\s*meter__add\\(&meter, 3\\)").containsMatchIn(result.code), result.code)
+        val directory = Files.createTempDirectory("cplus-error-method")
+        try {
+            val executable = directory.resolve("annotated-method")
+            val compilation = TccCompiler().compileExecutable(result, executable, emptyList())
+            assertEquals(0, compilation.exitCode, compilation.diagnostics.joinToString("\n") + "\n" + result.code)
+            assertEquals(0, ProcessBuilder(executable.toString()).start().waitFor())
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun nestedTriesHandleInnerErrorsAndPropagateUnmatchedAndCatchBodyErrorsOutward() {
+        val directory = Files.createTempDirectory("cplus-nested-try")
+        try {
+            val source = CPlusTranspiler().transpile(
+                """
+                    typedef int error_t;
+                    enum { ERROR_NONE = 0, ERROR_LOCAL = 1, ERROR_OUTER = 2 };
+                    @throws() error_t fail_with(error_t error) { return error; }
+                    int main(void) {
+                        int state = 0;
+                        @try {
+                            @try {
+                                fail_with(ERROR_LOCAL);
+                                state = 99;
+                            }
+                            @catch (ERROR_LOCAL, error_t error) {
+                                state = 2;
+                            }
+                            state += 10;
+                        }
+                        @catch (error_t error) { return 1; }
+                        if (state != 12) return 2;
+
+                        state = 0;
+                        @try {
+                            @try {
+                                fail_with(ERROR_LOCAL);
+                                state = 99;
+                            }
+                            @catch (ERROR_LOCAL, error_t error) {
+                                fail_with(ERROR_OUTER);
+                                state = 100;
+                            }
+                        }
+                        @catch (ERROR_OUTER, error_t error) { state = 3; }
+                        @catch (error_t error) { return 4; }
+                        return state != 3;
+                    }
+                """.trimIndent(),
+                "nested-errors.cp"
+            )
+            val executable = directory.resolve("nested-errors")
+            val compilation = TccCompiler().compileExecutable(source, executable, emptyList())
+            assertEquals(0, compilation.exitCode, compilation.diagnostics.joinToString("\n") + "\n" + source.code)
+            assertEquals(0, ProcessBuilder(executable.toString()).start().waitFor())
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun rejectsUnsupportedErrorCallExpressionsAtTheirSourceLocation() {
+        val error = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile(
+                """
+                    typedef int error_t;
+                    @throws() error_t check(void) { return 1; }
+                    int main(void) {
+                        @try { if (check()) return 1; }
+                        @catch (error_t error) { return error; }
+                    }
+                """.trimIndent(),
+                "unsupported-error-expression.cp"
+            )
+        }
+        assertTrue(error.message.orEmpty().contains("unsupported expression"), error.message)
+        assertEquals("unsupported-error-expression.cp", error.sourceSpan?.file)
+        assertEquals(4, error.sourceSpan?.startLine)
+    }
+
+    @Test
+    fun validatesErrorAnnotationsAndRequiresFinalCatchAll() {
+        val invalidAnnotation = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile(
+                "typedef int error_t;\n@throws() int invalid(void) { return 0; }",
+                "invalid-throws.cp"
+            )
+        }
+        assertTrue(invalidAnnotation.message.orEmpty().contains("must return error_t"), invalidAnnotation.message)
+
+        val missingCatchAll = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile(
+                """
+                    typedef int error_t;
+                    enum { ERROR_BAD = 1 };
+                    @throws() error_t check(void) { return ERROR_BAD; }
+                    int main(void) {
+                        @try { check(); }
+                        @catch (ERROR_BAD, error_t error) { return error; }
+                        return 0;
+                    }
+                """.trimIndent(),
+                "missing-catchall.cp"
+            )
+        }
+        assertTrue(missingCatchAll.message.orEmpty().contains("outermost @try must end with a catch-all"), missingCatchAll.message)
+
+        val orphanCatch = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile(
+                "typedef int error_t; int main(void) { @catch (error_t error) {} return 0; }",
+                "orphan-catch.cp"
+            )
+        }
+        assertTrue(orphanCatch.message.orEmpty().contains("no matching @try"), orphanCatch.message)
+
+        val topLevelTry = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpile(
+                "typedef int error_t; @try {} @catch (error_t error) {}",
+                "top-level-try.cp"
+            )
+        }
+        assertTrue(topLevelTry.message.orEmpty().contains("only valid inside a function"), topLevelTry.message)
+    }
+
+    @Test
+    fun documentedErrorHandlingExampleTranscodesCompilesAndRuns() {
+        val example = findRepositoryFile("documentation/examples/error_handling.cp")
+        val transcoded = CPlusTranspiler().transpile(Files.readString(example), example.toString())
+        val directory = Files.createTempDirectory("cplus-error-example")
+        try {
+            val executable = directory.resolve("error-example")
+            val compilation = TccCompiler().compileExecutable(transcoded, executable, emptyList())
+            assertEquals(0, compilation.exitCode, compilation.diagnostics.joinToString("\n"))
+
+            val success = ProcessBuilder(executable.toString()).redirectErrorStream(true).start()
+            val successText = success.inputStream.bufferedReader().readText()
+            assertEquals(0, success.waitFor(), successText)
+            assertTrue("counter=5" in successText, successText)
+
+            val failure = ProcessBuilder(executable.toString(), "not-a-number").redirectErrorStream(true).start()
+            val failureText = failure.inputStream.bufferedReader().readText()
+            assertEquals(0, failure.waitFor(), failureText)
+            assertTrue("invalid input" in failureText, failureText)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun deferMovesStatementsAndBlocksToFunctionEndInReverseOrder() {
         val directory = Files.createTempDirectory("cplus-defer-order")
         try {

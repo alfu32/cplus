@@ -131,7 +131,7 @@ class CPlusLexer : LexerBase() {
         )
         private val comptimeAtBuiltins = setOf(
             "@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@code", "@test",
-            "@assert", "@assertEquals"
+            "@assert", "@assertEquals", "@throws", "@try", "@catch"
         )
         private val builtinTestMacros = setOf("CPLUS_TEST_ASSERT", "CPLUS_TEST_ASSERT_EQUALS", "CPLUS_TEST_FAIL")
         private val comptimeProperties = setOf("name", "size", "align", "fields", "type")

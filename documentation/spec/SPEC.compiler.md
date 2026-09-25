@@ -61,9 +61,12 @@ comptime-pass-2-expand
 ...
 comptime-materialize
 collect-tests (test command only)
+collect-error-annotations
+lower-defer-statements
 collect-struct-types
 lower-method-calls
 lower-struct-methods
+lower-try-catch
 emit-mapped-c
 tcc-compile
 run-executable (run command)
@@ -71,6 +74,8 @@ run-tests (test command)
 ```
 
 `comptime-pass-N-parse` parses the active comptime declarations for that expansion pass. `comptime-pass-N-expand` evaluates them and emits mapped C-plus; generated comptime declarations are discovered on a later pass. Materialization substitutes type parameters and evaluates validated identifier splices in generated type and function declarations. C preprocessor directives such as `#define` are passed through as ordinary source; the compiler does not define a comptime alias directive or interpret alias macros. `comptime-materialize` returns the fully resolved mapped source after the parser finds no remaining comptime forms. Phase 2 begins only then; unsupported or unresolved forms fail before method lowering and are never passed to the C parser. Typed AST decorators and general in-source plugin execution remain proposed.
+
+`collect-error-annotations` validates and removes `@throws` markers while retaining function-symbol metadata. `lower-try-catch` runs after method calls and methods are lowered to C identifiers, so checked calls resolve against their declarations. Error-handling syntax and the supported-call boundary are specified in [`SPEC.errors.md`](SPEC.errors.md).
 
 Generated C includes `#line` directives. TinyCC diagnostics are normalized and mapped to the original C-plus filename and line where possible, including imported files and generated entities. Comptime parser/evaluator errors carry the originating source span and the CLI prints `file:line:column`. Transcoding and compiler failures return a non-zero exit code; CLI argument or unexpected processing errors return `2`.
 

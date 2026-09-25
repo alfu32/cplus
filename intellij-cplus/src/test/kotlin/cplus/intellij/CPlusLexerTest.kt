@@ -12,7 +12,7 @@ class CPlusLexerTest {
             self comptime type function defer
             comptime flags -lraylib
             os T.fields field.type
-            @import @if @else @for @type @var @fn @code @test @assert @assertEquals @custom
+            @import @if @else @for @type @var @fn @code @test @assert @assertEquals @throws @try @catch @custom
             CPLUS_TEST_ASSERT CPLUS_TEST_ASSERT_EQUALS CPLUS_TEST_FAIL
             sizeof _Bool while
         """.trimIndent()
@@ -27,7 +27,7 @@ class CPlusLexerTest {
         listOf("fields", "type").forEach { property ->
             assertEquals(1, tokens.count { it.first == property && it.second == CPlusTokenTypes.COMPTIME_PROPERTY })
         }
-        listOf("@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@code", "@test", "@assert", "@assertEquals")
+        listOf("@import", "@if", "@else", "@for", "@type", "@var", "@fn", "@code", "@test", "@assert", "@assertEquals", "@throws", "@try", "@catch")
             .forEach { assertToken(tokens, it, CPlusTokenTypes.COMPTIME_BUILTIN) }
         assertToken(tokens, "@custom", CPlusTokenTypes.ANNOTATION)
         listOf("CPLUS_TEST_ASSERT", "CPLUS_TEST_ASSERT_EQUALS", "CPLUS_TEST_FAIL")

@@ -38,7 +38,7 @@
         {"name": "keyword.control.comptime.cplus", "match": "\\b(comptime|type|variable|function|import|code|test|var|fn|defer|string)\\b"},
         {"name": "keyword.control.comptime.cplus", "match": "@(?=\\s*\\{)"},
         {"name": "keyword.control.comptime.cplus", "match": "@(import|if|else|for|type|var|fn|code|test)\\b"},
-        {"name": "support.function.builtin.cplus", "match": "@(assertEquals|assert)\\b"},
+        {"name": "support.function.builtin.cplus", "match": "@(assertEquals|assert|throws|try|catch)\\b"},
         {"name": "support.function.builtin.cplus", "match": "\\b(CPLUS_TEST_ASSERT_EQUALS|CPLUS_TEST_ASSERT|CPLUS_TEST_FAIL)\\b"},
         {"name": "entity.name.function.comptime.splice.cplus", "match": "@[A-Za-z_]\\w*(?=\\s*\\([^()]*\\)(?:[A-Za-z_]|\\())"},
         {"name": "entity.name.function.comptime.cplus", "match": "@[A-Za-z_]\\w*"},

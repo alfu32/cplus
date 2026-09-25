@@ -257,7 +257,19 @@ internal class ComptimeCompiler(
 
     private fun firstComptimeToken(source: SourceFile): Int? {
         val masked = SourceMasker.mask(source.text)
-        return masked.indices.firstOrNull { masked[it] == '@' || isKeywordAt(masked, it, "comptime") }
+        var index = 0
+        while (index < masked.length) {
+            if (isKeywordAt(masked, index, "comptime")) return index
+            if (masked[index] == '@' && masked.getOrNull(index + 1)?.isIdentifierStart() == true) {
+                val end = identifierEnd(masked, index + 1)
+                val name = masked.substring(index + 1, end)
+                if (name !in setOf("assert", "assertEquals", "throws", "try", "catch")) return index
+                index = end
+            } else {
+                index++
+            }
+        }
+        return null
     }
 
     private fun loadImport(source: SourceFile, item: ComptimeImport): SourceFile {
@@ -584,8 +596,8 @@ internal class ComptimeCompiler(
             val callClose = if (isCall) Delimiters.match(masked, open, '(', ')') else -1
             if (isCall && callClose < 0) throw syntax("unclosed comptime call @$name", source, offset + index)
             val tokenEnd = if (isCall) callClose + 1 else nameEnd
-            if (isCall && name in setOf("assert", "assertEquals")) {
-                // Runtime test assertions are lowered after comptime resolution, where local C values exist.
+            if (name in setOf("assert", "assertEquals", "throws", "try", "catch")) {
+                // C-plus runtime markers are lowered after comptime materialization.
                 index = nameEnd
                 continue
             }

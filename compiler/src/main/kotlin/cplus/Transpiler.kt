@@ -37,8 +37,12 @@ class CPlusTranspiler {
             TestProgram(comptime.runtime, emptyList())
         }
 
+        val annotated = logger.pass("collect-error-annotations") {
+            ErrorAnnotationCollector().collect(input.source)
+        }
+
         val deferred = logger.pass("lower-defer-statements") {
-            DeferLowerer().lower(input.source)
+            DeferLowerer().lower(annotated.source)
         }
 
         val typeNames = logger.pass("collect-struct-types") {
@@ -50,12 +54,15 @@ class CPlusTranspiler {
         val structs = logger.pass("lower-struct-methods") {
             StructLowerer().lower(calls)
         }
+        val errors = logger.pass("lower-try-catch") {
+            TryCatchLowerer(annotated.functions).lower(structs)
+        }
         val allocationAnalysis = logger.pass("allocation-intent-analysis") {
-            AllocationIntentAnalyzer().analyze(structs)
+            AllocationIntentAnalyzer().analyze(errors)
         }
         val emitted = logger.pass("emit-mapped-c") {
             MappedEmitter(sourceFile).emit(
-                structs,
+                errors,
                 CPlusPreamble.text,
                 allocationAnalysis,
                 comptime.compilerOptions

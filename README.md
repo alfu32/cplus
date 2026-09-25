@@ -61,6 +61,8 @@ Named `@test` blocks run through the CLI test command. `@assert(condition)` and 
 
 See the [language specification](documentation/spec/SPEC.language.md), [comptime specification](documentation/spec/SPEC.comptime.md), and [project/module guide](documentation/spec/SPEC.project.md) for syntax, examples, and current limitations.
 
+Error propagation can be opt-in via `@throws()` / `@throws(error)` and statement-scoped `@try`/`@catch`; see the [error-handling specification](documentation/spec/SPEC.errors.md) for its supported contexts and examples.
+
 ## Standard library
 
 The [standard-library guide](stdlib/README.md) is the consolidated catalog of the modules currently in `stdlib/`, their APIs, lifecycle rules, examples, and tests:

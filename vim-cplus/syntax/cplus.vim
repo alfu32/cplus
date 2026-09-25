@@ -12,7 +12,7 @@ syntax match cplusPreprocessor /^\s*#.*$/
 syntax match cplusStructType /\<[A-Za-z_][A-Za-z0-9_]*_t\>/
 syntax match cplusComptime /@[A-Za-z_][A-Za-z0-9_]*/
 syntax match cplusComptimeCall /@[A-Za-z_][A-Za-z0-9_]*\ze\s*(/
-syntax match cplusComptimeBuiltin /@\%(import\|if\|else\|for\|type\|var\|fn\|code\|test\|assertEquals\|assert\)\>/
+syntax match cplusComptimeBuiltin /@\%(import\|if\|else\|for\|type\|var\|fn\|code\|test\|assertEquals\|assert\|throws\|try\|catch\)\>/
 syntax match cplusBuiltinMacro /\<CPLUS_TEST_\%(ASSERT\|ASSERT_EQUALS\|FAIL\)\>/
 syntax match cplusComptimeFlags /\<flags\>/
 syntax match cplusComptimeValue /\<os\>/
