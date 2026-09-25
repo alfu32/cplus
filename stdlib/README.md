@@ -27,6 +27,10 @@ The CLI resolves the `stdlib:/` root from the bundled or installed library, `--s
 | [`containers/dynamic_map.cp`](containers/dynamic_map.cp) | Generic linear key/value table |
 | [`comptime/list_mapper.cp`](comptime/list_mapper.cp) | Typed callback-based list conversion generator |
 | [`concurrency/thread_pool.cp`](concurrency/thread_pool.cp) | Cooperative one/two-native-thread scheduler with resumable tasks |
+| [`net/socket.cp`](net/socket.cp) | Small nonblocking POSIX/WinSock socket facade |
+| [`http/protocol.cp`](http/protocol.cp) | Bounded HTTP/1.1 request/response framing helpers |
+| [`http/client.cp`](http/client.cp) | Raw-request client with a total timeout and explicit errors |
+| [`http/server.cp`](http/server.cp) | Fixed-capacity server head, route dispatcher, and resumable handlers |
 
 Runnable samples are in `examples/`; annotated suites are in `tests/`. The CLI test runner prints test and assertion results, including given/expected values.
 
@@ -205,6 +209,27 @@ Four independent, playable game examples demonstrate queued keyboard input, cloc
 ## Cooperative thread pool
 
 Import `stdlib:/concurrency/thread_pool.cp` for `thread_pool_t` and `thread_task_t`. A pool uses exactly one or two native threads; logical workers are stackless step callbacks that save continuation state in caller-owned context and return `yield`, `done`, or `failed(error_code)`. Each callback invocation is one bounded cooperative time slice: `yield` requeues the task at the FIFO tail, while terminal results remove it from the active queue. Tasks are not parked; callbacks must not block on I/O, sleep, or application locks. The pool cannot interrupt a callback mid-step, so the callback controls how much work it performs before yielding. Separate internal condition variables handle worker wakeups and task waiters. Task/context memory must remain stable through completion. The pool allocates no memory, and `xmem` itself is still not thread-safe. See the [thread-pool specification](../documentation/spec/stdlib/THREAD_POOL.SPEC.md) and run `cpc test stdlib/tests/thread_pool.cp`.
+
+## HTTP over TCP
+
+The HTTP modules provide a small HTTP/1.1 subset over nonblocking sockets. The client sends the exact raw request and waits up to one total timeout for connect, send, and receive; the output buffer is NUL-terminated and its byte length and native socket error are returned separately:
+
+```c
+comptime import "stdlib:/http/client.cp";
+
+char response[4096];
+size_t response_length = 0;
+int native_error = 0;
+int status = http_client_t.request(
+    "127.0.0.1", 8080,
+    "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    2000, response, sizeof(response), &response_length, &native_error
+);
+```
+
+For servers, initialize a one- or two-worker `thread_pool_t`, initialize `http_server_t` with it, register exact method/path callbacks, then start the listener. Route callbacks receive a stable exchange and must do bounded work, save continuation state in `exchange->handler_state`, and return `thread_task_t.yield()` between slices. Call `respond()` or append a complete raw response and `finish_response()`, then return `done`; do not retain the exchange after its response is sent. The caller owns and destroys the pool after stopping/destroying the server. Exchange slots and request/response buffers have fixed capacities, so serving requests does not allocate.
+
+This is not a general HTTP stack: one request per connection, IPv4-only server bind, no TLS, chunked transfer, keep-alive, pipelining, upgrades, or multipart support. DNS lookup uses the system resolver and can exceed the client's socket-I/O timeout. See the [HTTP specification](../documentation/spec/stdlib/HTTP.SPEC.md) and run `cpc test stdlib/tests/http.cp`.
 
 ## Examples and tests
 

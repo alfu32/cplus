@@ -194,6 +194,18 @@ class TranspilerTest {
     }
 
     @Test
+    fun cliTestRunsTheHttpClientAndServerSuite() {
+        val sourcePath = findRepositoryFile("stdlib/tests/http.cp")
+        val output = StringBuilder()
+        val errors = StringBuilder()
+        val status = CPlusCli(output = output, errors = errors).run(listOf("test", sourcePath.toString()))
+
+        assertEquals(0, status, "${errors}\n${output}")
+        assertTrue("http.cp | 4 |" in output, output.toString())
+        assertTrue("0 failed files" in output, output.toString())
+    }
+
+    @Test
     fun cliTestImportsUnchangedCAndRunsRuntimeAssertions() {
         val sourcePath = findRepositoryFile("stdlib/tests/c_import.cp")
         val errors = StringBuilder()
