@@ -182,6 +182,18 @@ class TranspilerTest {
     }
 
     @Test
+    fun cliTestRunsTheCooperativeThreadPoolSuite() {
+        val sourcePath = findRepositoryFile("stdlib/tests/thread_pool.cp")
+        val output = StringBuilder()
+        val errors = StringBuilder()
+        val status = CPlusCli(output = output, errors = errors).run(listOf("test", sourcePath.toString()))
+
+        assertEquals(0, status, "${errors}\n${output}")
+        assertTrue("thread_pool.cp | 10 |" in output, output.toString())
+        assertTrue("0 failed files" in output, output.toString())
+    }
+
+    @Test
     fun cliTestImportsUnchangedCAndRunsRuntimeAssertions() {
         val sourcePath = findRepositoryFile("stdlib/tests/c_import.cp")
         val errors = StringBuilder()
