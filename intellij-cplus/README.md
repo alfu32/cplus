@@ -8,7 +8,7 @@ The highlighter distinguishes C and C-plus types, control keywords, function cal
 
 `@test` and identifier splices (for example, `mapper__@name(T)__to__@name(R)`) are highlighted and offered in completion. Simple object-like `#define generated_name public_name` aliases are suggested as callable names. The plugin does not evaluate comptime expansions; use the compiler for exact materialized output. Without `-Prelease`, its version uses generated CLI metadata or the repository's latest Git tag.
 
-Configure **Settings → Tools → C-plus** with the compiler command, runner command, and test program. Each `@test` fixture has a gutter run icon; it launches the runner with the configured test program and fixture name as arguments. The default runner is `cplus test`, and the test program defaults to the open source file. The compiler command is stored for compiler-backed features.
+Configure **Settings → Tools → C-plus** with the compiler command, runner command, and test program. Each `@test` fixture has a gutter run icon; it launches the test program with the source file and fixture name as arguments. The runner command executes the whole source file from the `main` gutter icon. Each invocation opens a tab in the **C-plus** tool window, where output streams and the exit code are shown without a modal dialog. Defaults are `cplus compile`, `cplus run`, and `cplus test`, respectively.
 
 Build the deployable plugin with:
 

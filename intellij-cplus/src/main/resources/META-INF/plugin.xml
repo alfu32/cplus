@@ -6,6 +6,7 @@
     <depends>com.intellij.modules.platform</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="C-plus" anchor="bottom" factoryClass="cplus.intellij.CPlusOutputToolWindowFactory" />
         <applicationService serviceImplementation="cplus.intellij.CPlusSettings" />
         <applicationConfigurable parentId="tools" instance="cplus.intellij.CPlusSettingsConfigurable" id="cplus.settings" displayName="C-plus" />
         <fileType name="C-plus" language="C-plus" implementationClass="cplus.intellij.CPlusFileType" fieldName="INSTANCE" extensions="cp;c+" />

@@ -5,7 +5,6 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
-import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiElement
 import com.intellij.execution.lineMarker.RunLineMarkerContributor
 
@@ -27,6 +26,8 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
                 val commandText = if (fixture != null) settings.testProgram.ifBlank { "cplus test" }
                     else settings.runnerCommand.ifBlank { "cplus run" }
                 val command = splitCommand(commandText) + virtualFile.path + listOfNotNull(fixture?.name)
+                val console = CPlusOutputConsole.open(project, title, command)
+                if (console == null) return
                 object : Task.Backgroundable(project, "C-plus: $title", true) {
                     override fun run(indicator: ProgressIndicator) {
                         val process = try {
@@ -35,25 +36,21 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
                             virtualFile.parent?.path?.let { builder.directory(java.io.File(it)) }
                             builder.start()
                         } catch (error: Exception) {
-                            showResult(project, title, "Could not start '$commandText': ${error.message}", false)
+                            console.print("Could not start '$commandText': ${error.message}\n", com.intellij.execution.ui.ConsoleViewContentType.ERROR_OUTPUT)
                             return
                         }
-                        val output = process.inputStream.bufferedReader().use { it.readText() }
+                        process.inputStream.bufferedReader().useLines { lines ->
+                            lines.forEach { console.print("$it\n", com.intellij.execution.ui.ConsoleViewContentType.NORMAL_OUTPUT) }
+                        }
                         val exitCode = process.waitFor()
-                        showResult(project, title, output.ifBlank { "C-plus command exited with status $exitCode" }, exitCode == 0)
+                        val contentType = if (exitCode == 0) com.intellij.execution.ui.ConsoleViewContentType.SYSTEM_OUTPUT
+                            else com.intellij.execution.ui.ConsoleViewContentType.ERROR_OUTPUT
+                        console.print("\nProcess finished with exit code $exitCode\n", contentType)
                     }
                 }.queue()
             }
         }
         return Info(AllIcons.RunConfigurations.TestState.Run, { "Run C-plus ${if (fixture == null) "program" else "test"}: $title" }, action)
-    }
-
-    private fun showResult(project: com.intellij.openapi.project.Project, name: String, output: String, passed: Boolean) {
-        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            if (!project.isDisposed) {
-                Messages.showMessageDialog(project, output, "C-plus test: $name", if (passed) Messages.getInformationIcon() else Messages.getErrorIcon())
-            }
-        }
     }
 
     private fun splitCommand(command: String): List<String> =
