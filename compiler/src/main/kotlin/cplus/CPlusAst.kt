@@ -44,6 +44,7 @@ enum class CPlusAstKind {
     ATTRIBUTE,
     DESIGNATOR,
     IDENTIFIER,
+    COMMENT,
     LITERAL,
     EXPRESSION,
     STATEMENT,
@@ -175,9 +176,10 @@ class CPlusAstAdapter {
             "sizeof_expression", "alignof_expression", "subscript_expression", "gnu_asm_clobber_list",
             "gnu_asm_goto_list", "gnu_asm_input_operand", "gnu_asm_input_operand_list",
             "gnu_asm_output_operand", "gnu_asm_output_operand_list", "gnu_asm_qualifier" -> CPlusAstKind.EXPRESSION
-            "identifier", "field_identifier", "type_identifier" -> CPlusAstKind.IDENTIFIER
-            "primitive_type", "type_specifier", "sized_type_specifier", "type_qualifier", "storage_class_specifier",
-            "type_qualifier_list", "type_descriptor", "macro_type_specifier", "ms_pointer_modifier",
+            "identifier", "field_identifier", "type_identifier", "statement_identifier" -> CPlusAstKind.IDENTIFIER
+            "comment" -> CPlusAstKind.COMMENT
+            "primitive_type", "sized_type_specifier", "type_qualifier", "storage_class_specifier",
+            "type_specifier", "type_qualifier_list", "type_descriptor", "macro_type_specifier", "ms_pointer_modifier",
             "ms_restrict_modifier", "ms_signed_ptr_modifier", "ms_unsigned_ptr_modifier",
             "ms_unaligned_ptr_modifier" -> CPlusAstKind.TYPE
             "number_literal", "string_literal", "char_literal", "concatenated_string", "character",

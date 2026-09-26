@@ -75,7 +75,9 @@ This is the implementation checklist for [`COMPILER-FRONTEND-ARCHITECTURE.md`](C
 - [x] Preserve the distinction between an enum's `enumerator_list` container and each `enumerator` entry, with adapter assertions pinning both categories.
 - [x] Normalize common C field/declaration-list and linkage containers, `else`/SEH control-flow, variadic-parameter, bit-field, concatenated-string, GNU-assembly, and preprocessor-helper nodes into their stable AST families; retain concrete `syntaxKind` values.
 - [x] Normalize C-plus access, static, ownership/mutation, and allocator-result annotations as `ANNOTATION`; normalize generic type parameters/references and comptime bodies/return declarations to stable type, block, and statement kinds.
-- [x] Classify the C `type_specifier` wrapper as `TYPE` and attributed statements as `STATEMENT` instead of leaving these common grammar nodes in `OTHER`.
+- [x] Classify attributed statements as `STATEMENT` instead of leaving them in `OTHER`, while retaining their concrete grammar kind; the common-C adapter fixture verifies `[[likely]] if (...)` produces the wrapper category.
+- [x] Normalize comments as `COMMENT` and goto-label identifiers as `IDENTIFIER`; the common-C fixture verifies both without discarding their original syntax kinds or spans.
+- [x] Audit every named node in the pinned `node-types.json` against the adapter; the JVM test fails if any named grammar node silently falls through to `OTHER`.
 
 ### Phase 4 — imports and comptime
 

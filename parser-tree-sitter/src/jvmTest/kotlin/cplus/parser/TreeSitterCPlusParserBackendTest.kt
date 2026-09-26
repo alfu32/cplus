@@ -1,6 +1,7 @@
 package cplus.parser
 
 import cplus.ParseCoverage
+import cplus.ParserBackendId
 import cplus.SourceId
 import cplus.SourceManager
 import cplus.CPlusAstAdapter
@@ -15,6 +16,7 @@ import cplus.CPlusMethodCallLoweringPass
 import cplus.CPlusStructMethodLoweringPass
 import cplus.CPlusParserShadowRunner
 import cplus.CPlusSyntaxNode
+import cplus.CPlusParseResult
 import cplus.AllocationIntent
 import cplus.AllocationOwnership
 import cplus.AllocationSymbolKind
@@ -32,6 +34,33 @@ import kotlin.test.assertEquals
 class TreeSitterCPlusParserBackendTest {
     private val backend = TreeSitterCPlusParserBackend()
     private val sources = SourceManager()
+
+    @Test
+    fun everyNamedGrammarNodeHasAnExplicitStableAstCategory() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("parser-tree-sitter/upstream/src")) }
+            ?: error("could not locate the pinned Tree-sitter grammar from ${Path.of("").toAbsolutePath()}")
+        val nodeTypes = Files.readString(repository.resolve("parser-tree-sitter/upstream/src/node-types.json"))
+        val syntaxKinds = Regex("""\{\s*"type"\s*:\s*"([^"]+)"\s*,\s*"named"\s*:\s*true""")
+            .findAll(nodeTypes)
+            .map { it.groupValues[1] }
+            .toSet()
+        assertTrue(syntaxKinds.isNotEmpty(), "the pinned grammar must expose named syntax nodes")
+
+        val source = sources.open(SourceId.named("grammar-node-category-audit.c"), "")
+        val adapter = CPlusAstAdapter()
+        val unclassified = syntaxKinds.filter { syntaxKind ->
+            val parsed = CPlusParseResult(
+                source = source,
+                backend = ParserBackendId.TREE_SITTER,
+                coverage = ParseCoverage.STRUCTURAL,
+                root = CPlusSyntaxNode(syntaxKind, source.sourceFile.span(0, 0))
+            )
+            adapter.adapt(parsed).root.kind == CPlusAstKind.OTHER
+        }.sorted()
+
+        assertTrue(unclassified.isEmpty(), "named Tree-sitter nodes mapped to OTHER: $unclassified")
+    }
 
     @Test
     fun parsesRepresentativeRepositoryCPlusModulesWithoutRecovery() {
@@ -177,6 +206,7 @@ class TreeSitterCPlusParserBackendTest {
     fun normalizesCommonCDeclarationAndStatementKinds() {
         val text = """
             #include <stddef.h>
+            /* comments remain represented in the normalized tree */
             typedef struct record_t { int field; } record_t;
             struct flags_t { unsigned bits : 3; };
             union payload { int number; char byte; };
@@ -188,7 +218,7 @@ class TreeSitterCPlusParserBackendTest {
             __attribute__((unused)) int attributed;
             int prototype(int value);
             int variadic(const char *format, ...);
-            int main(void) { if (global_value) { global_value--; } else { global_value++; } while (global_value) { global_value--; } return 0; }
+            int main(void) { [[likely]] if (global_value) { global_value--; } if (global_value) { global_value--; } else { global_value++; } while (global_value) { global_value--; } goto finish; finish: return 0; }
         """.trimIndent()
         val snapshot = sources.open(SourceId.named("normalized-c.c"), text)
         val parsed = backend.parse(snapshot)
@@ -220,12 +250,16 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(cplus.CPlusAstKind.FUNCTION_DECLARATION in kinds)
         assertTrue(cplus.CPlusAstKind.PREPROCESSOR in kinds)
         assertTrue(cplus.CPlusAstKind.CONTROL_FLOW in kinds)
+        assertTrue(cplus.CPlusAstKind.COMMENT in kinds)
         assertTrue(cplus.CPlusAstKind.LITERAL in kinds)
         assertTrue(ast.root.descendantsAndSelf().any {
-            it.syntaxKind == "concatenated_string" && it.kind == cplus.CPlusAstKind.LITERAL
+            it.syntaxKind == "statement_identifier" && it.kind == cplus.CPlusAstKind.IDENTIFIER
         }, ast.dump())
         assertTrue(ast.root.descendantsAndSelf().any {
-            it.syntaxKind == "type_specifier" && it.kind == cplus.CPlusAstKind.TYPE
+            it.syntaxKind == "attributed_statement" && it.kind == cplus.CPlusAstKind.STATEMENT
+        }, ast.dump())
+        assertTrue(ast.root.descendantsAndSelf().any {
+            it.syntaxKind == "concatenated_string" && it.kind == cplus.CPlusAstKind.LITERAL
         }, ast.dump())
     }
 
