@@ -1185,6 +1185,8 @@ class TreeSitterCPlusParserBackendTest {
                 counter_t.get();
                 value.get();
                 counter_t.create();
+                counter_t counter_t;
+                counter_t.create();
                 return 0;
             }
         """.trimIndent()
@@ -1197,14 +1199,22 @@ class TreeSitterCPlusParserBackendTest {
         assertEquals(
             listOf(
                 "CPLUS_STATIC_METHOD_REQUIRES_TYPE_RECEIVER",
-                "CPLUS_INSTANCE_METHOD_REQUIRES_VALUE_RECEIVER"
+                "CPLUS_INSTANCE_METHOD_REQUIRES_VALUE_RECEIVER",
+                "CPLUS_STATIC_METHOD_REQUIRES_TYPE_RECEIVER"
             ),
             index.diagnostics.map { it.code }
         )
-        assertEquals(listOf("value.create()", "counter_t.get()"), index.diagnostics.map {
+        assertEquals(listOf("value.create()", "counter_t.get()", "counter_t.create()"), index.diagnostics.map {
             text.substring(it.span.startOffset, it.span.endOffset)
         })
         assertEquals(listOf("get", "create"), index.resolvedCalls.map { it.methodName })
+
+        val prototype = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(snapshot)
+        assertFalse(prototype.successful)
+        assertEquals(index.diagnostics.map { it.code }, prototype.loweringDiagnostics.map { it.code })
+        assertEquals(listOf("value.create()", "counter_t.get()", "counter_t.create()"), prototype.loweringDiagnostics.map {
+            text.substring(it.span.startOffset, it.span.endOffset)
+        })
     }
 
     @Test

@@ -19,13 +19,26 @@ class CPlusCompletionContributor : CompletionContributor() {
                 val prefix = text.substring(0, parameters.editor.caretModel.offset)
                 val member = memberContext(text, prefix)
                 if (member != null) {
-                    if (!member.isStatic) {
-                        fields(text, member.type).forEach {
-                            result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus field"))
+                    val parserSymbols = parameters.originalFile.virtualFile?.path
+                        ?.let { CPlusParserTreeCache.symbols(it, text) }
+                    val parserType = parserSymbols?.firstOrNull { it.kind == "type" && it.name == member.type }
+                    if (parserType != null) {
+                        CPlusParserSymbols.members(parserSymbols.orEmpty(), member.type, member.isStatic).forEach { symbol ->
+                            result.addElement(
+                                LookupElementBuilder.create(symbol.name)
+                                    .withTypeText(if (symbol.kind == "field") "C-plus field" else "C-plus method")
+                                    .withTailText(if (symbol.isStatic) " (static)" else "", true)
+                            )
                         }
-                    }
-                    methods(text, member.type, member.isStatic).forEach {
-                        result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus method"))
+                    } else {
+                        if (!member.isStatic) {
+                            fields(text, member.type).forEach {
+                                result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus field"))
+                            }
+                        }
+                        methods(text, member.type, member.isStatic).forEach {
+                            result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus method"))
+                        }
                     }
                     return
                 }

@@ -356,9 +356,10 @@ class CPlusSemanticAnalyzer {
                     val receiver = memberAccess.children.firstOrNull { it.named }
                     val memberName = memberAccess.children.lastOrNull { it.syntaxKind == "field_identifier" }
                         ?.text(ast.source.text)
-                    val receiverText = receiver?.text(ast.source.text)
                     val instanceType = receiver?.let { receiverType(it, variables) }
-                    val staticType = receiver?.takeIf { it.syntaxKind == "identifier" }
+                    val staticType = receiver?.takeIf {
+                        it.syntaxKind == "identifier" && it.text(ast.source.text) !in variables
+                    }
                         ?.text(ast.source.text)?.takeIf { it in methodsByType }
                     val owner = instanceType?.takeIf { it in methodsByType } ?: staticType
                     val method = owner?.let { ownerType ->
@@ -388,14 +389,14 @@ class CPlusSemanticAnalyzer {
                                 )
                             }
                         } else {
-                        val innerArguments = ast.source.text.substring(openingParen.span.endOffset, closingParen.span.startOffset)
-                        resolvedCalls += CPlusResolvedCall(
-                            method.name, owner!!, isStatic, node.span, method,
-                            receiver.span, memberAccess.span, memberNode.span, operator.span,
-                            operator.syntaxKind == "->", receiver?.let(::isAddressExpression) == true,
-                            openingParen.span.endOffset,
-                            SourceMasker.mask(innerArguments).trim().isNotEmpty()
-                        )
+                            val innerArguments = ast.source.text.substring(openingParen.span.endOffset, closingParen.span.startOffset)
+                            resolvedCalls += CPlusResolvedCall(
+                                method.name, owner!!, isStatic, node.span, method,
+                                receiver.span, memberAccess.span, memberNode.span, operator.span,
+                                operator.syntaxKind == "->", receiver.let(::isAddressExpression),
+                                openingParen.span.endOffset,
+                                SourceMasker.mask(innerArguments).trim().isNotEmpty()
+                            )
                         }
                     }
                 }

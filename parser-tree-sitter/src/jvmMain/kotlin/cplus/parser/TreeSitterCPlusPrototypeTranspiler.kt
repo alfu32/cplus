@@ -118,6 +118,23 @@ class TreeSitterCPlusPrototypeTranspiler(
         }
         ast = CPlusAstAdapter().adapt(parsed)
         val semantics = CPlusSemanticAnalyzer().analyze(ast)
+        if (semantics.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(
+                null,
+                emptyList(),
+                semantics.diagnostics.map { diagnostic ->
+                    CPlusLoweringDiagnostic(
+                        diagnostic.code,
+                        diagnostic.message,
+                        mapped.toOriginalSpan(diagnostic.span)
+                    )
+                },
+                emptyList(),
+                throws.functions,
+                extractedTests.fixtures,
+                allocationAnalysis = allocationAnalysis
+            )
+        }
         val calls = CPlusMethodCallLoweringPass().lower(ast, mapped, semantics)
         if (calls.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(null, emptyList(), calls.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList())
