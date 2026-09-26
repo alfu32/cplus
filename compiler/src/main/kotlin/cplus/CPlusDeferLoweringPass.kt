@@ -37,7 +37,8 @@ class CPlusDeferLoweringPass {
         }
         if (diagnostics.isNotEmpty()) return CPlusLoweringResult(source, diagnostics)
 
-        val edits = mutableListOf<CPlusMappedEdit>()
+        val replacements = linkedMapOf<CPlusAstNode, MappedText>()
+        val insertionsBefore = linkedMapOf<CPlusAstNode, MappedText>()
         byFunction.forEach { (function, statements) ->
             val body = function.descendantsAndSelf().firstOrNull {
                 it.kind == CPlusAstKind.BLOCK && it.fieldName == "body"
@@ -72,17 +73,16 @@ class CPlusDeferLoweringPass {
                 if (source.text.getOrNull(statement.span.endOffset - 1) != '\n') {
                     insertion.appendGenerated("\n", origin)
                 }
-                edits += CPlusMappedEdit(defer.span, MappedText.generated(";", origin))
+                replacements[defer] = MappedText.generated(";", origin)
             }
-            val insertAt = closingBrace.span.startOffset
-            edits += CPlusMappedEdit(
-                ast.source.sourceFile.span(insertAt, insertAt),
-                insertion.build()
-            )
+            insertionsBefore[closingBrace] = insertion.build()
         }
         if (diagnostics.isNotEmpty()) return CPlusLoweringResult(source, diagnostics)
 
-        return CPlusLoweringResult(CPlusMappedAstEmitter().emit(ast, source, edits), emptyList())
+        return CPlusLoweringResult(
+            CPlusMappedAstEmitter().emit(ast, source, replacements, insertionsBefore = insertionsBefore),
+            emptyList()
+        )
     }
 
     private fun indentationAt(text: String, offset: Int): String {

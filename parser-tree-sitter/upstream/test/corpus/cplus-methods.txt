@@ -4,10 +4,16 @@ C-plus methods in struct bodies
 
 typedef struct counter_t {
   int value;
+  borrowed mut char *buffer;
   pub int increment(borrowed mut *self, int amount) { self->value += amount; return 0; }
   static pub counter_t *create(int initial) { return 0; }
   priv int reset(borrowed mut *self);
+  pub void render(borrowed const *self);
 } counter_t;
+
+unsigned char *allocator_cast(void *source) {
+  return (warm unsigned char *)source;
+}
 
 --------------------------------------------------------------------------------
 
@@ -19,6 +25,12 @@ typedef struct counter_t {
         (field_declaration
           (primitive_type)
           (field_identifier))
+        (field_declaration
+          (cplus_result_annotation)
+          (cplus_result_annotation)
+          (primitive_type)
+          (pointer_declarator
+            (field_identifier)))
         (cplus_method_definition
           (cplus_access_modifier)
           (primitive_type)
@@ -68,5 +80,37 @@ typedef struct counter_t {
                   (cplus_parameter_annotation)
                   (cplus_parameter_annotation)
                   (pointer_declarator
+                    (identifier)))))))
+        (cplus_method_definition
+          (cplus_access_modifier)
+          (primitive_type)
+          (cplus_method_declarator
+            (function_declarator
+              (identifier)
+              (parameter_list
+                (cplus_parameter_declaration
+                  (cplus_parameter_annotation)
+                  (type_qualifier)
+                  (pointer_declarator
                     (identifier)))))))))
-    (type_identifier)))
+    (type_identifier))
+  (function_definition
+    (sized_type_specifier
+      (primitive_type))
+    (pointer_declarator
+      (function_declarator
+        (identifier)
+        (parameter_list
+          (parameter_declaration
+            (primitive_type)
+            (pointer_declarator
+              (identifier))))))
+    (compound_statement
+      (return_statement
+        (cast_expression
+          (type_descriptor
+            (cplus_result_annotation)
+            (sized_type_specifier
+              (primitive_type))
+            (abstract_pointer_declarator))
+          (identifier))))))

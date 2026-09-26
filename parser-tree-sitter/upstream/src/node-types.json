@@ -340,7 +340,15 @@
     "named": true,
     "subtypes": [
       {
+        "type": "cplus_at_call_expression",
+        "named": true
+      },
+      {
         "type": "cplus_interpolated_identifier",
+        "named": true
+      },
+      {
+        "type": "cplus_type_reference",
         "named": true
       },
       {
@@ -1188,6 +1196,10 @@
           "named": true
         },
         {
+          "type": "cplus_comptime_type_definition",
+          "named": true
+        },
+        {
           "type": "cplus_test_declaration",
           "named": true
         },
@@ -1406,6 +1418,93 @@
     }
   },
   {
+    "type": "cplus_comptime_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "cplus_at_import",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_block",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_conditional",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_declaration",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_return_declaration",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_type_definition",
+          "named": true
+        },
+        {
+          "type": "cplus_test_declaration",
+          "named": true
+        },
+        {
+          "type": "declaration",
+          "named": true
+        },
+        {
+          "type": "function_definition",
+          "named": true
+        },
+        {
+          "type": "linkage_specification",
+          "named": true
+        },
+        {
+          "type": "preproc_call",
+          "named": true
+        },
+        {
+          "type": "preproc_def",
+          "named": true
+        },
+        {
+          "type": "preproc_function_def",
+          "named": true
+        },
+        {
+          "type": "preproc_if",
+          "named": true
+        },
+        {
+          "type": "preproc_ifdef",
+          "named": true
+        },
+        {
+          "type": "preproc_include",
+          "named": true
+        },
+        {
+          "type": "statement",
+          "named": true
+        },
+        {
+          "type": "type_definition",
+          "named": true
+        },
+        {
+          "type": "type_specifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "cplus_comptime_conditional",
     "named": true,
     "fields": {
@@ -1457,6 +1556,10 @@
         },
         {
           "type": "cplus_comptime_value",
+          "named": true
+        },
+        {
+          "type": "cplus_legacy_function_generator",
           "named": true
         },
         {
@@ -1513,7 +1616,7 @@
         "required": true,
         "types": [
           {
-            "type": "compound_statement",
+            "type": "cplus_comptime_body",
             "named": true
           }
         ]
@@ -1532,6 +1635,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "code",
+            "named": false
+          },
           {
             "type": "function",
             "named": false
@@ -1631,6 +1738,59 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "cplus_comptime_return_declaration",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "cplus_legacy_returned_function",
+          "named": true
+        },
+        {
+          "type": "declaration",
+          "named": true
+        },
+        {
+          "type": "function_definition",
+          "named": true
+        },
+        {
+          "type": "type_definition",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "cplus_comptime_type_definition",
+    "named": true,
+    "fields": {
+      "alias": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "generator": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "cplus_at_call_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1798,6 +1958,50 @@
     }
   },
   {
+    "type": "cplus_legacy_function_generator",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "cplus_comptime_body",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "cplus_generic_type_parameter",
+          "named": true
+        },
+        {
+          "type": "cplus_legacy_generic_type_parameter",
+          "named": true
+        },
+        {
+          "type": "parameter_declaration",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "cplus_legacy_generic_type_parameter",
     "named": true,
     "fields": {},
@@ -1807,6 +2011,21 @@
       "types": [
         {
           "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "cplus_legacy_returned_function",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "cplus_function_declaration",
           "named": true
         }
       ]
@@ -2022,6 +2241,10 @@
         {
           "type": "cplus_parameter_annotation",
           "named": true
+        },
+        {
+          "type": "type_qualifier",
+          "named": true
         }
       ]
     }
@@ -2129,6 +2352,21 @@
       "types": [
         {
           "type": "cplus_catch_clause",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "cplus_type_reference",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
           "named": true
         }
       ]
@@ -2252,6 +2490,10 @@
         },
         {
           "type": "cplus_comptime_declaration",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_type_definition",
           "named": true
         },
         {
@@ -3784,6 +4026,10 @@
           "named": true
         },
         {
+          "type": "cplus_comptime_type_definition",
+          "named": true
+        },
+        {
           "type": "cplus_method_definition",
           "named": true
         },
@@ -3908,6 +4154,10 @@
           "named": true
         },
         {
+          "type": "cplus_comptime_type_definition",
+          "named": true
+        },
+        {
           "type": "cplus_method_definition",
           "named": true
         },
@@ -4000,6 +4250,10 @@
         },
         {
           "type": "cplus_comptime_declaration",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_type_definition",
           "named": true
         },
         {
@@ -4191,6 +4445,10 @@
           "named": true
         },
         {
+          "type": "cplus_comptime_type_definition",
+          "named": true
+        },
+        {
           "type": "cplus_method_definition",
           "named": true
         },
@@ -4312,6 +4570,10 @@
         },
         {
           "type": "cplus_comptime_declaration",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_type_definition",
           "named": true
         },
         {
@@ -4795,6 +5057,10 @@
           "named": true
         },
         {
+          "type": "cplus_comptime_type_definition",
+          "named": true
+        },
+        {
           "type": "cplus_function_declaration",
           "named": true
         },
@@ -4954,6 +5220,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "cplus_result_annotation",
+          "named": true
+        },
         {
           "type": "type_qualifier",
           "named": true
@@ -5626,6 +5896,10 @@
   },
   {
     "type": "flags",
+    "named": false
+  },
+  {
+    "type": "fn",
     "named": false
   },
   {

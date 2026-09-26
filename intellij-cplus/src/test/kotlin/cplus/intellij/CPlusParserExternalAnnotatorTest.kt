@@ -4,8 +4,10 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class CPlusParserExternalAnnotatorTest {
@@ -23,6 +25,16 @@ class CPlusParserExternalAnnotatorTest {
         assertThrows(IllegalArgumentException::class.java) {
             CPlusParserJsonDiagnostics.decode("""{"schema":"cplus.parse.v0","diagnostics":[]}""")
         }
+    }
+
+    @Test
+    fun decodesResolvedImportGraphAndPreservesDependencyOrder() {
+        val graph = CPlusImportGraphJson.decode(
+            """{"schema":"cplus.imports.v1","dependencyOrder":["/project/lib.cp","/project/main.cp"],"imports":[{"importer":"/project/main.cp","imported":"/project/lib.cp","location":{"file":"/project/main.cp","startOffset":0,"endOffset":18,"startLine":1,"startColumn":1,"endLine":1,"endColumn":19}}]}"""
+        )
+
+        assertEquals(listOf("/project/lib.cp", "/project/main.cp"), graph.dependencyOrder)
+        assertEquals(CPlusImportEdge("/project/main.cp", "/project/lib.cp", 1, 1), graph.imports.single())
     }
 
     @Test
@@ -82,12 +94,51 @@ class CPlusParserExternalAnnotatorTest {
     }
 
     @Test
+    fun decodesTestGutterFixturesFromNormalizedAstSpans() {
+        val source = "// @test fake { }\n@test \"real \\\"fixture\\\"\" { }"
+        val fixtureStart = source.indexOf("@test", source.indexOf('\n'))
+        val nameStart = source.indexOf('"', fixtureStart)
+        val nameEnd = source.indexOf("\" {", nameStart) + 1
+        val fixture = node(
+            "test", "cplus_test_declaration", null, fixtureStart, source.length,
+            listOf(
+                node("literal", "string_literal", null, nameStart, nameEnd),
+                node("block", "compound_statement", null, source.indexOf('{', fixtureStart), source.length)
+            )
+        )
+        val json = parserJson(source, node("translation_unit", "translation_unit", null, 0, source.length, listOf(fixture)))
+
+        assertEquals(
+            listOf(CPlusParserFixture("real \"fixture\"", fixtureStart, source.length)),
+            CPlusParserJsonDiagnostics.decodeFixtures(json, source)
+        )
+    }
+
+    @Test
     fun parserTreeCacheRequiresTheExactEditorSnapshot() {
         val symbol = CPlusParserSymbol("Box", "type", "struct Box", 0, 3)
-        CPlusParserTreeCache.store("/project/box.cp", "typedef struct Box {} Box;", listOf(symbol))
+        val fixture = CPlusParserFixture("works", 0, 10)
+        assertTrue(CPlusParserTreeCache.store("/project/box.cp", "typedef struct Box {} Box;", listOf(symbol), listOf(fixture)))
+        assertFalse(CPlusParserTreeCache.store("/project/box.cp", "typedef struct Box {} Box;", listOf(symbol), listOf(fixture)))
 
         assertEquals(listOf(symbol), CPlusParserTreeCache.symbols("/project/box.cp", "typedef struct Box {} Box;"))
+        assertEquals(listOf(fixture), CPlusParserTreeCache.fixtures("/project/box.cp", "typedef struct Box {} Box;"))
         assertNull(CPlusParserTreeCache.symbols("/project/box.cp", "typedef struct Box {} Changed;"))
+        assertNull(CPlusParserTreeCache.fixtures("/project/box.cp", "typedef struct Box {} Changed;"))
+        assertTrue(CPlusParserTreeCache.store("/project/box.cp", "typedef struct Box { int x; } Box;", listOf(symbol)))
+    }
+
+    @Test
+    fun resolvesNavigationTargetsFromNestedNormalizedSymbols() {
+        val method = CPlusParserSymbol("read", "method", "int read()", 42, 46, owner = "sample_t")
+        val symbols = listOf(
+            CPlusParserSymbol("sample_t", "type", "struct sample_t", 14, 22, children = listOf(method)),
+            CPlusParserSymbol("main", "function", "int main()", 90, 94)
+        )
+
+        assertEquals(method, CPlusParserSymbols.declaration(symbols, "read", 120))
+        assertNull(CPlusParserSymbols.declaration(symbols, "read", 43))
+        assertEquals("main", CPlusParserSymbols.declaration(symbols, "main", 130)?.name)
     }
 
     private fun parserJson(source: String, ast: JsonObject): String = JsonObject().apply {

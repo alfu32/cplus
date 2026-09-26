@@ -48,6 +48,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "cplus_comptime_type_definition"
+        },
+        {
+          "type": "SYMBOL",
           "name": "_empty_declaration"
         },
         {
@@ -135,6 +139,10 @@
         {
           "type": "SYMBOL",
           "name": "type_definition"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "cplus_comptime_type_definition"
         },
         {
           "type": "SYMBOL",
@@ -4814,6 +4822,14 @@
         },
         {
           "type": "SYMBOL",
+          "name": "cplus_at_call_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "cplus_type_reference"
+        },
+        {
+          "type": "SYMBOL",
           "name": "sized_type_specifier"
         },
         {
@@ -5815,6 +5831,17 @@
             "value": 2,
             "content": {
               "type": "STRING",
+              "value": "mut"
+            }
+          }
+        },
+        {
+          "type": "TOKEN",
+          "content": {
+            "type": "PREC",
+            "value": 2,
+            "content": {
+              "type": "STRING",
               "value": "scratch"
             }
           }
@@ -6098,53 +6125,85 @@
       "type": "PREC",
       "value": 1,
       "content": {
-        "type": "SEQ",
+        "type": "CHOICE",
         "members": [
           {
-            "type": "REPEAT1",
-            "content": {
-              "type": "SYMBOL",
-              "name": "cplus_parameter_annotation"
-            }
-          },
-          {
-            "type": "CHOICE",
+            "type": "SEQ",
             "members": [
               {
-                "type": "FIELD",
-                "name": "type",
+                "type": "REPEAT1",
                 "content": {
                   "type": "SYMBOL",
-                  "name": "_declaration_specifiers"
+                  "name": "cplus_parameter_annotation"
                 }
               },
               {
-                "type": "BLANK"
-              }
-            ]
-          },
-          {
-            "type": "CHOICE",
-            "members": [
+                "type": "REPEAT1",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "type_qualifier"
+                }
+              },
               {
                 "type": "FIELD",
                 "name": "declarator",
                 "content": {
-                  "type": "CHOICE",
-                  "members": [
-                    {
-                      "type": "SYMBOL",
-                      "name": "_declarator"
-                    },
-                    {
-                      "type": "SYMBOL",
-                      "name": "_abstract_declarator"
-                    }
-                  ]
+                  "type": "SYMBOL",
+                  "name": "pointer_declarator"
+                }
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "REPEAT1",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "cplus_parameter_annotation"
                 }
               },
               {
-                "type": "BLANK"
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "FIELD",
+                    "name": "type",
+                    "content": {
+                      "type": "SYMBOL",
+                      "name": "_declaration_specifiers"
+                    }
+                  },
+                  {
+                    "type": "BLANK"
+                  }
+                ]
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "FIELD",
+                    "name": "declarator",
+                    "content": {
+                      "type": "CHOICE",
+                      "members": [
+                        {
+                          "type": "SYMBOL",
+                          "name": "_declarator"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "_abstract_declarator"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "BLANK"
+                  }
+                ]
               }
             ]
           }
@@ -6197,6 +6256,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "cplus_legacy_function_generator"
+        },
+        {
+          "type": "SYMBOL",
           "name": "cplus_comptime_import"
         },
         {
@@ -6244,6 +6307,10 @@
                 {
                   "type": "STRING",
                   "value": "string"
+                },
+                {
+                  "type": "STRING",
+                  "value": "code"
                 },
                 {
                   "type": "SYMBOL",
@@ -6332,8 +6399,137 @@
             "name": "body",
             "content": {
               "type": "SYMBOL",
-              "name": "compound_statement"
+              "name": "cplus_comptime_body"
             }
+          }
+        ]
+      }
+    },
+    "cplus_comptime_body": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "{"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "cplus_comptime_return_declaration"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "_block_item"
+              }
+            ]
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "}"
+        }
+      ]
+    },
+    "cplus_comptime_return_declaration": {
+      "type": "PREC_DYNAMIC",
+      "value": 10,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "return"
+          },
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "function_definition"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "type_definition"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "declaration"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "cplus_legacy_returned_function"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "cplus_legacy_returned_function": {
+      "type": "PREC_RIGHT",
+      "value": 0,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "@"
+          },
+          {
+            "type": "STRING",
+            "value": "fn"
+          },
+          {
+            "type": "SYMBOL",
+            "name": "cplus_function_declaration"
+          },
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "STRING",
+                "value": ";"
+              },
+              {
+                "type": "BLANK"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "cplus_comptime_type_definition": {
+      "type": "PREC",
+      "value": 3,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "typedef"
+          },
+          {
+            "type": "FIELD",
+            "name": "generator",
+            "content": {
+              "type": "SYMBOL",
+              "name": "cplus_at_call_expression"
+            }
+          },
+          {
+            "type": "FIELD",
+            "name": "alias",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": ";"
           }
         ]
       }
@@ -6472,6 +6668,114 @@
           "content": {
             "type": "SYMBOL",
             "name": "compound_statement"
+          }
+        }
+      ]
+    },
+    "cplus_legacy_function_generator": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "@"
+        },
+        {
+          "type": "STRING",
+          "value": "fn"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "@"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "("
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "cplus_generic_type_parameter"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "cplus_legacy_generic_type_parameter"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "parameter_declaration"
+                    }
+                  ]
+                },
+                {
+                  "type": "REPEAT",
+                  "content": {
+                    "type": "SEQ",
+                    "members": [
+                      {
+                        "type": "STRING",
+                        "value": ","
+                      },
+                      {
+                        "type": "CHOICE",
+                        "members": [
+                          {
+                            "type": "SYMBOL",
+                            "name": "cplus_generic_type_parameter"
+                          },
+                          {
+                            "type": "SYMBOL",
+                            "name": "cplus_legacy_generic_type_parameter"
+                          },
+                          {
+                            "type": "SYMBOL",
+                            "name": "parameter_declaration"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": ")"
+        },
+        {
+          "type": "FIELD",
+          "name": "body",
+          "content": {
+            "type": "SYMBOL",
+            "name": "cplus_comptime_body"
           }
         }
       ]
@@ -8162,6 +8466,19 @@
         }
       ]
     },
+    "cplus_type_reference": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "@"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        }
+      ]
+    },
     "cplus_interpolated_identifier": {
       "type": "PREC_RIGHT",
       "value": 3,
@@ -9240,8 +9557,17 @@
         {
           "type": "REPEAT",
           "content": {
-            "type": "SYMBOL",
-            "name": "type_qualifier"
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "type_qualifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "cplus_result_annotation"
+              }
+            ]
           }
         },
         {
@@ -9255,8 +9581,17 @@
         {
           "type": "REPEAT",
           "content": {
-            "type": "SYMBOL",
-            "name": "type_qualifier"
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "type_qualifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "cplus_result_annotation"
+              }
+            ]
           }
         },
         {
@@ -11296,6 +11631,10 @@
       "enum_specifier"
     ],
     [
+      "_declaration_modifiers",
+      "cplus_parameter_declaration"
+    ],
+    [
       "type_specifier",
       "_old_style_parameter_list"
     ],
@@ -11354,6 +11693,10 @@
     [
       "expression",
       "cplus_interpolated_identifier"
+    ],
+    [
+      "cplus_at_call_expression",
+      "cplus_type_reference"
     ]
   ],
   "precedences": [],

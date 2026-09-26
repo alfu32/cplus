@@ -58,6 +58,10 @@
       {
         "command": "cplus.check",
         "title": "C-plus: Check Current File"
+      },
+      {
+        "command": "cplus.showImportGraph",
+        "title": "C-plus: Show Import Graph"
       }
     ],
     "configuration": {
@@ -72,6 +76,11 @@
           "type": "string",
           "default": "cplus parse",
           "description": "Parser command implementing the cplus.parse.v1 JSON protocol."
+        },
+        "cplus.importGraphCommand": {
+          "type": "string",
+          "default": "cplus graph",
+          "description": "Compiler command implementing the cplus.imports.v1 resolved dependency graph protocol."
         },
         "cplus.runnerCommand": {
           "type": "string",

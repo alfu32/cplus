@@ -9,6 +9,11 @@ class CPlusGotoDeclarationHandler : GotoDeclarationHandler {
         val file = sourceElement?.containingFile ?: return null
         val text = file.text
         val word = wordAt(text, offset) ?: return null
+        val parserSymbols = file.virtualFile?.path?.let { CPlusParserTreeCache.symbols(it, text) }
+        val parserDeclaration = parserSymbols?.let { CPlusParserSymbols.declaration(it, word, offset) }
+        if (parserDeclaration != null) {
+            return file.findElementAt(parserDeclaration.startOffset)?.let { arrayOf(it) }
+        }
         val declaration = Regex(
             "(?:typedef\\s+struct\\s+@?|\\b(?:pub|priv|static)\\s+|\\b)([A-Za-z_]\\w*)\\s*(?:\\{|\\(|;)"
         ).findAll(text).firstOrNull { it.groupValues[1] == word } ?: return null

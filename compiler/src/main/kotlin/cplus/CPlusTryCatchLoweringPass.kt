@@ -5,7 +5,7 @@ class CPlusTryCatchLoweringPass {
     private data class Handler(val status: String, val label: String)
     private data class CatchArm(val codes: List<String>?, val name: String, val body: CPlusAstNode)
     private data class ResolvedThrowingCall(val function: CPlusThrowingFunction, val implicitReceiver: Boolean)
-    private data class Edit(val start: Int, val end: Int, val replacement: MappedText)
+    private data class NodeReplacement(val node: CPlusAstNode, val replacement: MappedText)
 
     private lateinit var ast: CPlusAst
     private lateinit var source: MappedText
@@ -50,13 +50,12 @@ class CPlusTryCatchLoweringPass {
             diagnostic("CPLUS_TRY_OUTSIDE_FUNCTION", "@try is only valid inside a function or method", node.span)
         }
         if (diagnostics.isNotEmpty()) return CPlusLoweringResult(source, diagnostics.toList())
-        val rootEdits = tries.filter { node -> ancestorTry(node) == null }
-            .mapNotNull { node ->
-                val lowered = lowerTry(node, null)
-                lowered?.let { Edit(node.span.startOffset, node.span.endOffset, it) }
-            }
+        val rootReplacements = linkedMapOf<CPlusAstNode, MappedText>()
+        tries.filter { node -> ancestorTry(node) == null }.forEach { node ->
+            lowerTry(node, null)?.let { rootReplacements[node] = it }
+        }
         if (diagnostics.isNotEmpty()) return CPlusLoweringResult(source, diagnostics.toList())
-        return CPlusLoweringResult(applyEdits(source, 0, source.text.length, rootEdits), emptyList())
+        return CPlusLoweringResult(CPlusMappedAstEmitter().emit(ast, source, rootReplacements), emptyList())
     }
 
     private fun lowerTry(node: CPlusAstNode, parentHandler: Handler?): MappedText? {
@@ -120,18 +119,20 @@ class CPlusTryCatchLoweringPass {
         val nestedTries = region.descendantsAndSelf()
             .filter { it.kind == CPlusAstKind.TRY && it !== region && !hasTryBetween(it, region) }
             .toList()
-        val tryEdits = nestedTries.mapNotNull { nested ->
-            lowerTry(nested, handler)?.let { Edit(nested.span.startOffset, nested.span.endOffset, it) }
+        val replacements = linkedMapOf<CPlusAstNode, MappedText>()
+        nestedTries.forEach { nested ->
+            lowerTry(nested, handler)?.let { replacements[nested] = it }
         }
-        val callEdits = if (handler == null) emptyList() else checkedCallEdits(region, handler)
-        return applyEdits(source, start, end, tryEdits + callEdits)
+        val callReplacements = if (handler == null) emptyList() else checkedCallReplacements(region, handler)
+        callReplacements.forEach { replacement -> replacements[replacement.node] = replacement.replacement }
+        return CPlusMappedAstEmitter().emit(ast.copy(root = region), source, replacements)
     }
 
-    private fun checkedCallEdits(region: CPlusAstNode, handler: Handler): List<Edit> {
+    private fun checkedCallReplacements(region: CPlusAstNode, handler: Handler): List<NodeReplacement> {
         val calls = region.descendantsAndSelf()
             .filter { it.kind == CPlusAstKind.CALL_EXPRESSION && !hasTryBetween(it, region) }
             .sortedBy { it.span.startOffset }
-        val edits = mutableListOf<Edit>()
+        val replacements = mutableListOf<NodeReplacement>()
         val handledStatements = mutableSetOf<Pair<Int, Int>>()
         for (call in calls) {
             val resolved = resolveThrowingFunction(call) ?: continue
@@ -202,9 +203,9 @@ class CPlusTryCatchLoweringPass {
                 replacement.append(source, closingParen.span.startOffset, statement.span.endOffset)
             }
             replacement.appendGenerated("\nif (${handler.status} != 0) goto ${handler.label};", origin)
-            edits += Edit(statement.span.startOffset, statement.span.endOffset, replacement.build())
+            replacements += NodeReplacement(statement, replacement.build())
         }
-        return edits
+        return replacements
     }
 
     private fun resolveThrowingFunction(call: CPlusAstNode): ResolvedThrowingCall? {
@@ -242,23 +243,6 @@ class CPlusTryCatchLoweringPass {
 
     private fun ancestorTry(node: CPlusAstNode): CPlusAstNode? =
         generateSequence(parents[node]) { parents[it] }.firstOrNull { it.kind == CPlusAstKind.TRY }
-
-    private fun applyEdits(input: MappedText, start: Int, end: Int, edits: List<Edit>): MappedText {
-        val ordered = edits.sortedBy { it.start }
-        val output = MappedTextBuilder()
-        var cursor = start
-        ordered.forEach { edit ->
-            if (edit.start < cursor || edit.end < edit.start || edit.end > end) {
-                diagnostic("CPLUS_TRY_OVERLAPPING_EDITS", "overlapping try/catch or checked-call edits", ast.source.sourceFile.span(edit.start, edit.end))
-                return input.slice(start, end)
-            }
-            output.append(input, cursor, edit.start)
-            output.append(edit.replacement)
-            cursor = edit.end
-        }
-        output.append(input, cursor, end)
-        return output.build()
-    }
 
     private fun fresh(prefix: String): String {
         while (true) {

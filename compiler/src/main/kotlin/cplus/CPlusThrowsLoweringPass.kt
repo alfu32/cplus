@@ -119,7 +119,7 @@ class CPlusThrowsLoweringPass {
         }
         if (diagnostics.isNotEmpty()) return CPlusThrowsLoweringResult(source, functions, diagnostics)
 
-        val edits = annotations.map { annotation ->
+        val replacements = annotations.associateWith { annotation ->
             val replacement = MappedTextBuilder()
             for (index in annotation.span.startOffset until annotation.span.endOffset) {
                 val character = source.text[index]
@@ -128,9 +128,13 @@ class CPlusThrowsLoweringPass {
                     source.originAt(index)
                 )
             }
-            CPlusMappedEdit(annotation.span, replacement.build())
+            replacement.build()
         }
-        return CPlusThrowsLoweringResult(CPlusMappedAstEmitter().emit(ast, source, edits), functions, emptyList())
+        return CPlusThrowsLoweringResult(
+            CPlusMappedAstEmitter().emit(ast, source, replacements),
+            functions,
+            emptyList()
+        )
     }
 
     private fun typeStem(name: String): String = if (name.endsWith("_t")) name.dropLast(2) else name

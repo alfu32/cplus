@@ -1,6 +1,7 @@
 package cplus.parser
 
 import cplus.CPlusAstAdapter
+import cplus.CPlusAstCEmitter
 import cplus.CPlusDeferLoweringPass
 import cplus.CPlusLoweringDiagnostic
 import cplus.CPlusMethodCallLoweringPass
@@ -31,7 +32,8 @@ data class TreeSitterPrototypeResult(
     val testFixtures: List<cplus.CPlusExtractedTestFixture> = emptyList(),
     /** Compiler-facing mapped emission for consumers that need the established source-map facade. */
     val transcodedSource: TranscodedSource? = null,
-    val allocationAnalysis: cplus.AllocationAnalysisResult = cplus.AllocationAnalysisResult()
+    val allocationAnalysis: cplus.AllocationAnalysisResult = cplus.AllocationAnalysisResult(),
+    val compilerOptions: List<String> = emptyList()
 ) {
     val successful: Boolean
         get() = cSource != null && parserDiagnostics.isEmpty() && loweringDiagnostics.isEmpty() && unsupportedNodes.isEmpty()
@@ -47,7 +49,8 @@ data class TreeSitterUnsupportedConstruct(val syntaxKind: String, val span: cplu
  */
 class TreeSitterCPlusPrototypeTranspiler(
     private val backend: CPlusParserBackend = TreeSitterCPlusParserBackend(),
-    private val sourceManager: SourceManager = SourceManager()
+    private val sourceManager: SourceManager = SourceManager(),
+    private val targetOs: String = cplus.CPlusTarget.hostOs()
 ) {
     fun transpile(source: SourceSnapshot): TreeSitterPrototypeResult {
         var revision = 0
@@ -73,6 +76,97 @@ class TreeSitterCPlusPrototypeTranspiler(
         parsed = backend.parse(snapshot)
         if (parsed.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
+        }
+        val conditionalPass = TreeSitterComptimeConditionalLowering()
+        var conditionalPassCount = 0
+        while (conditionalPassCount < MAX_COMPTIME_CONDITIONAL_PASSES) {
+            val materialized = conditionalPass.lower(parsed, mapped, targetOs)
+            if (materialized.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    emptyList(),
+                    materialized.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    testFixtures = extractedTests.fixtures
+                )
+            }
+            if (materialized.source.text == mapped.text) break
+            conditionalPassCount++
+            mapped = materialized.source
+            snapshot = snapshotFor(mapped.text)
+            parsed = backend.parse(snapshot)
+            if (parsed.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    emptyList(),
+                    testFixtures = extractedTests.fixtures
+                )
+            }
+        }
+        val remainingConditional = descendants(parsed.root).firstOrNull { it.kind == "cplus_comptime_conditional" }
+        if (remainingConditional != null) {
+            return TreeSitterPrototypeResult(
+                null,
+                emptyList(),
+                listOf(CPlusLoweringDiagnostic(
+                    "CPLUS_COMPTIME_CONDITIONAL_LIMIT",
+                    "nested comptime conditionals exceeded the materialization pass limit",
+                    mapped.toOriginalSpan(remainingConditional.span)
+                )),
+                emptyList(),
+                testFixtures = extractedTests.fixtures
+            )
+        }
+        val scalarMaterialized = TreeSitterComptimeScalarLowering().lower(parsed, mapped)
+        if (scalarMaterialized.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(
+                null,
+                emptyList(),
+                scalarMaterialized.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                emptyList(),
+                testFixtures = extractedTests.fixtures
+            )
+        }
+        if (scalarMaterialized.source.text != mapped.text) {
+            mapped = scalarMaterialized.source
+            snapshot = snapshotFor(mapped.text)
+            parsed = backend.parse(snapshot)
+            if (parsed.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    emptyList(),
+                    testFixtures = extractedTests.fixtures
+                )
+            }
+        }
+        val flagsMaterialized = TreeSitterComptimeFlagsLowering().lower(parsed, mapped)
+        if (flagsMaterialized.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(
+                null,
+                emptyList(),
+                flagsMaterialized.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                emptyList(),
+                testFixtures = extractedTests.fixtures
+            )
+        }
+        val compilerOptions = flagsMaterialized.compilerOptions
+        if (flagsMaterialized.source.text != mapped.text) {
+            mapped = flagsMaterialized.source
+            snapshot = snapshotFor(mapped.text)
+            parsed = backend.parse(snapshot)
+            if (parsed.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    emptyList(),
+                    testFixtures = extractedTests.fixtures
+                )
+            }
         }
         ast = CPlusAstAdapter().adapt(parsed)
         val unsupported = unsupportedConstructs(parsed.root).map { it.copy(span = mapped.toOriginalSpan(it.span)) }
@@ -173,15 +267,51 @@ class TreeSitterCPlusPrototypeTranspiler(
         output.appendGenerated(preamble, cplus.SourceOrigin(source.sourceFile, 0))
         output.append(mapped)
         val emittedSource = output.build()
+        snapshot = snapshotFor(emittedSource.text)
+        parsed = backend.parse(snapshot)
+        if (parsed.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(
+                null,
+                parsed.diagnostics.map { it.withMappedSpan(emittedSource, it.span) },
+                emptyList(),
+                emptyList(),
+                throws.functions,
+                extractedTests.fixtures
+            )
+        }
+        val cEmission = CPlusAstCEmitter().emit(CPlusAstAdapter().adapt(parsed), emittedSource)
+        if (cEmission.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(
+                null,
+                emptyList(),
+                cEmission.diagnostics.map { it.withMappedSpan(emittedSource, it.span) },
+                emptyList(),
+                throws.functions,
+                extractedTests.fixtures
+            )
+        }
+        val generatedC = cEmission.source ?: error("successful AST C emission must contain output")
+        val emittedParse = backend.parse(snapshotFor(generatedC.text))
+        if (emittedParse.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(
+                null,
+                emittedParse.diagnostics.map { it.withMappedSpan(generatedC, it.span) },
+                emptyList(),
+                emptyList(),
+                throws.functions,
+                extractedTests.fixtures
+            )
+        }
         return TreeSitterPrototypeResult(
-            emittedSource,
+            generatedC,
             emptyList(),
             emptyList(),
             emptyList(),
             throws.functions,
             extractedTests.fixtures,
-            MappedEmitter(source.sourceFile).emit(emittedSource, "", allocationAnalysis),
-            allocationAnalysis
+            MappedEmitter(source.sourceFile).emit(generatedC, "", allocationAnalysis),
+            allocationAnalysis,
+            compilerOptions
         )
     }
 
@@ -219,5 +349,9 @@ class TreeSitterCPlusPrototypeTranspiler(
         val end = originAt(lastIndex)
         val mappedEnd = if (end?.file === start.file && end.offset >= start.offset) end.offset + 1 else start.offset + 1
         return start.file.span(start.offset, mappedEnd)
+    }
+
+    private companion object {
+        const val MAX_COMPTIME_CONDITIONAL_PASSES = 64
     }
 }

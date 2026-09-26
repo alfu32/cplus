@@ -41,6 +41,67 @@ class TranspilerTest {
     }
 
     @Test
+    fun cliParseAcceptsUnsavedBufferTextFromStdinAndKeepsTheDocumentPath() {
+        val directory = Files.createTempDirectory("cplus-parse-stdin")
+        try {
+            val source = directory.resolve("unsaved.cp")
+            val unsavedText = "typedef struct unsaved_type_t { int live_value; } unsaved_type_t;"
+            val output = StringBuilder()
+            val status = CPlusCli(
+                output = output,
+                errors = StringBuilder(),
+                stdinText = { unsavedText }
+            ).run(listOf("parse", "--stdin", "--source", source.toString()))
+
+            assertEquals(0, status)
+            assertTrue(output.toString().contains(source.toAbsolutePath().normalize().toString()), output.toString())
+            assertTrue(output.toString().contains("\"endOffset\":${unsavedText.length}"), output.toString())
+            assertTrue(output.toString().contains("\"kind\":\"struct_declaration\""), output.toString())
+
+            val malformedOutput = StringBuilder()
+            val malformedStatus = CPlusCli(
+                output = malformedOutput,
+                errors = StringBuilder(),
+                stdinText = { "int incomplete( {" }
+            ).run(listOf("parse", "--stdin", "--source", source.toString()))
+            assertEquals(1, malformedStatus)
+            assertTrue(malformedOutput.toString().contains(source.toAbsolutePath().normalize().toString()), malformedOutput.toString())
+            assertTrue(malformedOutput.toString().contains("\"diagnostics\":[{"), malformedOutput.toString())
+
+            val invalidArguments = CPlusCli(output = StringBuilder(), errors = StringBuilder(), stdinText = { "" })
+            assertThrows(IllegalArgumentException::class.java) {
+                invalidArguments.run(listOf("parse", "--stdin", source.toString()))
+            }
+        } finally {
+            Files.deleteIfExists(directory.resolve("unsaved.cp"))
+            Files.deleteIfExists(directory)
+        }
+    }
+
+    @Test
+    fun cliGraphEmitsResolvedImportEdgesAndDependencyFirstOrder() {
+        val directory = Files.createTempDirectory("cplus-import-graph")
+        try {
+            val dependency = directory.resolve("dependency.cp")
+            val root = directory.resolve("main.cp")
+            Files.writeString(dependency, "int imported_value = 7;\n")
+            Files.writeString(root, "@import \"dependency.cp\";\nint value = imported_value;\n")
+            val output = StringBuilder()
+            val status = CPlusCli(output = output, errors = StringBuilder()).run(listOf("graph", root.toString()))
+            val json = output.toString()
+
+            assertEquals(0, status)
+            assertTrue(json.contains("\"schema\":\"cplus.imports.v1\""), json)
+            assertTrue(json.contains("\"importer\":\"${SourceId.fromPath(root).value}\""), json)
+            assertTrue(json.contains("\"imported\":\"${SourceId.fromPath(dependency).value}\""), json)
+            assertTrue(json.contains("\"startLine\":1"), json)
+            assertTrue(json.indexOf(SourceId.fromPath(dependency).value) < json.indexOf(SourceId.fromPath(root).value), json)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun preservesLegacyOutputAndSourceMappingGolden() {
         fun resource(name: String): String = checkNotNull(javaClass.getResourceAsStream("/$name"))
             .bufferedReader().use { it.readText() }
@@ -2049,6 +2110,7 @@ class TranspilerTest {
     fun printsCommandHelp() {
         val help = StringBuilder()
         assertTrue(CPlusCli(output = help).run(listOf("help")) == 0)
+        assertTrue("graph filename.cp" in help.toString(), help.toString())
         assertTrue("transcode filename.cp" in help.toString(), help.toString())
         assertTrue("compile filename.cp" in help.toString(), help.toString())
         assertTrue("run filename.cp" in help.toString(), help.toString())

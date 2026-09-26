@@ -9,6 +9,8 @@ The executable is named `cplus` and accepts these subcommands:
 ```text
 cplus help
 cplus parse filename.cp [-o ast.json]
+cplus parse --stdin [--source filename.cp] [-o ast.json]
+cplus graph filename.cp [-o imports.json]
 cplus transcode filename.cp [-o some_file_name.c] [--target=TRIPLE]
 cplus compile filename.cp [-o executable] [passthrough tcc parameters]
 cplus run filename.cp [-o executable] [passthrough tcc parameters]
@@ -21,6 +23,10 @@ cplus -v0|-v1|-v2 <subcommand> ...
 ```
 
 `parse` emits the recovered normalized syntax tree and diagnostics as JSON using schema `cplus.parse.v1`. All offsets are UTF-16 code units. Its default output is stdout; `-o` writes the JSON to a file. Syntax errors still produce the partial tree and diagnostic list, then return status `1`; command or file errors return `2`. The command is intended as an editor integration boundary and does not change the production transpilation backend.
+
+Use `parse --stdin` to parse unsaved editor text. The source is read from stdin; optional `--source filename.cp` supplies the canonical path used in AST spans and diagnostics (without reading that file). The stdin form cannot be combined with a positional source filename, and `--source` is valid only with `--stdin`.
+
+`graph` resolves the input through the normal C-plus comptime importer and emits `cplus.imports.v1` JSON. `dependencyOrder` lists canonical C-plus source identities in dependency-first order, ending with the requested root; `imports` contains directed `{importer, imported, location}` edges with source-mapped UTF-16 spans. It shares project, module, and standard-library resolution with compilation. The command performs normal transpilation to obtain the resolved graph, so syntax/import/materialization errors fail the command rather than returning a partial graph. Ordinary C `#include` and C `@import` directives remain compiler-managed and are not C-plus dependency edges. The default output is stdout; `-o` writes the JSON file.
 
 `transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. `transcode` accepts only `--target` among compiler options; it uses the option to choose comptime branches but does not compile. Additional arguments for `compile` and `run` are passed to the selected C compiler; for example, `-DFLAG=1` or `-Iinclude`. Code-processing commands print the C-plus transcoder version. Before each C compilation, the CLI reports whether the compiler is bundled or external and its payload/JAR or executable location.
 

@@ -87,10 +87,10 @@ class CPlusTestExtractionPass {
             )
         }
         if (diagnostics.isNotEmpty()) return CPlusTestExtractionResult(source, emptyList(), diagnostics)
-        val edits = tests.map { test ->
-            CPlusMappedEdit(test.span, MappedText.generated("", source.originAt(test.span.startOffset)))
+        val replacements = tests.associateWith { test ->
+            MappedText.generated("", source.originAt(test.span.startOffset))
         }
-        return CPlusTestExtractionResult(CPlusMappedAstEmitter().emit(ast, source, edits), fixtures, emptyList())
+        return CPlusTestExtractionResult(CPlusMappedAstEmitter().emit(ast, source, replacements), fixtures, emptyList())
     }
 
     private fun CPlusAstNode.testNodes(): Sequence<CPlusAstNode> =

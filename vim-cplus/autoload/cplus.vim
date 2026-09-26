@@ -46,10 +46,11 @@ function! cplus#Parse() abort
     return
   endif
   let command = get(g:, 'cplus_command', 'cplus')
-  let output = systemlist(command . ' parse ' . shellescape(expand('%:p')))
+  let source = join(getline(1, '$'), "\n") . (&l:endofline ? "\n" : '')
+  let output = system(command . ' parse --stdin --source ' . shellescape(expand('%:p')), source)
   let status = v:shell_error
   try
-    let result = json_decode(join(output, "\n"))
+    let result = json_decode(output)
   catch
     echoerr 'C-plus parse returned invalid JSON; requires a CLI with cplus.parse.v1 support'
     return
@@ -127,14 +128,11 @@ function! cplus#Symbols() abort
     echoerr 'C-plus symbols require a file buffer'
     return
   endif
-  if &modified
-    echoerr 'Save the C-plus file before requesting parser-backed symbols'
-    return
-  endif
   let command = get(g:, 'cplus_command', 'cplus')
-  let output = systemlist(command . ' parse ' . shellescape(expand('%:p')))
+  let source = join(getline(1, '$'), "\n") . (&l:endofline ? "\n" : '')
+  let output = system(command . ' parse --stdin --source ' . shellescape(expand('%:p')), source)
   try
-    let result = json_decode(join(output, "\n"))
+    let result = json_decode(output)
   catch
     echoerr 'C-plus parse returned invalid JSON; requires a CLI with cplus.parse.v1 support'
     return
@@ -198,4 +196,57 @@ function! cplus#Symbols() abort
   call setloclist(0, [], 'r', {'title': 'C-plus parser symbols', 'items': items})
   lopen
   echo 'Loaded ' . len(items) . ' C-plus symbols from normalized parser tree'
+endfunction
+
+function! cplus#ImportGraph() abort
+  if &buftype !=# '' || empty(expand('%:p'))
+    echoerr 'C-plus import graph requires a file buffer'
+    return
+  endif
+  if &modified
+    echoerr 'Save the C-plus file before resolving imports'
+    return
+  endif
+  let command = get(g:, 'cplus_command', 'cplus')
+  let output = systemlist(command . ' graph ' . shellescape(expand('%:p')) . ' 2>&1')
+  let status = v:shell_error
+  if status != 0
+    echoerr join(output, "\n")
+    return
+  endif
+  try
+    let result = json_decode(join(output, "\n"))
+  catch
+    echoerr 'C-plus graph returned invalid JSON; requires a CLI with cplus.imports.v1 support'
+    return
+  endtry
+  if get(result, 'schema', '') !=# 'cplus.imports.v1'
+        \ || type(get(result, 'imports', v:null)) != v:t_list
+    echoerr 'C-plus graph did not return a cplus.imports.v1 import graph'
+    return
+  endif
+
+  let items = []
+  for edge in result.imports
+    let imported = get(edge, 'imported', '')
+    let location = get(edge, 'location', {})
+    if empty(imported)
+      continue
+    endif
+    call add(items, {
+          \ 'filename': imported,
+          \ 'lnum': 1,
+          \ 'col': 1,
+          \ 'text': printf('imported from %s:%d:%d', get(edge, 'importer', expand('%:p')),
+          \     get(location, 'startLine', 1), get(location, 'startColumn', 1)),
+          \ 'type': 'I'
+          \ })
+  endfor
+  call setloclist(0, [], 'r', {'title': 'C-plus resolved imports', 'items': items})
+  if empty(items)
+    echo 'No resolved C-plus imports'
+    return
+  endif
+  lopen
+  echo 'Loaded ' . len(items) . ' resolved C-plus imports'
 endfunction

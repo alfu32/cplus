@@ -14,6 +14,7 @@ command! -buffer -nargs=* CPlusRun call cplus#Run('run', <q-args>)
 command! -buffer CPlusCheck call cplus#Check()
 command! -buffer CPlusParse call cplus#Parse()
 command! -buffer CPlusSymbols call cplus#Symbols()
+command! -buffer CPlusImportGraph call cplus#ImportGraph()
 
 if get(g:, 'cplus_check_on_write', 0)
   augroup cplus_buffer_check

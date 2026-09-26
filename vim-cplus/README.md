@@ -18,11 +18,12 @@ Use `i_CTRL-X_CTRL-O` for completion. Set `g:cplus_command` to the C-plus CLI (d
 :CPlusCheck
 :CPlusParse
 :CPlusSymbols
+:CPlusImportGraph
 :CPlusTranscode
 :CPlusCompile
 :CPlusRun
 ```
 
-Compiler and parser diagnostics are loaded into the quickfix list. `:CPlusParse` consumes the CLI's `cplus.parse.v1` JSON, converts its UTF-16 columns to Vim byte columns, and shows recovered syntax errors. `:CPlusSymbols` builds a navigable location-list outline from normalized struct, field, method, and function nodes, leaving the diagnostics quickfix list intact; save the buffer before using it. Both commands require a C-plus CLI distribution containing the parser JNI library for the current host. Set `let g:cplus_check_on_write = 1` to compile after every save or `let g:cplus_parse_on_write = 1` to run the parser after every save.
+Compiler and parser diagnostics are loaded into the quickfix list. `:CPlusParse` and `:CPlusSymbols` send the current buffer text to the CLI through `cplus parse --stdin --source <path>`, so they include unsaved edits. Parse diagnostics convert UTF-16 columns to Vim byte columns; symbols build a navigable location-list outline from normalized struct, field, method, and function nodes. `:CPlusImportGraph` consumes `cplus.imports.v1` and displays resolved imported files in the location list; selecting an entry opens the imported file, while its label retains the requesting file and line. Import-graph resolution reads files from disk, so save the current file and imports first. These location-list commands leave the diagnostics quickfix list intact. Parser commands require a C-plus CLI distribution containing the parser JNI library for the current host. Set `let g:cplus_check_on_write = 1` to compile after every save or `let g:cplus_parse_on_write = 1` to run the parser after every save.
 
-From the repository root, run `vim -Nu NONE -n -es -S vim-cplus/test/outline.vim` to verify parser-backed symbol extraction and Unicode-aware quickfix positions; it uses `cli/build/libs/c-plus.jar`.
+From the repository root, run `vim -Nu NONE -i NONE -n -es -S vim-cplus/test/outline.vim` to verify parser-backed symbols, import-graph navigation, and Unicode-aware quickfix positions; it uses `cli/build/libs/c-plus.jar`.

@@ -4,6 +4,57 @@ data class CPlusMappedEdit(val span: SourceSpan, val replacement: MappedText)
 
 /** Applies non-overlapping, source-spanned edits while retaining all unchanged and moved origins. */
 class CPlusMappedAstEmitter {
+    /**
+     * Emits a source-preserving AST with node replacements and additions attached to syntax nodes.
+     * Trivia between child nodes is retained from [source] with its existing origin segments.
+     */
+    fun emit(
+        ast: CPlusAst,
+        source: MappedText,
+        replacements: Map<CPlusAstNode, MappedText>,
+        insertionsAfter: Map<CPlusAstNode, MappedText> = emptyMap(),
+        insertionsBefore: Map<CPlusAstNode, MappedText> = emptyMap()
+    ): MappedText {
+        require(ast.source.text == source.text) { "AST and mapped source must contain the same snapshot text" }
+        require(replacements.keys.all { it.span.endOffset <= source.text.length }) {
+            "AST replacement node is outside the source snapshot"
+        }
+        require(insertionsAfter.keys.all { it.span.endOffset <= source.text.length }) {
+            "AST insertion node is outside the source snapshot"
+        }
+        require(insertionsBefore.keys.all { it.span.startOffset <= source.text.length }) {
+            "AST insertion node is outside the source snapshot"
+        }
+
+        val output = MappedTextBuilder()
+        fun emitNode(node: CPlusAstNode) {
+            insertionsBefore[node]?.let(output::append)
+            replacements[node]?.let { replacement ->
+                output.append(replacement)
+                insertionsAfter[node]?.let(output::append)
+                return
+            }
+
+            val children = node.children
+                .filter { it.span.endOffset > it.span.startOffset }
+                .sortedWith(compareBy<CPlusAstNode> { it.span.startOffset }.thenBy { it.span.endOffset })
+            var cursor = node.span.startOffset
+            children.forEach { child ->
+                require(child.span.startOffset >= cursor && child.span.endOffset <= node.span.endOffset) {
+                    "AST child ${child.syntaxKind} overlaps or escapes ${node.syntaxKind}"
+                }
+                output.append(source, cursor, child.span.startOffset)
+                emitNode(child)
+                cursor = child.span.endOffset
+            }
+            output.append(source, cursor, node.span.endOffset)
+            insertionsAfter[node]?.let(output::append)
+        }
+
+        emitNode(ast.root)
+        return output.build()
+    }
+
     fun emit(ast: CPlusAst, source: MappedText, edits: List<CPlusMappedEdit>): MappedText {
         require(ast.source.text == source.text) { "AST and mapped source must contain the same snapshot text" }
         val ordered = edits.sortedWith(compareBy<CPlusMappedEdit> { it.span.startOffset }.thenBy { it.span.endOffset })

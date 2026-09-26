@@ -52,6 +52,7 @@ module.exports = grammar({
     [$._declaration_modifiers, $.attributed_statement],
     [$._declaration_modifiers, $.cplus_function_declaration],
     [$.enum_specifier],
+    [$._declaration_modifiers, $.cplus_parameter_declaration],
     [$.type_specifier, $._old_style_parameter_list],
     [$.parameter_list, $._old_style_parameter_list],
     [$.function_declarator, $._function_declaration_declarator],
@@ -67,6 +68,7 @@ module.exports = grammar({
     [$.union_specifier, $.cplus_interpolated_identifier],
     [$.sized_type_specifier, $.cplus_interpolated_identifier],
     [$.expression, $.cplus_interpolated_identifier],
+    [$.cplus_at_call_expression, $.cplus_type_reference],
   ],
 
   extras: $ => [
@@ -107,6 +109,7 @@ module.exports = grammar({
       $._top_level_statement,
       $.attributed_statement,
       $.type_definition,
+      $.cplus_comptime_type_definition,
       $._empty_declaration,
       $.preproc_if,
       $.preproc_ifdef,
@@ -130,6 +133,7 @@ module.exports = grammar({
       $.statement,
       $.attributed_statement,
       $.type_definition,
+      $.cplus_comptime_type_definition,
       $._empty_declaration,
       $.preproc_if,
       $.preproc_ifdef,
@@ -623,6 +627,8 @@ module.exports = grammar({
       $.union_specifier,
       $.enum_specifier,
       $.macro_type_specifier,
+      $.cplus_at_call_expression,
+      $.cplus_type_reference,
       $.sized_type_specifier,
       $.primitive_type,
       $._type_identifier,
@@ -795,7 +801,7 @@ module.exports = grammar({
 
     cplus_static_modifier: _ => choice('static', 'stat'),
 
-    cplus_result_annotation: _ => choice(...['borrowed', 'owned', 'scratch', 'hot', 'warm', 'cold'].map(value => token(prec(2, value)))),
+    cplus_result_annotation: _ => choice(...['borrowed', 'owned', 'mut', 'scratch', 'hot', 'warm', 'cold'].map(value => token(prec(2, value)))),
 
 
     field_declaration: $ => seq(
@@ -827,10 +833,17 @@ module.exports = grammar({
       ')',
     ),
 
-    cplus_parameter_declaration: $ => prec(1, seq(
-      repeat1($.cplus_parameter_annotation),
-      optional(field('type', $._declaration_specifiers)),
-      optional(field('declarator', choice($._declarator, $._abstract_declarator))),
+    cplus_parameter_declaration: $ => prec(1, choice(
+      seq(
+        repeat1($.cplus_parameter_annotation),
+        repeat1($.type_qualifier),
+        field('declarator', $.pointer_declarator),
+      ),
+      seq(
+        repeat1($.cplus_parameter_annotation),
+        optional(field('type', $._declaration_specifiers)),
+        optional(field('declarator', choice($._declarator, $._abstract_declarator))),
+      ),
     )),
 
     cplus_parameter_annotation: _ => choice('borrowed', 'owned', 'mut', 'scratch', 'hot', 'warm', 'cold'),
@@ -838,6 +851,7 @@ module.exports = grammar({
     cplus_comptime_declaration: $ => choice(
       $.cplus_comptime_function_definition,
       $.cplus_legacy_type_generator,
+      $.cplus_legacy_function_generator,
       $.cplus_comptime_import,
       $.cplus_comptime_flags,
       $.cplus_comptime_invocation,
@@ -846,13 +860,38 @@ module.exports = grammar({
 
     cplus_comptime_function_definition: $ => prec(2, seq(
       'comptime',
-      field('result_kind', choice('type', 'function', 'variable', 'string', $.identifier, $.primitive_type)),
+      field('result_kind', choice('type', 'function', 'variable', 'string', 'code', $.identifier, $.primitive_type)),
       '@',
       field('name', $.identifier),
       '(',
       commaSep(choice($.cplus_generic_type_parameter, $.parameter_declaration)),
       ')',
-      field('body', $.compound_statement),
+      field('body', $.cplus_comptime_body),
+    )),
+
+    cplus_comptime_body: $ => seq(
+      '{',
+      repeat(choice($.cplus_comptime_return_declaration, $._block_item)),
+      '}',
+    ),
+
+    cplus_comptime_return_declaration: $ => prec.dynamic(10, seq(
+      'return',
+      choice(
+        $.function_definition,
+        $.type_definition,
+        $.declaration,
+        $.cplus_legacy_returned_function,
+      ),
+    )),
+
+    cplus_legacy_returned_function: $ => prec.right(seq('@', 'fn', $.cplus_function_declaration, optional(';'))),
+
+    cplus_comptime_type_definition: $ => prec(3, seq(
+      'typedef',
+      field('generator', $.cplus_at_call_expression),
+      field('alias', $.identifier),
+      ';',
     )),
 
     cplus_generic_type_parameter: $ => seq('type', $.identifier),
@@ -863,6 +902,12 @@ module.exports = grammar({
       '@', 'type', optional('@'), field('name', $.identifier),
       '(', commaSep(choice($.cplus_generic_type_parameter, $.cplus_legacy_generic_type_parameter, $.parameter_declaration)), ')',
       field('body', $.compound_statement),
+    ),
+
+    cplus_legacy_function_generator: $ => seq(
+      '@', 'fn', optional('@'), field('name', $.identifier),
+      '(', commaSep(choice($.cplus_generic_type_parameter, $.cplus_legacy_generic_type_parameter, $.parameter_declaration)), ')',
+      field('body', $.cplus_comptime_body),
     ),
 
     cplus_comptime_import: $ => seq('comptime', 'import', $.string_literal, ';'),
@@ -1184,6 +1229,8 @@ module.exports = grammar({
 
     cplus_at_call_expression: $ => seq('@', $.identifier, $.argument_list),
 
+    cplus_type_reference: $ => seq('@', $.identifier),
+
     cplus_interpolated_identifier: $ => prec.right(3, seq(
       repeat(choice($.identifier, $.cplus_at_call_expression)),
       $.cplus_at_call_expression,
@@ -1299,9 +1346,9 @@ module.exports = grammar({
     )),
 
     type_descriptor: $ => seq(
-      repeat($.type_qualifier),
+      repeat(choice($.type_qualifier, $.cplus_result_annotation)),
       field('type', $.type_specifier),
-      repeat($.type_qualifier),
+      repeat(choice($.type_qualifier, $.cplus_result_annotation)),
       field('declarator', optional($._abstract_declarator)),
     ),
 

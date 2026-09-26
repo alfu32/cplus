@@ -4,6 +4,9 @@ C-plus comptime declarations and invocation sites
 
 comptime string @typename(type T) { return T.name; }
 comptime type @list(type T) { return 0; }
+comptime function @make_mapper(type T) {
+  return int map__@name(T)(borrowed const T* input) { return *input; }
+}
 comptime typedef list(string_t) string_list_t;
 comptime make_helpers(int_t, string_t);
 comptime import "constants.cp";
@@ -16,6 +19,17 @@ int runtime_answer = comptime answer;
 @if (os == "linux") { comptime flags -lX11; }
 @else if (os == "windows") { comptime flags -luser32; }
 @else { comptime flags -framework Cocoa; }
+typedef @dynamic_list(int) int_list_t;
+@fn @map(@type T, @type R) {
+  return @fn pub R mapper(borrowed @T* value) { return (R)*value; };
+}
+comptime code @outer() {
+  return @code {
+    comptime code @inner() { return @code { int generated_value; }; }
+    comptime inner();
+  };
+}
+comptime outer();
 
 --------------------------------------------------------------------------------
 
@@ -25,7 +39,7 @@ int runtime_answer = comptime answer;
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
-      (compound_statement
+      (cplus_comptime_body
         (return_statement
           (field_expression
             (identifier)
@@ -35,9 +49,36 @@ int runtime_answer = comptime answer;
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
-      (compound_statement
+      (cplus_comptime_body
         (return_statement
           (number_literal)))))
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (identifier)
+      (cplus_generic_type_parameter
+        (identifier))
+      (cplus_comptime_body
+        (cplus_comptime_return_declaration
+          (function_definition
+            (primitive_type)
+            (function_declarator
+              (cplus_interpolated_identifier
+                (identifier)
+                (cplus_at_call_expression
+                  (identifier)
+                  (argument_list
+                    (identifier))))
+              (parameter_list
+                (cplus_parameter_declaration
+                  (cplus_parameter_annotation)
+                  (type_qualifier)
+                  (type_identifier)
+                  (pointer_declarator
+                    (identifier)))))
+            (compound_statement
+              (return_statement
+                (pointer_expression
+                  (identifier)))))))))
   (cplus_comptime_declaration
     (cplus_comptime_invocation
       (identifier)
@@ -104,4 +145,62 @@ int runtime_answer = comptime answer;
       (cplus_comptime_declaration
         (cplus_comptime_flags
           (identifier)
-          (identifier))))))
+          (identifier)))))
+  (cplus_comptime_type_definition
+    (cplus_at_call_expression
+      (identifier)
+      (argument_list
+        (identifier)))
+    (identifier))
+  (cplus_comptime_declaration
+    (cplus_legacy_function_generator
+      (identifier)
+      (cplus_legacy_generic_type_parameter
+        (identifier))
+      (cplus_legacy_generic_type_parameter
+        (identifier))
+      (cplus_comptime_body
+        (cplus_comptime_return_declaration
+          (cplus_legacy_returned_function
+            (cplus_function_declaration
+              (cplus_access_modifier)
+              (type_identifier)
+              (cplus_method_declarator
+                (function_declarator
+                  (identifier)
+                  (parameter_list
+                    (cplus_parameter_declaration
+                      (cplus_parameter_annotation)
+                      (cplus_type_reference
+                        (identifier))
+                      (pointer_declarator
+                        (identifier))))))
+              (compound_statement
+                (return_statement
+                  (binary_expression
+                    (parenthesized_expression
+                      (identifier))
+                    (identifier))))))))))
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (identifier)
+      (cplus_comptime_body
+        (return_statement
+          (cplus_code_fragment
+            (compound_statement
+              (cplus_comptime_declaration
+                (cplus_comptime_function_definition
+                  (identifier)
+                  (cplus_comptime_body
+                    (return_statement
+                      (cplus_code_fragment
+                        (compound_statement
+                          (declaration
+                            (primitive_type)
+                            (identifier))))))))
+              (cplus_comptime_declaration
+                (cplus_comptime_invocation
+                  (identifier)))))))))
+  (cplus_comptime_declaration
+    (cplus_comptime_invocation
+      (identifier))))

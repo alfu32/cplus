@@ -11,10 +11,17 @@
         <applicationConfigurable parentId="tools" instance="cplus.intellij.CPlusSettingsConfigurable" id="cplus.settings" displayName="C-plus" />
         <fileType name="C-plus" language="C-plus" implementationClass="cplus.intellij.CPlusFileType" fieldName="INSTANCE" extensions="cp;c+" />
         <lang.parserDefinition language="C-plus" implementationClass="cplus.intellij.CPlusParserDefinition" />
+        <lang.psiStructureViewFactory language="C-plus" implementationClass="cplus.intellij.CPlusStructureViewFactory" />
         <lang.syntaxHighlighterFactory language="C-plus" implementationClass="cplus.intellij.CPlusSyntaxHighlighterFactory" />
         <annotator language="C-plus" implementationClass="cplus.intellij.CPlusParserExternalAnnotator" />
         <completion.contributor language="C-plus" implementationClass="cplus.intellij.CPlusCompletionContributor" />
         <gotoDeclarationHandler implementationClass="cplus.intellij.CPlusGotoDeclarationHandler" />
         <runLineMarkerContributor language="C-plus" implementationClass="cplus.intellij.CPlusTestRunLineMarkerContributor" />
     </extensions>
+    <actions>
+        <action id="cplus.showImportGraph" class="cplus.intellij.CPlusShowImportGraphAction"
+                text="Show C-plus Import Graph" description="Resolve imports and open an imported C-plus source">
+            <add-to-group group-id="EditorPopupMenu" anchor="last" />
+        </action>
+    </actions>
 </idea-plugin>

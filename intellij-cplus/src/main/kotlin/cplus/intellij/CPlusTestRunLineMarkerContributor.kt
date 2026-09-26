@@ -12,8 +12,13 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
     override fun getInfo(element: PsiElement): Info? {
         val file = element.containingFile
         val virtualFile = file.virtualFile ?: return null
+        val parserFixtures = CPlusParserTreeCache.fixtures(virtualFile.path, file.text)
         val fixture = if (element.text == "@test") {
-            CPlusTestFixtures.find(file.text).firstOrNull { it.start == element.textOffset }
+            parserFixtures?.firstOrNull { it.startOffset == element.textOffset }?.let {
+                CPlusTestFixture(it.name, it.startOffset, it.endOffset)
+            } ?: if (parserFixtures == null) {
+                CPlusTestFixtures.find(file.text).firstOrNull { it.start == element.textOffset }
+            } else null
         } else null
         val isMain = element.text == "main" && Regex("\\bmain\\s*\\([^)]*\\)\\s*\\{")
             .containsMatchIn(file.text.substring(element.textOffset.coerceAtMost(file.text.length)))

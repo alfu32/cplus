@@ -22,7 +22,7 @@ comptime function @mapper(type T, type R) {
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
-      (compound_statement
+      (cplus_comptime_body
         (return_statement
           (field_expression
             (identifier)
@@ -32,7 +32,7 @@ comptime function @mapper(type T, type R) {
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
-      (compound_statement
+      (cplus_comptime_body
         (return_statement
           (cplus_code_fragment
             (compound_statement
@@ -55,7 +55,7 @@ comptime function @mapper(type T, type R) {
         (identifier))
       (cplus_generic_type_parameter
         (identifier))
-      (compound_statement
+      (cplus_comptime_body
         (return_statement
           (cplus_code_fragment
             (compound_statement

@@ -165,20 +165,37 @@ class CPlusParserShadowRunner(
                         "cplus_comptime_import" -> "comptime_import"
                         "cplus_comptime_invocation" -> "comptime_invocation"
                         "cplus_legacy_type_generator" -> "comptime_type_declaration"
+                        "cplus_legacy_function_generator" -> "comptime_function_declaration"
                         // The legacy parser models `comptime type @name(...)` as a function
                         // declaration with resultKind=type; retain that normalized category.
                         "cplus_comptime_function_definition" -> "comptime_function_declaration"
                         else -> null
                     }
+                    "cplus_comptime_type_definition" -> "comptime_invocation"
+                    "expression_statement" -> node.takeIf {
+                        it.children.count { child -> child.named } == 1 &&
+                            it.children.single { child -> child.named }.let { expression ->
+                                expression.kind == "cplus_interpolated_identifier" &&
+                                    expression.containsKind("cplus_at_call_expression")
+                            }
+                    }?.let { "comptime_invocation" }
                     else -> null
                 }
             }
             kind?.takeIf { it in LEGACY_RECOGNIZED }?.let {
-                add("$it@${node.span.startOffset}:${node.span.endOffset}")
+                var endOffset = node.span.endOffset
+                if (result.backend == ParserBackendId.LEGACY) {
+                    while (endOffset > node.span.startOffset && result.source.text[endOffset - 1].isWhitespace()) {
+                        endOffset--
+                    }
+                }
+                add("$it@${node.span.startOffset}:$endOffset")
             }
             // The legacy frontend treats a comptime block/function body as one expansion unit;
             // declarations inside it are not independently active top-level constructs here.
-            if (node.kind !in setOf("cplus_comptime_declaration", "cplus_comptime_block")) {
+            if (node.kind !in setOf("cplus_comptime_declaration", "cplus_comptime_block") &&
+                !(node.kind == "expression_statement" && kind == "comptime_invocation")
+            ) {
                 node.children.forEach(::visit)
             }
         }
@@ -194,6 +211,9 @@ class CPlusParserShadowRunner(
         )
     }
 }
+
+private fun CPlusSyntaxNode.containsKind(expected: String): Boolean =
+    kind == expected || children.any { it.containsKind(expected) }
 
 /**
  * Adapter documenting what the legacy scanner actually recognizes. It emits nodes only for

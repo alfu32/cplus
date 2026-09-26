@@ -100,6 +100,25 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
 
+val jvmTestTask = tasks.named<Test>("jvmTest") {
+    useJUnitPlatform {
+        excludeTags("frontend-benchmark")
+    }
+}
+
+tasks.register<Test>("benchmarkFrontend") {
+    group = "verification"
+    description = "Measures fresh Tree-sitter parse, prototype transcode, and full reparse-after-edit costs."
+    dependsOn("jvmTestClasses")
+    testClassesDirs = jvmTestTask.get().testClassesDirs
+    classpath = jvmTestTask.get().classpath
+    useJUnitPlatform {
+        includeTags("frontend-benchmark")
+    }
+    testLogging.showStandardStreams = true
+    outputs.upToDateWhen { false }
+}
+
 val generateTreeSitterParser = tasks.register<Exec>("generateTreeSitterParser") {
     group = "build"
     description = "Regenerates the pinned C-plus Tree-sitter parser into build output."
@@ -116,7 +135,7 @@ val verifyTreeSitterParser = tasks.register("verifyTreeSitterParser") {
     inputs.dir(generatedDirectory)
     inputs.files(grammarDirectory.file("src/parser.c"), grammarDirectory.file("src/node-types.json"))
     doLast {
-        listOf("parser.c", "node-types.json").forEach { filename ->
+        listOf("grammar.json", "node-types.json", "parser.c").forEach { filename ->
             val committed = grammarDirectory.file("src/$filename").asFile
             val generated = generatedDirectory.get().file(filename).asFile
             if (!generated.isFile || committed.readBytes().contentEquals(generated.readBytes()).not()) {

@@ -91,8 +91,10 @@ class CPlusAstAdapterTest {
         val wholeSpan = source.sourceFile.span(0, source.text.length)
         val syntaxKinds = listOf(
             "cplus_legacy_type_generator" to CPlusAstKind.COMPTIME_DECLARATION,
+            "cplus_legacy_function_generator" to CPlusAstKind.COMPTIME_DECLARATION,
             "cplus_comptime_function_definition" to CPlusAstKind.COMPTIME_DECLARATION,
             "cplus_comptime_invocation" to CPlusAstKind.COMPTIME_INVOCATION,
+            "cplus_comptime_type_definition" to CPlusAstKind.COMPTIME_INVOCATION,
             "cplus_comptime_expression" to CPlusAstKind.COMPTIME_EXPRESSION,
             "cplus_code_fragment" to CPlusAstKind.CODE_FRAGMENT,
             "cplus_interpolated_identifier" to CPlusAstKind.INTERPOLATED_IDENTIFIER
@@ -149,5 +151,44 @@ class CPlusAstAdapterTest {
         assertNull(emitted.originAt(emitted.text.length))
         assertNull(emitted.originAt(-1))
         assertEquals(source.text.length - replaceStart - 5, emitted.text.length - replaceStart - "result".length)
+    }
+
+    @Test
+    fun mappedAstEmitterReplacesAndInsertsByAstNodeWithoutLosingTriviaOrOrigins() {
+        val source = SourceManager().open(SourceId.named("node-emit.cp"), "int value;\n")
+        val file = source.sourceFile
+        val identifierStart = source.text.indexOf("value")
+        val identifier = CPlusSyntaxNode("identifier", file.span(identifierStart, identifierStart + 5))
+        val declaration = CPlusSyntaxNode(
+            "declaration",
+            file.span(0, source.text.indexOf('\n')),
+            listOf(identifier)
+        )
+        val root = CPlusSyntaxNode(
+            "translation_unit",
+            file.span(0, source.text.length),
+            listOf(declaration)
+        )
+        val ast = CPlusAstAdapter().adapt(
+            CPlusParseResult(source, ParserBackendId.TREE_SITTER, ParseCoverage.STRUCTURAL, root)
+        )
+        val original = MappedText.identity(file)
+        val generatedOrigin = SourceOrigin(file, declaration.span.endOffset)
+        val emitted = CPlusMappedAstEmitter().emit(
+            ast,
+            original,
+            replacements = mapOf(
+                ast.root.children.single().children.single() to MappedText.generated("answer", SourceOrigin(file, identifierStart))
+            ),
+            insertionsAfter = mapOf(
+                ast.root.children.single() to MappedText.generated(" /* generated */", generatedOrigin)
+            )
+        )
+
+        assertEquals("int answer; /* generated */\n", emitted.text)
+        assertEquals(0, emitted.originAt(0)?.offset)
+        assertEquals(identifierStart, emitted.originAt(emitted.text.indexOf("answer"))?.offset)
+        assertEquals(declaration.span.endOffset, emitted.originAt(emitted.text.indexOf("/* generated */"))?.offset)
+        assertEquals(source.text.length - 1, emitted.originAt(emitted.text.lastIndex)?.offset)
     }
 }

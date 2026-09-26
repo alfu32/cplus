@@ -3,7 +3,8 @@ const { readFileSync } = require("node:fs");
 const { indexText, memberContext, symbolsFromAst } = require("../out/index.js");
 const builtins = require("../out/builtins.js");
 const { resolveVersion } = require("../scripts/package.js");
-const { findTestFixtures } = require("../out/tests.js");
+const { findTestFixtures, findTestFixturesFromAst } = require("../out/tests.js");
+const { decodeImportGraph } = require("../out/importGraph.js");
 
 for (const value of ["pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"]) {
   assert.ok(builtins.cplusAnnotations.includes(value), `missing annotation completion: ${value}`);
@@ -124,3 +125,30 @@ const fixtures = findTestFixtures(fixtureSource);
 assert.deepEqual(fixtures.map(({ name }) => name), ["nested fixture", "plain C fixture"]);
 assert.equal(fixtureSource.slice(fixtures[0].start, fixtures[0].end).includes("if (1) { run(); }"), true);
 assert.ok(fixtures[0].end < fixtures[1].start);
+const astFixtureSource = String.raw`@test "quoted \"fixture\"" { }`;
+const fixtureNameStart = astFixtureSource.indexOf('"');
+const fixtureNameEnd = astFixtureSource.indexOf('" {', fixtureNameStart) + 1;
+const astFixtures = findTestFixturesFromAst(astFixtureSource, {
+  kind: "translation_unit",
+  syntaxKind: "translation_unit",
+  span: { startOffset: 0, endOffset: astFixtureSource.length },
+  children: [{
+    kind: "test",
+    syntaxKind: "cplus_test_declaration",
+    span: { startOffset: 0, endOffset: astFixtureSource.length },
+    children: [{
+      kind: "literal",
+      syntaxKind: "string_literal",
+      span: { startOffset: fixtureNameStart, endOffset: fixtureNameEnd }
+    }]
+  }]
+});
+assert.deepEqual(astFixtures, [{ name: 'quoted "fixture"', start: 0, end: astFixtureSource.length }]);
+assert.deepEqual(astFixtures, findTestFixtures(astFixtureSource), "AST and fallback fixture discovery should agree");
+const importGraph = decodeImportGraph({
+  schema: "cplus.imports.v1",
+  dependencyOrder: ["/project/lib.cp", "/project/main.cp"],
+  imports: [{ importer: "/project/main.cp", imported: "/project/lib.cp", location: { startLine: 1, startColumn: 1 } }]
+});
+assert.deepEqual(importGraph.imports.map(({ imported }) => imported), ["/project/lib.cp"]);
+assert.throws(() => decodeImportGraph({ schema: "cplus.imports.v0" }), /unsupported/);

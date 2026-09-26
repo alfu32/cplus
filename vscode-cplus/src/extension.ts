@@ -2,9 +2,11 @@ import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { clearTimeout, setTimeout } from "node:timers";
 import { CPlusAstNode, CPlusSymbol, indexText, memberContext, symbolsFromAst } from "./index";
-import { CPlusTestFixture, findTestFixtures } from "./tests";
+import { CPlusTestFixture, findTestFixtures, findTestFixturesFromAst } from "./tests";
+import { decodeImportGraph } from "./importGraph";
 import {
     builtinTestMacros,
     cKeywords,
@@ -50,6 +52,7 @@ function rangeFor(document: vscode.TextDocument, start: number, end: number): vs
 }
 
 const parserTrees = new Map<string, { version: number; source: string; root: CPlusAstNode }>();
+const parserTreeListeners = new Set<(document: vscode.TextDocument) => void>();
 
 class CPlusCompletionProvider implements vscode.CompletionItemProvider {
     provideCompletionItems(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionList {
@@ -258,7 +261,11 @@ function localDiagnostics(document: vscode.TextDocument): vscode.Diagnostic[] {
     return diagnostics;
 }
 
-async function compilerDiagnostics(document: vscode.TextDocument, collection: vscode.DiagnosticCollection): Promise<void> {
+async function compilerDiagnostics(
+    document: vscode.TextDocument,
+    collection: vscode.DiagnosticCollection,
+    includeCompiler = true
+): Promise<void> {
     const configuration = vscode.workspace.getConfiguration("cplus");
     if (document.uri.scheme !== "file") return;
     const version = document.version;
@@ -267,7 +274,7 @@ async function compilerDiagnostics(document: vscode.TextDocument, collection: vs
     if (configuration.get<boolean>("parserDiagnostics", false)) {
         const command = splitCommand(configuration.get<string>("parserCommand", "cplus parse"));
         await new Promise<void>((resolve) => {
-            execFile(command[0], [...command.slice(1), document.uri.fsPath], {
+            const child = execFile(command[0], [...command.slice(1), "--stdin", "--source", document.uri.fsPath], {
                 cwd: vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath,
                 maxBuffer: 16 * 1024 * 1024
             }, (_error, stdout) => {
@@ -282,7 +289,10 @@ async function compilerDiagnostics(document: vscode.TextDocument, collection: vs
                         }>;
                     };
                     if (document.version === version) {
-                        if (payload.ast) parserTrees.set(document.uri.toString(), { version, source: document.getText(), root: payload.ast });
+                        if (payload.ast) {
+                            parserTrees.set(document.uri.toString(), { version, source: document.getText(), root: payload.ast });
+                            parserTreeListeners.forEach((listener) => listener(document));
+                        }
                         for (const item of payload.diagnostics ?? []) {
                             const diagnostic = new vscode.Diagnostic(
                                 new vscode.Range(document.positionAt(item.span.startOffset), document.positionAt(item.span.endOffset)),
@@ -299,11 +309,13 @@ async function compilerDiagnostics(document: vscode.TextDocument, collection: vs
                 }
                 resolve();
             });
+            child.stdin.on("error", () => undefined);
+            child.stdin.end(document.getText());
         });
     }
 
     const compiler: vscode.Diagnostic[] = [];
-    if (configuration.get<boolean>("compilerDiagnostics", false)) {
+    if (includeCompiler && configuration.get<boolean>("compilerDiagnostics", false)) {
         const command = splitCommand(configuration.get<string>("compilerCommand", "cplus compile"));
         const extraArgs = configuration.get<string[]>("compilerArguments", []);
         const output = join(tmpdir(), "cplus-vscode-" + Date.now());
@@ -376,7 +388,12 @@ function registerTestSupport(context: vscode.ExtensionContext): void {
         const sourceItem = controller.createTestItem("file:" + key, document.uri.fsPath, document.uri);
         sourceItem.canResolveChildren = false;
         sourceItems.set(key, sourceItem);
-        for (const fixture of findTestFixtures(document.getText())) {
+        const source = document.getText();
+        const parsed = parserTrees.get(key);
+        const discovered = parsed?.version === document.version && parsed.source === source
+            ? findTestFixturesFromAst(source, parsed.root)
+            : findTestFixtures(source);
+        for (const fixture of discovered) {
             const id = key + "#" + fixture.start;
             const item = controller.createTestItem(id, fixture.name, document.uri);
             const range = new vscode.Range(document.positionAt(fixture.start), document.positionAt(fixture.end));
@@ -433,9 +450,15 @@ function registerTestSupport(context: vscode.ExtensionContext): void {
         }
     };
 
+    const parserTreeListener = (document: vscode.TextDocument): void => {
+        if (sourceItems.has(keyFor(document.uri))) discover(document);
+    };
+    parserTreeListeners.add(parserTreeListener);
+
     context.subscriptions.push(
         controller,
         runProfile,
+        new vscode.Disposable(() => parserTreeListeners.delete(parserTreeListener)),
         vscode.workspace.onDidOpenTextDocument(discover),
         vscode.workspace.onDidChangeTextDocument((event) => discover(event.document)),
         vscode.workspace.onDidSaveTextDocument(discover),
@@ -498,8 +521,73 @@ function registerMainRun(context: vscode.ExtensionContext): void {
     );
 }
 
+function registerImportGraph(context: vscode.ExtensionContext): void {
+    context.subscriptions.push(vscode.commands.registerCommand("cplus.showImportGraph", async (uri?: vscode.Uri) => {
+        const editor = vscode.window.activeTextEditor;
+        const document = uri ? await vscode.workspace.openTextDocument(uri) : editor?.document;
+        if (!document || document.uri.scheme !== "file") return;
+        if (document.isDirty && !(await document.save())) return;
+        const command = splitCommand(vscode.workspace.getConfiguration("cplus").get<string>("importGraphCommand", "cplus graph"));
+        if (!command.length) {
+            void vscode.window.showErrorMessage("Configure cplus.importGraphCommand to use C-plus import graphs.");
+            return;
+        }
+        const cancellation = new vscode.CancellationTokenSource();
+        let result: { code: number; output: string; cancelled: boolean };
+        try {
+            result = await execute(command[0], [...command.slice(1), document.uri.fsPath], cancellation.token);
+        } finally {
+            cancellation.dispose();
+        }
+        if (result.code !== 0) {
+            void vscode.window.showErrorMessage(result.output || "C-plus could not resolve the import graph.");
+            return;
+        }
+        try {
+            const graph = decodeImportGraph(JSON.parse(result.output));
+            const targets = [...new Set(graph.imports.map((edge) => edge.imported))];
+            if (!targets.length) {
+                void vscode.window.showInformationMessage("This C-plus source has no resolved imports.");
+                return;
+            }
+            type ImportPick = vscode.QuickPickItem & { path: string };
+            const picks: ImportPick[] = graph.imports.map((edge) => ({
+                label: basename(edge.imported),
+                description: `${basename(edge.importer)}:${edge.location.startLine}:${edge.location.startColumn}`,
+                detail: edge.imported,
+                path: edge.imported
+            }));
+            const selected = await vscode.window.showQuickPick(picks, { placeHolder: "Resolved C-plus imports (dependency edges)" });
+            if (selected) {
+                const imported = await vscode.workspace.openTextDocument(vscode.Uri.file(selected.path));
+                await vscode.window.showTextDocument(imported);
+            }
+        } catch (error) {
+            void vscode.window.showErrorMessage(error instanceof Error ? error.message : "Invalid C-plus import graph response.");
+        }
+    }));
+}
+
 export function activate(context: vscode.ExtensionContext): void {
     const diagnostics = vscode.languages.createDiagnosticCollection("cplus");
+    const pendingParserRuns = new Map<string, ReturnType<typeof setTimeout>>();
+    const scheduleParserDiagnostics = (document: vscode.TextDocument): void => {
+        if (document.languageId !== "cplus" || !vscode.workspace.getConfiguration("cplus").get<boolean>("parserDiagnostics", false)) return;
+        const key = document.uri.toString();
+        const previous = pendingParserRuns.get(key);
+        if (previous !== undefined) clearTimeout(previous);
+        pendingParserRuns.set(key, setTimeout(() => {
+            pendingParserRuns.delete(key);
+            void compilerDiagnostics(document, diagnostics, false);
+        }, 250));
+    };
+    const parseOnSave = (document: vscode.TextDocument): void => {
+        const key = document.uri.toString();
+        const previous = pendingParserRuns.get(key);
+        if (previous !== undefined) clearTimeout(previous);
+        pendingParserRuns.delete(key);
+        void compilerDiagnostics(document, diagnostics);
+    };
     context.subscriptions.push(
         diagnostics,
         vscode.languages.registerCompletionItemProvider("cplus", new CPlusCompletionProvider(), ".", ">", "@"),
@@ -508,11 +596,19 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.languages.registerReferenceProvider("cplus", new CPlusReferenceProvider()),
         vscode.languages.registerDocumentSymbolProvider("cplus", new CPlusDocumentSymbolProvider()),
         vscode.workspace.onDidOpenTextDocument((document) => diagnostics.set(document.uri, localDiagnostics(document))),
-        vscode.workspace.onDidChangeTextDocument((event) => diagnostics.set(event.document.uri, localDiagnostics(event.document))),
-        vscode.workspace.onDidSaveTextDocument((document) => compilerDiagnostics(document, diagnostics))
+        vscode.workspace.onDidChangeTextDocument((event) => {
+            diagnostics.set(event.document.uri, localDiagnostics(event.document));
+            scheduleParserDiagnostics(event.document);
+        }),
+        vscode.workspace.onDidSaveTextDocument(parseOnSave),
+        new vscode.Disposable(() => {
+            pendingParserRuns.forEach(clearTimeout);
+            pendingParserRuns.clear();
+        })
     );
     registerCommands(context, diagnostics);
     registerMainRun(context);
+    registerImportGraph(context);
     registerTestSupport(context);
     for (const document of vscode.workspace.textDocuments) {
         if (document.languageId === "cplus") diagnostics.set(document.uri, localDiagnostics(document));

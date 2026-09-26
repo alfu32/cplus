@@ -79,10 +79,11 @@ class CPlusStructMethodLoweringPass {
         }
         if (diagnostics.isNotEmpty()) return CPlusLoweringResult(source, diagnostics)
 
-        val edits = mutableListOf<CPlusMappedEdit>()
+        val replacements = linkedMapOf<CPlusAstNode, MappedText>()
+        val insertionsAfter = linkedMapOf<CPlusAstNode, MappedText>()
         methodsByTypeDefinition.forEach { (typeDefinition, loweredMethods) ->
             loweredMethods.forEach { (method, _) ->
-                edits += CPlusMappedEdit(method.span, MappedText.generated("", source.originAt(method.span.startOffset)))
+                replacements[method] = MappedText.generated("", source.originAt(method.span.startOffset))
             }
             val insertion = MappedTextBuilder()
             insertion.appendGenerated("\n", source.originAt(typeDefinition.span.endOffset))
@@ -91,13 +92,10 @@ class CPlusStructMethodLoweringPass {
                 insertion.append(loweredMethod)
             }
             insertion.appendGenerated("\n", source.originAt(typeDefinition.span.endOffset))
-            edits += CPlusMappedEdit(
-                ast.source.sourceFile.span(typeDefinition.span.endOffset, typeDefinition.span.endOffset),
-                insertion.build()
-            )
+            insertionsAfter[typeDefinition] = insertion.build()
         }
         return try {
-            CPlusLoweringResult(CPlusMappedAstEmitter().emit(ast, source, edits), emptyList())
+            CPlusLoweringResult(CPlusMappedAstEmitter().emit(ast, source, replacements, insertionsAfter), emptyList())
         } catch (failure: IllegalArgumentException) {
             CPlusLoweringResult(
                 source,

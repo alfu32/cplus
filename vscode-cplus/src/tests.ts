@@ -1,3 +1,5 @@
+import { CPlusAstNode } from "./index";
+
 export interface CPlusTestFixture {
     name: string;
     start: number;
@@ -49,4 +51,38 @@ export function findTestFixtures(source: string): CPlusTestFixture[] {
         if (name) fixtures.push({ name, start, end });
     }
     return fixtures;
+}
+
+/** Projects test fixtures from a current normalized parser tree, preserving UTF-16 spans. */
+export function findTestFixturesFromAst(source: string, root: CPlusAstNode): CPlusTestFixture[] {
+    const fixtures: CPlusTestFixture[] = [];
+    const visit = (node: CPlusAstNode): void => {
+        if (node.syntaxKind === "cplus_test_declaration") {
+            const nameNode = node.children?.find((child) =>
+                child.syntaxKind === "string_literal" || child.syntaxKind === "identifier");
+            if (nameNode) {
+                const rawName = source.slice(nameNode.span.startOffset, nameNode.span.endOffset);
+                const name = nameNode.syntaxKind === "string_literal" ? decodeStringLiteral(rawName) : rawName.trim();
+                if (name) fixtures.push({ name, start: node.span.startOffset, end: node.span.endOffset });
+            }
+        }
+        node.children?.forEach(visit);
+    };
+    visit(root);
+    return fixtures;
+}
+
+function decodeStringLiteral(literal: string): string {
+    const content = literal.startsWith('"') && literal.endsWith('"') ? literal.slice(1, -1) : literal;
+    let decoded = "";
+    for (let index = 0; index < content.length; index++) {
+        const character = content[index];
+        if (character !== "\\" || index + 1 === content.length) {
+            decoded += character;
+            continue;
+        }
+        const escaped = content[++index];
+        decoded += escaped === "n" ? "\n" : escaped === "r" ? "\r" : escaped === "t" ? "\t" : escaped;
+    }
+    return decoded;
 }
