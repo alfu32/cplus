@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CPlusSymbol, indexText, memberContext } from "./index";
+import { CPlusAstNode, CPlusSymbol, indexText, memberContext, symbolsFromAst } from "./index";
 import { CPlusTestFixture, findTestFixtures } from "./tests";
 import {
     builtinTestMacros,
@@ -48,6 +48,8 @@ function wordAt(document: vscode.TextDocument, position: vscode.Position): strin
 function rangeFor(document: vscode.TextDocument, start: number, end: number): vscode.Range {
     return new vscode.Range(document.positionAt(start), document.positionAt(end));
 }
+
+const parserTrees = new Map<string, { version: number; source: string; root: CPlusAstNode }>();
 
 class CPlusCompletionProvider implements vscode.CompletionItemProvider {
     provideCompletionItems(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionList {
@@ -187,8 +189,12 @@ class CPlusReferenceProvider implements vscode.ReferenceProvider {
 
 class CPlusDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
     provideDocumentSymbols(document: vscode.TextDocument): vscode.DocumentSymbol[] {
-        const index = indexText(document.getText());
-        return index.symbols
+        const source = document.getText();
+        const cached = parserTrees.get(document.uri.toString());
+        const symbols = cached?.version === document.version && cached.source === source
+            ? symbolsFromAst(source, cached.root)
+            : indexText(source).symbols;
+        return symbols
             .filter((symbol) => symbol.kind !== "field" && symbol.kind !== "method" && symbol.kind !== "comptime")
             .map((symbol) => {
                 const children = (symbol.children ?? []).map((child) =>
@@ -267,6 +273,7 @@ async function compilerDiagnostics(document: vscode.TextDocument, collection: vs
             }, (_error, stdout) => {
                 try {
                     const payload = JSON.parse(stdout) as {
+                        ast?: CPlusAstNode;
                         diagnostics?: Array<{
                             code?: string;
                             message: string;
@@ -275,6 +282,7 @@ async function compilerDiagnostics(document: vscode.TextDocument, collection: vs
                         }>;
                     };
                     if (document.version === version) {
+                        if (payload.ast) parserTrees.set(document.uri.toString(), { version, source: document.getText(), root: payload.ast });
                         for (const item of payload.diagnostics ?? []) {
                             const diagnostic = new vscode.Diagnostic(
                                 new vscode.Range(document.positionAt(item.span.startOffset), document.positionAt(item.span.endOffset)),

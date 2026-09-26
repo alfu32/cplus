@@ -41,12 +41,30 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Build native parser and run corpus/JVM tests
         shell: bash
+        env:
+          PARSER_HOST: ${{ matrix.host }}
         run: |
           npm install --global tree-sitter-cli@0.25.10
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             export PATH="$(cygpath -u "$(npm config get prefix)"):$PATH"
           fi
           ./gradlew :parser-tree-sitter:jvmTest :parser-tree-sitter:testTreeSitterGrammar --no-daemon
+          host_os="${PARSER_HOST%%-*}"
+          host_arch="${PARSER_HOST#*-}"
+          if [[ "$host_arch" == "x86_64" ]]; then host_arch=x64; else host_arch=aarch64; fi
+          case "$host_os" in linux) library=libktreesitter-c.so ;; macos) library=libktreesitter-c.dylib ;; windows) library=ktreesitter-c.dll ;; esac
+          library_path="$(find parser-tree-sitter/build -type f -name "$library" -print -quit)"
+          test -n "$library_path"
+          destination="parser-tree-sitter/build/parser-native-payload/lib/$host_os/$host_arch"
+          mkdir -p "$destination"
+          cp "$library_path" "$destination/$library"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tree-sitter-native-${{ matrix.host }}
+          path: parser-tree-sitter/build/parser-native-payload/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
   prepare-tinycc:
     name: Download latest TinyCC CLI payloads
@@ -67,7 +85,9 @@ jobs:
 
   cli-artifacts:
     name: Build and test CLI JARs
-    needs: prepare-tinycc
+    needs:
+      - prepare-tinycc
+      - parser-host-matrix
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +95,11 @@ jobs:
         with:
           name: tinycc-cli-payloads
           path: lib
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tree-sitter-native-*
+          path: parser-tree-sitter/build/parser-native-payload
+          merge-multiple: true
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -130,6 +155,11 @@ jobs:
           test "$cross_targets" = "$expected_targets"
           sysroots="$(jar tf "$cross_jar" | grep '/tinycc/sysroot/' || true)"
           test -z "$sysroots"
+
+          for jar in "$bare_jar" "$cross_jar"; do
+            parser_hosts="$(jar tf "$jar" | grep -E '^lib/(linux|macos|windows)/(x64|aarch64)/(libktreesitter-c\.so|libktreesitter-c\.dylib|ktreesitter-c\.dll)$' | sort -u | wc -l)"
+            test "$parser_hosts" -eq 6
+          done
 
           java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" help >/dev/null
           java -Dcplus.home="$PWD/build/distribution-check/cross" -jar "$cross_jar" help >/dev/null

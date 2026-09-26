@@ -75,7 +75,14 @@ data class CPlusCatchBinding(
 data class CPlusSemanticIndex(
     val symbols: List<CPlusSymbol>,
     val resolvedCalls: List<CPlusResolvedCall>,
-    val catchBindings: List<CPlusCatchBinding>
+    val catchBindings: List<CPlusCatchBinding>,
+    val diagnostics: List<CPlusSemanticDiagnostic> = emptyList()
+)
+
+data class CPlusSemanticDiagnostic(
+    val code: String,
+    val message: String,
+    val span: SourceSpan
 )
 
 /** Conservative declaration index. It resolves only method calls whose receiver type is explicit. */
@@ -85,6 +92,7 @@ class CPlusSemanticAnalyzer {
         val methodsByType = LinkedHashMap<String, MutableList<CPlusSymbol>>()
         val typeAliases = LinkedHashMap<String, String>()
         val anonymousStructNames = LinkedHashMap<Int, String>()
+        val diagnostics = mutableListOf<CPlusSemanticDiagnostic>()
 
         ast.root.descendantsAndSelf()
             .filter { it.syntaxKind == "type_definition" }
@@ -362,9 +370,24 @@ class CPlusSemanticAnalyzer {
                     val arguments = node.children.firstOrNull { it.fieldName == "arguments" }
                     val openingParen = arguments?.children?.firstOrNull { it.syntaxKind == "(" }
                     val closingParen = arguments?.children?.lastOrNull { it.syntaxKind == ")" }
-                    if (method != null && (method.kind == CPlusSymbolKind.STATIC_METHOD) == isStatic &&
-                        receiver != null && operator != null && memberNode != null &&
+                    if (method != null && receiver != null && operator != null && memberNode != null &&
                         openingParen != null && closingParen != null) {
+                        val declarationIsStatic = method.kind == CPlusSymbolKind.STATIC_METHOD
+                        if (declarationIsStatic != isStatic) {
+                            diagnostics += if (declarationIsStatic) {
+                                CPlusSemanticDiagnostic(
+                                    "CPLUS_STATIC_METHOD_REQUIRES_TYPE_RECEIVER",
+                                    "static method '${method.name}' must be called through type '${method.ownerType}'",
+                                    node.span
+                                )
+                            } else {
+                                CPlusSemanticDiagnostic(
+                                    "CPLUS_INSTANCE_METHOD_REQUIRES_VALUE_RECEIVER",
+                                    "instance method '${method.name}' requires an instance receiver of '${method.ownerType}'",
+                                    node.span
+                                )
+                            }
+                        } else {
                         val innerArguments = ast.source.text.substring(openingParen.span.endOffset, closingParen.span.startOffset)
                         resolvedCalls += CPlusResolvedCall(
                             method.name, owner!!, isStatic, node.span, method,
@@ -373,6 +396,7 @@ class CPlusSemanticAnalyzer {
                             openingParen.span.endOffset,
                             SourceMasker.mask(innerArguments).trim().isNotEmpty()
                         )
+                        }
                     }
                 }
             }
@@ -411,7 +435,7 @@ class CPlusSemanticAnalyzer {
             node.children.forEach { visit(it, visibleVariables, ownerType) }
         }
         visit(ast.root, emptyMap(), null)
-        return CPlusSemanticIndex(symbols, resolvedCalls, catchBindings)
+        return CPlusSemanticIndex(symbols, resolvedCalls, catchBindings, diagnostics)
     }
 
     private fun functionTypeOf(

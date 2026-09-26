@@ -28,6 +28,99 @@ export interface CPlusMemberContext {
     isStatic: boolean;
 }
 
+export interface CPlusAstSpan {
+    startOffset: number;
+    endOffset: number;
+}
+
+export interface CPlusAstNode {
+    kind: string;
+    syntaxKind?: string;
+    field?: string | null;
+    span: CPlusAstSpan;
+    children?: CPlusAstNode[];
+}
+
+function descendants(node: CPlusAstNode): CPlusAstNode[] {
+    return (node.children ?? []).flatMap((child) => [child, ...descendants(child)]);
+}
+
+function nodeName(source: string, node?: CPlusAstNode): string | undefined {
+    if (!node) return undefined;
+    const name = source.slice(node.span.startOffset, node.span.endOffset).trim();
+    return /^[A-Za-z_][A-Za-z_0-9]*$/.test(name) ? name : undefined;
+}
+
+/** Project the normalized parser tree into the editor's stable outline-symbol model. */
+export function symbolsFromAst(source: string, root: CPlusAstNode): CPlusSymbol[] {
+    const symbols: CPlusSymbol[] = [];
+    const identifier = (node: CPlusAstNode, syntaxKinds?: Set<string>): CPlusAstNode | undefined =>
+        descendants(node).find((child) => child.kind === "identifier" && child.field === "declarator" &&
+            (!syntaxKinds || syntaxKinds.has(child.syntaxKind ?? "")));
+
+    for (const declaration of root.children ?? []) {
+        if (declaration.kind === "type_alias") {
+            const structure = declaration.children?.find((child) => child.kind === "struct_declaration");
+            if (!structure) continue;
+            const aliasNode = declaration.children?.find((child) => child.field === "declarator" && child.kind === "identifier");
+            const typeName = nodeName(source, aliasNode) ?? nodeName(source, identifier(structure, new Set(["type_identifier"]))) ?? "anonymous_struct";
+            const type: CPlusSymbol = {
+                name: typeName,
+                kind: "type",
+                detail: "struct " + typeName,
+                start: declaration.span.startOffset,
+                end: declaration.span.endOffset,
+                children: []
+            };
+            const body = structure.children?.find((child) => child.field === "body");
+            for (const member of body?.children ?? []) {
+                if (member.kind === "field_declaration") {
+                    const nameNode = identifier(member);
+                    const name = nodeName(source, nameNode);
+                    if (!name || !nameNode) continue;
+                    const memberText = source.slice(member.span.startOffset, member.span.endOffset).replace(/;\s*$/, "").trim();
+                    type.children?.push({
+                        name,
+                        kind: "field",
+                        detail: memberText,
+                        owner: typeName,
+                        start: nameNode.span.startOffset,
+                        end: nameNode.span.endOffset
+                    });
+                } else if (member.kind === "method_declaration") {
+                    const nameNode = identifier(member);
+                    const name = nodeName(source, nameNode);
+                    if (!name || !nameNode) continue;
+                    const header = source.slice(member.span.startOffset, member.span.endOffset).split("{")[0].trim().replace(/;$/, "");
+                    type.children?.push({
+                        name,
+                        kind: "method",
+                        detail: header,
+                        owner: typeName,
+                        isStatic: descendants(member).some((child) => child.syntaxKind === "cplus_static_modifier"),
+                        start: nameNode.span.startOffset,
+                        end: nameNode.span.endOffset
+                    });
+                }
+            }
+            symbols.push(type);
+        } else if (declaration.kind === "function_declaration") {
+            const nameNode = identifier(declaration);
+            const name = nodeName(source, nameNode);
+            if (!name || !nameNode) continue;
+            const header = source.slice(declaration.span.startOffset, declaration.span.endOffset).split("{")[0].trim().replace(/;$/, "");
+            symbols.push({
+                name,
+                kind: "function",
+                detail: header,
+                start: nameNode.span.startOffset,
+                end: nameNode.span.endOffset
+            });
+        }
+    }
+    return symbols;
+}
+
 function cleanName(name: string): string {
     return name.startsWith("@") ? name.slice(1) : name;
 }

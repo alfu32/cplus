@@ -8,6 +8,7 @@ enum class CPlusAstKind {
     ENUM_DECLARATION,
     TYPE_ALIAS,
     FIELD_DECLARATION,
+    ENUMERATOR,
     VARIABLE_DECLARATION,
     METHOD_DECLARATION,
     FUNCTION_DECLARATION,
@@ -30,6 +31,10 @@ enum class CPlusAstKind {
     CALL_EXPRESSION,
     FIELD_ACCESS,
     TYPE,
+    DECLARATOR,
+    INITIALIZER,
+    ATTRIBUTE,
+    DESIGNATOR,
     IDENTIFIER,
     LITERAL,
     EXPRESSION,
@@ -91,8 +96,17 @@ class CPlusAstAdapter {
             "struct_specifier" -> CPlusAstKind.STRUCT_DECLARATION
             "union_specifier" -> CPlusAstKind.UNION_DECLARATION
             "enum_specifier" -> CPlusAstKind.ENUM_DECLARATION
+            "enumerator", "enumerator_list" -> CPlusAstKind.ENUMERATOR
             "type_definition" -> CPlusAstKind.TYPE_ALIAS
             "field_declaration" -> CPlusAstKind.FIELD_DECLARATION
+            "init_declarator", "pointer_declarator", "array_declarator", "function_declarator",
+            "parenthesized_declarator", "attributed_declarator", "abstract_array_declarator",
+            "abstract_function_declarator", "abstract_parenthesized_declarator",
+            "abstract_pointer_declarator", "_abstract_declarator", "_declarator",
+            "_field_declarator", "_type_declarator", "cplus_method_declarator" -> CPlusAstKind.DECLARATOR
+            "initializer_list", "initializer_pair" -> CPlusAstKind.INITIALIZER
+            "attribute", "attribute_declaration", "attribute_specifier", "__attribute", "__attribute__" -> CPlusAstKind.ATTRIBUTE
+            "field_designator", "subscript_designator", "subscript_range_designator" -> CPlusAstKind.DESIGNATOR
             "cplus_method_definition", "cplus_throws_annotated_method" -> CPlusAstKind.METHOD_DECLARATION
             "function_definition" -> CPlusAstKind.FUNCTION_DECLARATION
             "cplus_function_declaration" -> CPlusAstKind.FUNCTION_DECLARATION
@@ -126,9 +140,11 @@ class CPlusAstAdapter {
             "preproc_if", "preproc_ifdef", "preproc_else", "preproc_elif", "preproc_elifdef",
             "preproc_elifndef", "preproc_endif" -> CPlusAstKind.PREPROCESSOR
             "expression_statement", "return_statement", "empty_statement" -> CPlusAstKind.STATEMENT
-            "binary_expression", "assignment_expression", "conditional_expression",
+            "expression", "binary_expression", "assignment_expression", "conditional_expression",
             "unary_expression", "update_expression", "cast_expression", "comma_expression",
-            "parenthesized_expression", "sizeof_expression", "alignof_expression" -> CPlusAstKind.EXPRESSION
+            "parenthesized_expression", "compound_literal_expression", "extension_expression",
+            "generic_expression", "gnu_asm_expression", "offsetof_expression", "pointer_expression",
+            "sizeof_expression", "alignof_expression", "subscript_expression" -> CPlusAstKind.EXPRESSION
             "identifier", "field_identifier", "type_identifier" -> CPlusAstKind.IDENTIFIER
             "primitive_type", "sized_type_specifier", "type_qualifier", "storage_class_specifier",
             "type_qualifier_list", "type_descriptor" -> CPlusAstKind.TYPE

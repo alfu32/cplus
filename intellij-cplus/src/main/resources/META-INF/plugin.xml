@@ -12,6 +12,7 @@
         <fileType name="C-plus" language="C-plus" implementationClass="cplus.intellij.CPlusFileType" fieldName="INSTANCE" extensions="cp;c+" />
         <lang.parserDefinition language="C-plus" implementationClass="cplus.intellij.CPlusParserDefinition" />
         <lang.syntaxHighlighterFactory language="C-plus" implementationClass="cplus.intellij.CPlusSyntaxHighlighterFactory" />
+        <annotator language="C-plus" implementationClass="cplus.intellij.CPlusParserExternalAnnotator" />
         <completion.contributor language="C-plus" implementationClass="cplus.intellij.CPlusCompletionContributor" />
         <gotoDeclarationHandler implementationClass="cplus.intellij.CPlusGotoDeclarationHandler" />
         <runLineMarkerContributor language="C-plus" implementationClass="cplus.intellij.CPlusTestRunLineMarkerContributor" />

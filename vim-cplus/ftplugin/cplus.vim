@@ -12,10 +12,19 @@ command! -buffer -nargs=* CPlusTranscode call cplus#Run('transcode', <q-args>)
 command! -buffer -nargs=* CPlusCompile call cplus#Run('compile', <q-args>)
 command! -buffer -nargs=* CPlusRun call cplus#Run('run', <q-args>)
 command! -buffer CPlusCheck call cplus#Check()
+command! -buffer CPlusParse call cplus#Parse()
+command! -buffer CPlusSymbols call cplus#Symbols()
 
 if get(g:, 'cplus_check_on_write', 0)
   augroup cplus_buffer_check
     autocmd! * <buffer>
     autocmd BufWritePost <buffer> call cplus#Check()
+  augroup END
+endif
+
+if get(g:, 'cplus_parse_on_write', 0)
+  augroup cplus_buffer_parse
+    autocmd! * <buffer>
+    autocmd BufWritePost <buffer> call cplus#Parse()
   augroup END
 endif

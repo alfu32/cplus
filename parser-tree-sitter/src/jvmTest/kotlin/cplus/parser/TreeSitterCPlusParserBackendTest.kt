@@ -95,8 +95,10 @@ class TreeSitterCPlusParserBackendTest {
             #include <stddef.h>
             typedef struct record_t { int field; } record_t;
             union payload { int number; char byte; };
-            enum state { STATE_OFF, STATE_ON };
+            enum state { STATE_OFF = 0, STATE_ON };
             int global_value;
+            int initialized[2] = { [0] = 7 };
+            __attribute__((unused)) int attributed;
             int prototype(int value);
             int main(void) { while (global_value) { global_value--; } return 0; }
         """.trimIndent()
@@ -115,6 +117,11 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(cplus.CPlusAstKind.UNION_DECLARATION in kinds)
         assertTrue(cplus.CPlusAstKind.ENUM_DECLARATION in kinds)
         assertTrue(cplus.CPlusAstKind.FIELD_DECLARATION in kinds)
+        assertTrue(cplus.CPlusAstKind.ENUMERATOR in kinds)
+        assertTrue(cplus.CPlusAstKind.DECLARATOR in kinds)
+        assertTrue(cplus.CPlusAstKind.INITIALIZER in kinds)
+        assertTrue(cplus.CPlusAstKind.DESIGNATOR in kinds)
+        assertTrue(cplus.CPlusAstKind.ATTRIBUTE in kinds)
         assertTrue(cplus.CPlusAstKind.VARIABLE_DECLARATION in kinds)
         assertTrue(cplus.CPlusAstKind.FUNCTION_DECLARATION in kinds)
         assertTrue(cplus.CPlusAstKind.PREPROCESSOR in kinds)
@@ -601,6 +608,27 @@ class TreeSitterCPlusParserBackendTest {
             val process = ProcessBuilder(
                 "node", "-e",
                 "const j=JSON.parse(require('fs').readFileSync(0,'utf8'));if(j.schema!=='cplus.parse.v1'||j.ast.span.endOffset!==${text.length})process.exit(1)"
+            ).start()
+            process.outputStream.bufferedWriter().use { it.write(json) }
+            val errors = process.errorStream.bufferedReader().use { it.readText() }
+            assertEquals(0, process.waitFor(), errors)
+        }
+    }
+
+    @Test
+    fun parserJsonKeepsRecoveredDiagnosticsValidAndIncludesTheirSpans() {
+        val snapshot = sources.open(SourceId.named("broken-\"source\".cp"), "int main( { return 0; }")
+        val result = backend.parse(snapshot, cplus.CPlusParseOptions(editorMode = true))
+        val json = CPlusParseJson.encode(result)
+
+        assertTrue(result.diagnostics.isNotEmpty(), result.toString())
+        assertTrue(json.contains("\"diagnostics\":[{\"code\":"), json)
+        assertTrue(json.contains("\"severity\":\"error\",\"span\":{"), json)
+        val nodeAvailable = runCatching { ProcessBuilder("node", "--version").start().waitFor() == 0 }.getOrDefault(false)
+        if (nodeAvailable) {
+            val process = ProcessBuilder(
+                "node", "-e",
+                "const j=JSON.parse(require('fs').readFileSync(0,'utf8'));if(j.diagnostics.length===0||j.diagnostics[0].span.startLine!==1)process.exit(1)"
             ).start()
             process.outputStream.bufferedWriter().use { it.write(json) }
             val errors = process.errorStream.bufferedReader().use { it.readText() }
@@ -1142,6 +1170,41 @@ class TreeSitterCPlusParserBackendTest {
 
         assertEquals("CPLUS_METHOD_RECEIVER_NAME", result.diagnostics.single().code)
         assertEquals(text, result.source.text)
+    }
+
+    @Test
+    fun diagnosesStaticAndInstanceCallsWithTheWrongReceiverKind() {
+        val text = """
+            typedef struct counter_t {
+                pub int get(borrowed *self);
+                static pub counter_t* create(void);
+            } counter_t;
+            int main(void) {
+                counter_t value;
+                value.create();
+                counter_t.get();
+                value.get();
+                counter_t.create();
+                return 0;
+            }
+        """.trimIndent()
+        val snapshot = sources.open(SourceId.named("wrong-receiver-kind.cp"), text)
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val index = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(
+            listOf(
+                "CPLUS_STATIC_METHOD_REQUIRES_TYPE_RECEIVER",
+                "CPLUS_INSTANCE_METHOD_REQUIRES_VALUE_RECEIVER"
+            ),
+            index.diagnostics.map { it.code }
+        )
+        assertEquals(listOf("value.create()", "counter_t.get()"), index.diagnostics.map {
+            text.substring(it.span.startOffset, it.span.endOffset)
+        })
+        assertEquals(listOf("get", "create"), index.resolvedCalls.map { it.methodName })
     }
 
     @Test

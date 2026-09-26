@@ -25,6 +25,7 @@ object CPlusParseJson {
                 append("\"code\":").append(string(diagnostic.code)).append(',')
                 append("\"message\":").append(string(diagnostic.message)).append(',')
                 append("\"severity\":").append(string(diagnostic.severity.name.lowercase())).append(',')
+                append("\"span\":")
                 appendSpan(diagnostic.span)
                 append('}')
             }

@@ -18,15 +18,16 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
     data class State(
         var compilerCommand: String = "cplus compile",
         var runnerCommand: String = "cplus run",
-        var testProgram: String = "cplus test"
+        var testProgram: String = "cplus test",
+        var parserCommand: String = ""
     )
 
     private var state = State()
     override fun getState(): State = state
     override fun loadState(state: State) { this.state = state }
     fun current(): State = state
-    fun update(compiler: String, runner: String, program: String) {
-        state = State(compiler, runner, program)
+    fun update(compiler: String, runner: String, program: String, parser: String) {
+        state = State(compiler, runner, program, parser)
     }
 
     companion object {
@@ -39,6 +40,7 @@ class CPlusSettingsConfigurable : Configurable {
     private var compiler = JTextField()
     private var runner = JTextField()
     private var testProgram = JTextField()
+    private var parser = JTextField()
 
     override fun getDisplayName(): String = "C-plus"
 
@@ -46,8 +48,14 @@ class CPlusSettingsConfigurable : Configurable {
         compiler = JTextField(CPlusSettings.getInstance().current().compilerCommand)
         runner = JTextField(CPlusSettings.getInstance().current().runnerCommand)
         testProgram = JTextField(CPlusSettings.getInstance().current().testProgram)
+        parser = JTextField(CPlusSettings.getInstance().current().parserCommand)
         return JPanel(GridBagLayout()).apply {
-            val fields = listOf("Compiler command" to compiler, "Runner command" to runner, "Test program command" to testProgram)
+            val fields = listOf(
+                "Compiler command" to compiler,
+                "Runner command" to runner,
+                "Test program command" to testProgram,
+                "Parser command (optional)" to parser
+            )
             fields.forEachIndexed { row, (label, field) ->
                 val labelConstraints = GridBagConstraints().apply {
                     gridx = 0; gridy = row * 2; anchor = GridBagConstraints.WEST
@@ -69,11 +77,12 @@ class CPlusSettingsConfigurable : Configurable {
 
     override fun isModified(): Boolean {
         val state = CPlusSettings.getInstance().current()
-        return compiler.text != state.compilerCommand || runner.text != state.runnerCommand || testProgram.text != state.testProgram
+        return compiler.text != state.compilerCommand || runner.text != state.runnerCommand ||
+            testProgram.text != state.testProgram || parser.text != state.parserCommand
     }
 
     override fun apply() {
-        CPlusSettings.getInstance().update(compiler.text.trim(), runner.text.trim(), testProgram.text.trim())
+        CPlusSettings.getInstance().update(compiler.text.trim(), runner.text.trim(), testProgram.text.trim(), parser.text.trim())
     }
 
     override fun reset() {
@@ -81,6 +90,7 @@ class CPlusSettingsConfigurable : Configurable {
         compiler.text = state.compilerCommand
         runner.text = state.runnerCommand
         testProgram.text = state.testProgram
+        parser.text = state.parserCommand
     }
 
     override fun disposeUIResources() { panel = null }

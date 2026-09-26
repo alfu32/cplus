@@ -87,8 +87,13 @@ val installHostParserLibrary = tasks.register<Copy>("installHostParserLibrary") 
     include("libktreesitter-c.so", "libktreesitter-c.dylib", "ktreesitter-c.dll")
 }
 
-tasks.named("jvmProcessResources") {
+val parserNativePayloadDirectory = layout.buildDirectory.dir("parser-native-payload")
+
+tasks.named<Copy>("jvmProcessResources") {
     dependsOn(installHostParserLibrary)
+    // CI stages the six independently built host libraries here before assembling the
+    // platform-neutral CLI distribution. Local builds simply contribute their host library.
+    from(parserNativePayloadDirectory)
 }
 
 tasks.withType<Test>().configureEach {

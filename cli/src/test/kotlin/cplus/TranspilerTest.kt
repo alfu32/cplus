@@ -32,6 +32,7 @@ class TranspilerTest {
             assertEquals(1, malformedStatus)
             assertTrue(malformedOutput.toString().contains("\"diagnostics\":[{"), malformedOutput.toString())
             assertTrue(malformedOutput.toString().contains("\"severity\":\"error\""), malformedOutput.toString())
+            assertTrue(malformedOutput.toString().contains("\"span\":{"), malformedOutput.toString())
         } finally {
             Files.deleteIfExists(directory.resolve("valid.cp"))
             Files.deleteIfExists(directory.resolve("malformed.cp"))
