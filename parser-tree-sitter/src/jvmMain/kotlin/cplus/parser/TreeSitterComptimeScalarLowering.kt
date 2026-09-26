@@ -17,12 +17,54 @@ class TreeSitterComptimeScalarLowering {
         require(parsed.source.text == source.text) { "AST and mapped source must contain the same snapshot text" }
 
         val values = mutableListOf<ValueDeclaration>()
+        val scalarFunctions = mutableListOf<ScalarFunctionDeclaration>()
         val inlineExpressions = mutableListOf<CPlusSyntaxNode>()
         val scopedValues = mutableListOf<CPlusSyntaxNode>()
         val declarationDiagnostics = mutableListOf<CPlusLoweringDiagnostic>()
+        val comptimeIndex = cplus.CPlusComptimeIndexer().index(cplus.CPlusAstAdapter().adapt(parsed))
         fun collect(node: CPlusSyntaxNode, parent: CPlusSyntaxNode?, dormant: Boolean, moduleScope: Boolean) {
-            val isDormant = dormant || node.kind in DORMANT_REGIONS
-            if (!isDormant && node.kind == "cplus_comptime_value") {
+            val isGeneratorDefinition = node.kind in GENERATOR_DEFINITIONS
+            val isDormant = dormant || (node.kind in DORMANT_REGIONS && !isGeneratorDefinition)
+            if (!isDormant && node.kind == "cplus_comptime_function_definition" && moduleScope) {
+                val indexed = comptimeIndex.constructs.firstOrNull {
+                    it.syntaxKind == node.kind && it.span.startOffset == node.span.startOffset
+                }
+                val resultType = node.children.firstOrNull { it.fieldName == "result_kind" }
+                    ?.let { parsed.source.text.substring(it.span.startOffset, it.span.endOffset).trim() }
+                if (resultType in SUPPORTED_INTEGER_TYPES) {
+                    val body = node.children.firstOrNull { it.fieldName == "body" }
+                    val returnStatements = body?.let(::descendants)
+                        ?.filter { it.kind == "return_statement" }
+                        ?.toList().orEmpty()
+                    val bodyItems = body?.children.orEmpty().filter { it.named && it.kind != "comment" }
+                    val returnStatement = returnStatements.singleOrNull()
+                    val returnExpression = returnStatement?.children?.singleOrNull { it.named && it.kind != "comment" }
+                    if (body == null || bodyItems.size != 1 || bodyItems.singleOrNull() != returnStatement || returnExpression == null) {
+                        declarationDiagnostics += diagnostic(
+                            "CPLUS_COMPTIME_SCALAR_FUNCTION_BODY",
+                            "scalar comptime functions in this prototype must contain exactly one return expression",
+                            node.span
+                        )
+                    } else if (indexed == null || indexed.parameters.any { parameter ->
+                            parameter.genericType || parameter.name == null || parameter.typeText !in SUPPORTED_INTEGER_TYPES
+                        }
+                    ) {
+                        declarationDiagnostics += diagnostic(
+                            "CPLUS_COMPTIME_SCALAR_FUNCTION_PARAMETER",
+                            "scalar comptime functions require named integer or bool parameters",
+                            node.span
+                        )
+                    } else {
+                        scalarFunctions += ScalarFunctionDeclaration(
+                            node = node,
+                            replacement = parent?.takeIf { it.kind == "cplus_comptime_declaration" } ?: node,
+                            name = indexed.symbol.orEmpty(),
+                            parameterNames = indexed.parameters.mapNotNull { it.name },
+                            returnExpression = returnExpression
+                        )
+                    }
+                }
+            } else if (!isDormant && node.kind == "cplus_comptime_value") {
                 val nameNode = node.children.firstOrNull { it.fieldName == "name" }
                 if (nameNode != null) {
                     if (!moduleScope) {
@@ -42,7 +84,8 @@ class TreeSitterComptimeScalarLowering {
                 inlineExpressions += node
             }
             val nestedModuleScope = moduleScope && node.kind in MODULE_SCOPE_NODES
-            node.children.forEach { collect(it, node, isDormant, nestedModuleScope) }
+            val childrenAreDormant = isDormant || isGeneratorDefinition
+            node.children.forEach { collect(it, node, childrenAreDormant, nestedModuleScope) }
         }
         collect(parsed.root, null, false, true)
         if (scopedValues.isNotEmpty()) {
@@ -58,12 +101,19 @@ class TreeSitterComptimeScalarLowering {
             )
         }
         if (declarationDiagnostics.isNotEmpty()) return TreeSitterScalarLoweringResult(source, declarationDiagnostics)
-        if (values.isEmpty() && inlineExpressions.isEmpty()) {
+        if (values.isEmpty() && scalarFunctions.isEmpty() && inlineExpressions.isEmpty()) {
             return TreeSitterScalarLoweringResult(source, emptyList())
         }
 
-        val evaluator = ScalarEvaluator(parsed.source.text, values)
+        val evaluator = ScalarEvaluator(parsed.source.text, values, scalarFunctions)
         val replacements = mutableListOf<Replacement>()
+        scalarFunctions.forEach { function ->
+            replacements += Replacement(
+                function.replacement.span.startOffset,
+                function.replacement.span.endOffset,
+                MappedText.generated("", source.originAt(function.replacement.span.startOffset))
+            )
+        }
         values.forEach { declaration ->
             if (declaration.name.isBlank()) {
                 evaluator.diagnostics += diagnostic(
@@ -135,13 +185,16 @@ class TreeSitterComptimeScalarLowering {
 
     private class ScalarEvaluator(
         private val text: String,
-        declarations: List<ValueDeclaration>
+        declarations: List<ValueDeclaration>,
+        scalarFunctions: List<ScalarFunctionDeclaration>
     ) {
         val diagnostics = mutableListOf<CPlusLoweringDiagnostic>()
         private val byName = linkedMapOf<String, ValueDeclaration>()
+        private val functionsByName = linkedMapOf<String, ScalarFunctionDeclaration>()
         private val values = linkedMapOf<String, Scalar>()
         private val failedValues = linkedSetOf<String>()
         private val visiting = linkedSetOf<String>()
+        private val activeFunctions = linkedSetOf<String>()
 
         init {
             declarations.forEach { declaration ->
@@ -150,6 +203,15 @@ class TreeSitterComptimeScalarLowering {
                         "CPLUS_COMPTIME_VALUE_DUPLICATE",
                         "duplicate comptime scalar name '${declaration.name}'",
                         declaration.node.span
+                    )
+                }
+            }
+            scalarFunctions.forEach { function ->
+                if (functionsByName.putIfAbsent(function.name, function) != null) {
+                    diagnostics += diagnostic(
+                        "CPLUS_COMPTIME_SCALAR_FUNCTION_DUPLICATE",
+                        "duplicate scalar comptime function '${function.name}'",
+                        function.node.span
                     )
                 }
             }
@@ -168,32 +230,33 @@ class TreeSitterComptimeScalarLowering {
                 return null
             }
             val expression = declaration.expression
-            val result = expression?.let(::evaluate)
+            val result = expression?.let { evaluate(it) }
             visiting.remove(name)
             if (result != null) values[name] = result else failedValues += name
             return result
         }
 
-        fun evaluate(node: CPlusSyntaxNode): Scalar? = when (node.kind) {
-            "expression" -> node.children.singleOrNull { it.named }?.let(::evaluate) ?: unsupported(node)
+        fun evaluate(node: CPlusSyntaxNode, locals: Map<String, Scalar> = emptyMap()): Scalar? = when (node.kind) {
+            "expression" -> node.children.singleOrNull { it.named }?.let { evaluate(it, locals) } ?: unsupported(node)
             "number_literal" -> parseInteger(textOf(node))
                 ?: fail("CPLUS_COMPTIME_SCALAR_LITERAL", "only integer scalar literals are currently supported", node)
             "true" -> Scalar.Bool(true)
             "false" -> Scalar.Bool(false)
             "identifier" -> {
                 val name = textOf(node).removePrefix("@")
-                evaluateName(name) ?: if (name in failedValues) null else
+                locals[name] ?: evaluateName(name) ?: if (name in failedValues) null else
                     fail("CPLUS_COMPTIME_SCALAR_NAME", "unknown comptime scalar '$name'", node)
             }
-            "parenthesized_expression" -> node.children.firstOrNull { it.named }?.let(::evaluate) ?: unsupported(node)
-            "unary_expression" -> evaluateUnary(node)
-            "binary_expression" -> evaluateBinary(node)
+            "parenthesized_expression" -> node.children.firstOrNull { it.named }?.let { evaluate(it, locals) } ?: unsupported(node)
+            "unary_expression" -> evaluateUnary(node, locals)
+            "binary_expression" -> evaluateBinary(node, locals)
+            "call_expression" -> evaluateCall(node, locals)
             else -> unsupported(node)
         }
 
-        private fun evaluateUnary(node: CPlusSyntaxNode): Scalar? {
+        private fun evaluateUnary(node: CPlusSyntaxNode, locals: Map<String, Scalar>): Scalar? {
             val operand = node.children.lastOrNull { it.named } ?: return unsupported(node)
-            val value = evaluate(operand) ?: return null
+            val value = evaluate(operand, locals) ?: return null
             val operator = text.substring(node.span.startOffset, operand.span.startOffset).trim()
             return when (operator) {
                 "+" -> value.asInteger()?.let(Scalar::Integer) ?: unsupported(node)
@@ -205,14 +268,14 @@ class TreeSitterComptimeScalarLowering {
             }
         }
 
-        private fun evaluateBinary(node: CPlusSyntaxNode): Scalar? {
+        private fun evaluateBinary(node: CPlusSyntaxNode, locals: Map<String, Scalar>): Scalar? {
             val operands = node.children.filter { it.named }
             if (operands.size != 2) return unsupported(node)
-            val left = evaluate(operands[0]) ?: return null
+            val left = evaluate(operands[0], locals) ?: return null
             val operator = text.substring(operands[0].span.endOffset, operands[1].span.startOffset).trim()
             if (operator == "&&" && left.asBoolean() == false) return Scalar.Bool(false)
             if (operator == "||" && left.asBoolean() == true) return Scalar.Bool(true)
-            val right = evaluate(operands[1]) ?: return null
+            val right = evaluate(operands[1], locals) ?: return null
             val a = left.asInteger()
             val b = right.asInteger()
             return when (operator) {
@@ -238,6 +301,49 @@ class TreeSitterComptimeScalarLowering {
                 ">>" -> if (a != null && b != null && b in 0L..63L) Scalar.Integer(a shr b.toInt()) else unsupported(node)
                 else -> unsupported(node)
             }
+        }
+
+        private fun evaluateCall(node: CPlusSyntaxNode, locals: Map<String, Scalar>): Scalar? {
+            val callee = node.children.firstOrNull { it.fieldName == "function" }
+                ?: node.children.firstOrNull { it.kind == "identifier" }
+                ?: return unsupported(node)
+            val name = textOf(callee).removePrefix("@")
+            val function = functionsByName[name]
+                ?: return fail(
+                    "CPLUS_COMPTIME_SCALAR_FUNCTION_NAME",
+                    "unknown scalar comptime function '$name'",
+                    callee
+                )
+            val arguments = node.children.firstOrNull { it.kind == "argument_list" }
+                ?.children.orEmpty()
+                .filter { it.named && it.kind != "comment" }
+            if (arguments.size != function.parameterNames.size) {
+                return fail(
+                    "CPLUS_COMPTIME_SCALAR_FUNCTION_ARITY",
+                    "scalar comptime function '$name' expects ${function.parameterNames.size} argument(s), got ${arguments.size}",
+                    node
+                )
+            }
+            if (name in activeFunctions) {
+                return fail(
+                    "CPLUS_COMPTIME_SCALAR_FUNCTION_RECURSION",
+                    "recursive scalar comptime function '$name' is not supported",
+                    node
+                )
+            }
+            if (activeFunctions.size >= MAX_FUNCTION_DEPTH) {
+                return fail(
+                    "CPLUS_COMPTIME_SCALAR_FUNCTION_DEPTH",
+                    "scalar comptime function evaluation exceeded the depth limit",
+                    node
+                )
+            }
+            val argumentValues = arguments.map { argument -> evaluate(argument, locals) ?: return null }
+            activeFunctions += name
+            val functionLocals = function.parameterNames.zip(argumentValues).toMap()
+            val result = evaluate(function.returnExpression, functionLocals)
+            activeFunctions -= name
+            return result
         }
 
         private fun arithmetic(node: CPlusSyntaxNode, operation: () -> Long): Scalar? = try {
@@ -273,6 +379,10 @@ class TreeSitterComptimeScalarLowering {
             }
             return parsed?.let(Scalar::Integer)
         }
+
+        private companion object {
+            const val MAX_FUNCTION_DEPTH = 128
+        }
     }
 
     private data class ValueDeclaration(
@@ -281,6 +391,14 @@ class TreeSitterComptimeScalarLowering {
         val name: String,
         val type: CPlusSyntaxNode?,
         val expression: CPlusSyntaxNode?
+    )
+
+    private data class ScalarFunctionDeclaration(
+        val node: CPlusSyntaxNode,
+        val replacement: CPlusSyntaxNode,
+        val name: String,
+        val parameterNames: List<String>,
+        val returnExpression: CPlusSyntaxNode
     )
 
     private sealed interface Scalar {
@@ -297,10 +415,16 @@ class TreeSitterComptimeScalarLowering {
 
     private data class Replacement(val start: Int, val end: Int, val content: MappedText)
 
+    private fun descendants(node: CPlusSyntaxNode): Sequence<CPlusSyntaxNode> =
+        sequenceOf(node) + node.children.asSequence().flatMap(::descendants)
+
     private companion object {
         val DORMANT_REGIONS = setOf(
             "cplus_comptime_function_definition", "cplus_legacy_function_generator",
             "cplus_legacy_type_generator", "cplus_comptime_block", "cplus_code_fragment"
+        )
+        val GENERATOR_DEFINITIONS = setOf(
+            "cplus_comptime_function_definition", "cplus_legacy_function_generator", "cplus_legacy_type_generator"
         )
         val MODULE_SCOPE_NODES = setOf(
             "translation_unit", "cplus_comptime_declaration", "preproc_if", "preproc_else", "preproc_elif",

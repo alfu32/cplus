@@ -40,6 +40,37 @@ class TreeSitterCPlusParserBackend : CPlusParserBackend {
         val errors = mutableListOf<ParserDiagnostic>()
         val offsets = JniModifiedUtf8Offsets(source.text)
         val root = tree.rootNode.toCompilerNode(source, offsets, errors)
+        root.compilerDescendantsAndSelf()
+            .filter { node ->
+                node.kind == "cplus_comptime_flags" &&
+                    node.children.none { child -> child.named && child.kind != "comment" }
+            }
+            .forEach { node ->
+                val semicolon = source.text.indexOf(';', node.span.startOffset)
+                    .takeIf { it in node.span.startOffset until node.span.endOffset }
+                    ?: node.span.endOffset
+                errors += ParserDiagnostic(
+                    "CPLUS_COMPTIME_FLAGS_EMPTY",
+                    "comptime flags requires at least one compiler argument",
+                    ParserDiagnosticSeverity.ERROR,
+                    source.sourceFile.span(semicolon, (semicolon + 1).coerceAtMost(source.text.length))
+                )
+            }
+        root.compilerDescendantsAndSelf()
+            .filter { node ->
+                node.kind == "cplus_comptime_import" && node.children.none { it.kind == "string_literal" }
+            }
+            .forEach { node ->
+                val semicolon = source.text.indexOf(';', node.span.startOffset)
+                    .takeIf { it in node.span.startOffset until node.span.endOffset }
+                    ?: node.span.endOffset
+                errors += ParserDiagnostic(
+                    "CPLUS_COMPTIME_IMPORT_PATH_MISSING",
+                    "comptime import requires a quoted path",
+                    ParserDiagnosticSeverity.ERROR,
+                    source.sourceFile.span(semicolon, (semicolon + 1).coerceAtMost(source.text.length))
+                )
+            }
         val hasErrors = errors.isNotEmpty()
         return CPlusParseResult(
             source = source,
@@ -48,7 +79,7 @@ class TreeSitterCPlusParserBackend : CPlusParserBackend {
             root = root,
             diagnostics = errors,
             limitations = if (hasErrors) {
-                listOf("Tree-sitter recovered from syntax that is not yet supported by the C-plus grammar")
+                listOf("Tree-sitter reported syntax errors or C-plus validation diagnostics")
             } else {
                 emptyList()
             }
@@ -61,6 +92,9 @@ class TreeSitterCPlusParserBackend : CPlusParserBackend {
         options: CPlusParseOptions = CPlusParseOptions()
     ): TreeSitterCPlusParseSession = TreeSitterCPlusParseSession(this, source, options)
 }
+
+private fun CPlusSyntaxNode.compilerDescendantsAndSelf(): Sequence<CPlusSyntaxNode> =
+    sequenceOf(this) + children.asSequence().flatMap { it.compilerDescendantsAndSelf() }
 
 data class TreeSitterIncrementalParseResult(
     val parseResult: CPlusParseResult,
@@ -167,13 +201,34 @@ private fun io.github.treesitter.ktreesitter.Node.toCompilerNode(
     source: SourceSnapshot,
     offsets: JniModifiedUtf8Offsets,
     diagnostics: MutableList<ParserDiagnostic>,
-    fieldName: String? = null
+    fieldName: String? = null,
+    ancestors: List<String> = emptyList(),
+    comptimeFunctionHeaderEnd: Int? = null
 ): CPlusSyntaxNode {
     val span = offsets.span(source, startByte.toInt(), endByte.toInt())
+    val currentHeaderEnd = if (type == "cplus_comptime_function_definition") {
+        source.text.indexOf('{', span.startOffset)
+            .takeIf { it in span.startOffset until span.endOffset }
+            ?: span.endOffset
+    } else comptimeFunctionHeaderEnd
     if (isError || isMissing) {
+        val tokenText = source.text.substring(span.startOffset, span.endOffset)
+        val structuralDiagnostic = if (
+            isError && "cplus_comptime_function_definition" in ancestors &&
+            span.startOffset < (comptimeFunctionHeaderEnd ?: -1) && tokenText == "type"
+        ) {
+            "CPLUS_COMPTIME_PARAMETER_INVALID" to "comptime parameters must be typed names"
+        } else if (isMissing && type == "}") {
+            when {
+                "cplus_comptime_block" in ancestors -> "CPLUS_COMPTIME_BLOCK_UNCLOSED" to "unclosed comptime block"
+                "cplus_test_declaration" in ancestors -> "CPLUS_TEST_BODY_UNCLOSED" to "unclosed @test body"
+                "cplus_legacy_type_generator" in ancestors -> "CPLUS_TYPE_GENERATOR_BODY_UNCLOSED" to "unclosed @type generator body"
+                else -> null
+            }
+        } else null
         diagnostics += ParserDiagnostic(
-        code = if (isMissing) "TS_MISSING_NODE" else "TS_ERROR_NODE",
-            message = if (isMissing) "expected $type" else "unrecognized or malformed syntax",
+            code = structuralDiagnostic?.first ?: if (isMissing) "TS_MISSING_NODE" else "TS_ERROR_NODE",
+            message = structuralDiagnostic?.second ?: if (isMissing) "expected $type" else "unrecognized or malformed syntax",
             severity = ParserDiagnosticSeverity.ERROR,
             span = span
         )
@@ -183,7 +238,9 @@ private fun io.github.treesitter.ktreesitter.Node.toCompilerNode(
             source,
             offsets,
             diagnostics,
-            fieldNameForChild(index.toUInt())
+            fieldNameForChild(index.toUInt()),
+            ancestors + type,
+            currentHeaderEnd
         )
     }
     return CPlusSyntaxNode(

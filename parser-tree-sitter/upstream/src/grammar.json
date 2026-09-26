@@ -6277,7 +6277,7 @@
       ]
     },
     "cplus_comptime_function_definition": {
-      "type": "PREC",
+      "type": "PREC_DYNAMIC",
       "value": 2,
       "content": {
         "type": "SEQ",
@@ -6324,15 +6324,16 @@
             }
           },
           {
-            "type": "STRING",
-            "value": "@"
-          },
-          {
             "type": "FIELD",
             "name": "name",
             "content": {
-              "type": "SYMBOL",
-              "name": "identifier"
+              "type": "ALIAS",
+              "content": {
+                "type": "SYMBOL",
+                "name": "cplus_comptime_marked_identifier"
+              },
+              "named": true,
+              "value": "identifier"
             }
           },
           {
@@ -6792,8 +6793,16 @@
           "value": "import"
         },
         {
-          "type": "SYMBOL",
-          "name": "string_literal"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "string_literal"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         },
         {
           "type": "STRING",
@@ -6813,7 +6822,7 @@
           "value": "flags"
         },
         {
-          "type": "REPEAT1",
+          "type": "REPEAT",
           "content": {
             "type": "CHOICE",
             "members": [
@@ -11557,6 +11566,14 @@
     }
   ],
   "conflicts": [
+    [
+      "cplus_comptime_function_definition",
+      "cplus_comptime_value"
+    ],
+    [
+      "type_specifier",
+      "cplus_comptime_function_definition"
+    ],
     [
       "type_specifier",
       "_declarator"

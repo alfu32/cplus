@@ -10,8 +10,11 @@ comptime function @make_mapper(type T) {
 comptime typedef list(string_t) string_list_t;
 comptime make_helpers(int_t, string_t);
 comptime import "constants.cp";
+comptime import ;
 comptime flags -lraylib -lm;
+comptime flags ;
 comptime int @answer = 73;
+comptime int @twice(int value) { return value * 2; }
 comptime { comptime int local_answer = 42; }
 int runtime_answer = comptime answer;
 @test "fixture works" { return 0; }
@@ -94,14 +97,30 @@ comptime outer();
       (string_literal
         (string_content))))
   (cplus_comptime_declaration
+    (cplus_comptime_import))
+  (cplus_comptime_declaration
     (cplus_comptime_flags
       (identifier)
       (identifier)))
+  (cplus_comptime_declaration
+    (cplus_comptime_flags))
   (cplus_comptime_declaration
     (cplus_comptime_value
       (primitive_type)
       (identifier)
       (number_literal)))
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (primitive_type)
+      (identifier)
+      (parameter_declaration
+        (primitive_type)
+        (identifier))
+      (cplus_comptime_body
+        (return_statement
+          (binary_expression
+            (identifier)
+            (number_literal))))))
   (cplus_comptime_block
     (compound_statement
       (cplus_comptime_declaration

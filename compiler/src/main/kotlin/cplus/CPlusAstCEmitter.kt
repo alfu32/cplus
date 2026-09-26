@@ -112,9 +112,20 @@ class CPlusAstCEmitter {
             }
         }
 
-        fun indentation(origin: SourceOrigin?) {
+        fun indentation(origin: SourceOrigin?, sourceOffset: Int) {
             if (lineStart && braceDepth > 0) {
-                output.appendGenerated("    ".repeat(braceDepth), origin)
+                // Keep enough leading columns for diagnostics on source lines moved by lowering
+                // (notably methods extracted from a struct). The normalized indentation is a
+                // minimum; source indentation wins when it carries useful column provenance.
+                val lineStartOffset = source.text.lastIndexOf('\n', (sourceOffset - 1).coerceAtLeast(0)) + 1
+                val sourcePrefix = source.text.substring(lineStartOffset, sourceOffset)
+                val sourceIndent = if (sourcePrefix.all { it == ' ' || it == '\t' }) {
+                    sourcePrefix.sumOf { if (it == '\t') 4 else 1 }
+                } else {
+                    0
+                }
+                val columns = maxOf(braceDepth * 4, sourceIndent)
+                output.appendGenerated(" ".repeat(columns), origin)
                 lineStart = false
             }
         }
@@ -150,13 +161,13 @@ class CPlusAstCEmitter {
                 if (spelling == "}") {
                     newline(origin)
                     braceDepth = (braceDepth - 1).coerceAtLeast(0)
-                    indentation(origin)
+                    indentation(origin, start)
                     output.append(source, start, token.node.span.endOffset)
                     lineStart = false
                     closedBracePending = true
                 } else {
                     val startsNewLine = lineStart
-                    indentation(origin)
+                    indentation(origin, start)
                     if (!startsNewLine && !attachedToClosedBrace && needsSeparator(
                             previous,
                             previousPrevious,

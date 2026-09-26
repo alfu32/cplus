@@ -120,6 +120,49 @@ class TreeSitterCPlusPrototypeTranspiler(
             )
         }
 
+        val comptimeBlockPass = TreeSitterComptimeBlockLowering()
+        var comptimeBlockPassCount = 0
+        while (comptimeBlockPassCount < MAX_COMPTIME_CONDITIONAL_PASSES) {
+            val materialized = comptimeBlockPass.lower(parsed, mapped)
+            if (materialized.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    emptyList(),
+                    materialized.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    testFixtures = testFixtures
+                )
+            }
+            if (materialized.source.text == mapped.text) break
+            comptimeBlockPassCount++
+            mapped = materialized.source
+            snapshot = snapshotFor(mapped.text)
+            parsed = backend.parse(snapshot)
+            if (parsed.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    emptyList(),
+                    testFixtures = testFixtures
+                )
+            }
+        }
+        val remainingComptimeBlock = descendants(parsed.root).firstOrNull { it.kind == "cplus_comptime_block" }
+        if (remainingComptimeBlock != null) {
+            return TreeSitterPrototypeResult(
+                null,
+                emptyList(),
+                listOf(CPlusLoweringDiagnostic(
+                    "CPLUS_COMPTIME_BLOCK_LIMIT",
+                    "nested comptime blocks exceeded the materialization pass limit",
+                    mapped.toOriginalSpan(remainingComptimeBlock.span)
+                )),
+                emptyList(),
+                testFixtures = testFixtures
+            )
+        }
+
         val imports = TreeSitterComptimeImportLowering(backend, sourceManager, importPaths, targetOs)
             .lower(parsed, mapped)
         if (imports.parserDiagnostics.isNotEmpty()) {
@@ -169,18 +212,6 @@ class TreeSitterCPlusPrototypeTranspiler(
         }
 
         allocationAnalysis = TreeSitterAllocationIntentAnalyzer().analyze(ast)
-        val extractedTests = CPlusTestExtractionPass().extract(ast, mapped)
-        if (extractedTests.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), extractedTests.diagnostics, emptyList())
-        }
-        testFixtures = extractedTests.fixtures
-        mapped = extractedTests.source
-        snapshot = snapshotFor(mapped.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
-        }
-
         val scalarMaterialized = TreeSitterComptimeScalarLowering().lower(parsed, mapped)
         if (scalarMaterialized.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(
@@ -204,6 +235,18 @@ class TreeSitterCPlusPrototypeTranspiler(
                     testFixtures = testFixtures
                 )
             }
+        }
+        ast = CPlusAstAdapter().adapt(parsed)
+        val extractedTests = CPlusTestExtractionPass().extract(ast, mapped)
+        if (extractedTests.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, emptyList(), extractedTests.diagnostics, emptyList())
+        }
+        testFixtures = extractedTests.fixtures
+        mapped = extractedTests.source
+        snapshot = snapshotFor(mapped.text)
+        parsed = backend.parse(snapshot)
+        if (parsed.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
         }
         val flagsMaterialized = TreeSitterComptimeFlagsLowering().lower(parsed, mapped)
         if (flagsMaterialized.diagnostics.isNotEmpty()) {

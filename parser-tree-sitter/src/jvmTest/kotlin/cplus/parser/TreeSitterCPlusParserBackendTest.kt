@@ -233,7 +233,7 @@ class TreeSitterCPlusParserBackendTest {
                 helper,
                 "comptime int imported_answer = 42;\n" +
                     "int imported_value(void) { return comptime imported_answer; }\n" +
-                    "@test \"helper fixture\" { int value = 42; @assertEquals(42, value); }\n"
+                    "@test \"helper fixture\" { int value = comptime imported_answer; @assertEquals(42, value); }\n"
             )
             Files.writeString(
                 child,
@@ -263,6 +263,9 @@ class TreeSitterCPlusParserBackendTest {
             assertEquals(listOf("helper fixture"), result.testFixtures.map { it.name })
             assertEquals(helper.toRealPath().toString(), result.testFixtures.single().span.file)
             assertEquals(helper.toRealPath().toString(), result.testFixtures.single().assertions.single().span.file)
+            val fixtureBody = result.testFixtures.single().body
+            assertTrue("int value = 42;" in fixtureBody.text, fixtureBody.text)
+            assertEquals(helper.toRealPath().toString(), fixtureBody.originAt(fixtureBody.text.indexOf("42"))?.file?.name)
             assertEquals(3, result.sourceOrder.size)
             assertEquals(SourceId.fromPath(helper), result.sourceOrder[0])
             assertEquals(SourceId.fromPath(child), result.sourceOrder[1])
@@ -277,6 +280,7 @@ class TreeSitterCPlusParserBackendTest {
             assertEquals(result.sourceOrder, result.transcodedSource?.sourceOrder)
             assertEquals(result.sourceImports, result.transcodedSource?.sourceImports)
             compileAndRunC(generated.text)
+            compileAndRunC(CPlusTranspiler().transpileExtractedTests(generated, result.testFixtures).source.code)
         } finally {
             Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
@@ -987,7 +991,49 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
         assertTrue(result.symbols.any { it.name == "after_while" && it.knownProvenance == AllocationIntent.NONE })
         assertTrue(result.symbols.any { it.name == "after_for" && it.knownProvenance == AllocationIntent.NONE })
-        assertTrue(result.symbols.any { it.name == "after_do" && it.knownProvenance == AllocationIntent.NONE })
+        assertTrue(result.symbols.any { it.name == "after_do" && it.knownProvenance == AllocationIntent.SCRATCH })
+    }
+
+    @Test
+    fun allocationFlowConvergesLoopProvenanceWhenAllExitsAgree() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-loop-fixed-point.cp"),
+            """
+                int main(int flag) {
+                    char* while_value = alloc_warm(8);
+                    while (flag) while_value = alloc_warm(8);
+                    warm char* after_while = while_value;
+
+                    char* for_value = alloc_cold(8);
+                    for (int index = 0; flag; index++) for_value = alloc_cold(8);
+                    cold char* after_for = for_value;
+
+                    char* do_value = alloc_hot(8);
+                    do { do_value = alloc_scratch(8); } while (flag);
+                    scratch char* after_do = do_value;
+
+                    char* divergent = alloc_warm(8);
+                    while (flag) divergent = alloc_cold(8);
+                    char* after_divergent = divergent;
+
+                    char* early_exit = alloc_warm(8);
+                    while (flag) { early_exit = alloc_cold(8); break; }
+                    char* after_early_exit = early_exit;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
+        assertEquals(AllocationIntent.WARM, result.symbols.single { it.name == "after_while" }.knownProvenance)
+        assertEquals(AllocationIntent.COLD, result.symbols.single { it.name == "after_for" }.knownProvenance)
+        assertEquals(AllocationIntent.SCRATCH, result.symbols.single { it.name == "after_do" }.knownProvenance)
+        assertEquals(AllocationIntent.NONE, result.symbols.single { it.name == "after_divergent" }.knownProvenance)
+        assertEquals(AllocationIntent.NONE, result.symbols.single { it.name == "after_early_exit" }.knownProvenance)
     }
 
     @Test
@@ -1141,36 +1187,57 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
-    fun shadowDiagnosticLocationMetricRejectsDisjointErrors() {
-        val source = sources.open(SourceId.named("shadow-diagnostics.cp"), "abcd")
-        fun backend(id: ParserBackendId, errorOffset: Int) = object : cplus.CPlusParserBackend {
+    fun shadowDiagnosticLocationMetricRequiresOneToOneErrorOverlap() {
+        val source = sources.open(SourceId.named("shadow-diagnostics.cp"), "abcdefghijklmnopqrstuvwxyz012345")
+        fun backend(
+            id: ParserBackendId,
+            errorRanges: List<IntRange>,
+            diagnosticCode: String = "synthetic.error"
+        ) = object : cplus.CPlusParserBackend {
             override val id: ParserBackendId = id
 
             override fun parse(source: cplus.SourceSnapshot, options: cplus.CPlusParseOptions): CPlusParseResult {
-                val errorSpan = source.sourceFile.span(errorOffset, errorOffset + 1)
                 val root = CPlusSyntaxNode("translation_unit", source.sourceFile.span(0, source.text.length))
                 return CPlusParseResult(
                     source,
                     id,
                     ParseCoverage.PARTIAL,
                     root,
-                    listOf(
+                    errorRanges.map { range ->
                         cplus.ParserDiagnostic(
-                            "synthetic.error",
+                            diagnosticCode,
                             "synthetic parser error",
                             cplus.ParserDiagnosticSeverity.ERROR,
-                            errorSpan
+                            source.sourceFile.span(range.first, range.last + 1)
                         )
-                    )
+                    }
                 )
             }
         }
 
-        val report = CPlusParserShadowRunner(backend(ParserBackendId.LEGACY, 0), backend(ParserBackendId.TREE_SITTER, 2))
+        val disjoint = CPlusParserShadowRunner(
+            backend(ParserBackendId.LEGACY, listOf(0..0)),
+            backend(ParserBackendId.TREE_SITTER, listOf(2..2))
+        )
             .parse(source)
+        assertFalse(disjoint.errorLocationsAlign)
+        assertFalse(disjoint.diagnosticsMatch)
 
-        assertFalse(report.errorLocationsAlign)
-        assertFalse(report.diagnosticsMatch)
+        // Every error overlaps at least one error from the other backend, but the overlap graph
+        // has a 2-to-1 component and therefore cannot represent one-to-one diagnostic parity.
+        val ambiguous = CPlusParserShadowRunner(
+            backend(ParserBackendId.LEGACY, listOf(1..2, 8..9, 20..30)),
+            backend(ParserBackendId.TREE_SITTER, listOf(0..10, 21..22, 28..29))
+        ).parse(source)
+        assertFalse(ambiguous.errorLocationsAlign)
+
+        val sameSpansDifferentCodes = CPlusParserShadowRunner(
+            backend(ParserBackendId.LEGACY, listOf(4..5), "legacy.syntax"),
+            backend(ParserBackendId.TREE_SITTER, listOf(4..5), "TS_ERROR_NODE")
+        ).parse(source)
+        assertTrue(sameSpansDifferentCodes.errorLocationsAlign)
+        assertTrue(sameSpansDifferentCodes.errorSpansMatch)
+        assertFalse(sameSpansDifferentCodes.diagnosticsMatch)
     }
 
     @Test
@@ -1228,12 +1295,18 @@ class TreeSitterCPlusParserBackendTest {
             }
             val treeRecovery = report.shadow.root.descendants().filter { it.isError || it.isMissing }.toList()
             val malformedStart = text.indexOf(marker)
-
             assertTrue(legacyDiagnostics.isNotEmpty(), "$marker was accepted by legacy parser: $report")
-            assertTrue(
-                treeDiagnostics.isNotEmpty() && treeRecovery.isNotEmpty(),
-                "$marker was not rejected with Tree-sitter recovery diagnostics: diagnostics=$treeDiagnostics; recovery=$treeRecovery"
-            )
+            if (marker == "comptime flags" || marker == "comptime import") {
+                assertTrue(
+                    treeDiagnostics.isNotEmpty() && treeRecovery.isEmpty(),
+                    "$marker should produce a precise C-plus validation diagnostic without parser recovery: diagnostics=$treeDiagnostics; recovery=$treeRecovery"
+                )
+            } else {
+                assertTrue(
+                    treeDiagnostics.isNotEmpty() && treeRecovery.isNotEmpty(),
+                    "$marker was not rejected with Tree-sitter recovery diagnostics: diagnostics=$treeDiagnostics; recovery=$treeRecovery"
+                )
+            }
             assertTrue(
                 legacyDiagnostics.all { it.span.file == source.id.value && it.span.startOffset >= malformedStart },
                 "$marker legacy diagnostic escaped its source/construct: $legacyDiagnostics"
@@ -1246,6 +1319,86 @@ class TreeSitterCPlusParserBackendTest {
                 report.errorLocationsAlign,
                 "$marker error locations do not align across backends: legacy=$legacyDiagnostics; tree-sitter=$treeDiagnostics"
             )
+            if (marker in setOf("comptime function", "comptime flags", "comptime import", "comptime", "@test", "@type")) {
+                assertTrue(
+                    report.errorSpansMatch,
+                    "$marker token span differs across backends: legacy=$legacyDiagnostics; tree-sitter=$treeDiagnostics"
+                )
+            }
+            if (marker in setOf("comptime function", "comptime flags", "comptime import", "comptime", "@test", "@type")) {
+                assertTrue(
+                    report.diagnosticsMatch,
+                    "$marker diagnostic signature differs across backends: legacy=$legacyDiagnostics; tree-sitter=$treeDiagnostics"
+                )
+            }
+        }
+    }
+
+    @Test
+    fun shadowParsersPreserveMultipleIndependentComptimeDiagnostics() {
+        val text = """
+            comptime flags ;
+            comptime import ;
+            comptime int @answer = 42;
+            comptime {
+        """.trimIndent()
+        val source = sources.open(SourceId.named("shadow-multiple-errors.cp"), text)
+        val report = CPlusParserShadowRunner(LegacyCPlusParserBackend(), backend).parse(source)
+        val legacyErrors = report.authoritative.diagnostics.filter {
+            it.severity == cplus.ParserDiagnosticSeverity.ERROR
+        }
+        val treeErrors = report.shadow.diagnostics.filter {
+            it.severity == cplus.ParserDiagnosticSeverity.ERROR
+        }
+
+        assertEquals(3, legacyErrors.size, "legacy diagnostics=$legacyErrors")
+        assertEquals(3, treeErrors.size, "Tree-sitter diagnostics=${report.shadow.diagnostics}; root=${report.shadow.root}")
+        assertTrue(report.errorLocationsAlign, "diagnostic ranges do not pair: legacy=$legacyErrors; tree=$treeErrors")
+        assertTrue(report.errorSpansMatch, "diagnostic spans differ: legacy=$legacyErrors; tree=$treeErrors")
+        assertTrue(report.diagnosticsMatch, "diagnostic signatures differ: legacy=$legacyErrors; tree=$treeErrors")
+        assertEquals(
+            listOf("CPLUS_COMPTIME_FLAGS_EMPTY", "CPLUS_COMPTIME_IMPORT_PATH_MISSING", "CPLUS_COMPTIME_BLOCK_UNCLOSED"),
+            legacyErrors.map { it.code }
+        )
+        val survivingValue = report.authoritative.root.descendants().single {
+            it.kind == "comptime_value_declaration"
+        }
+        assertEquals("comptime int @answer = 42;", text.substring(
+            survivingValue.span.startOffset,
+            survivingValue.span.endOffset
+        ).trim())
+    }
+
+    @Test
+    fun shadowDiagnosticRecoveryIsStableAcrossMalformedConstructOrderings() {
+        val constructs = listOf(
+            "comptime flags ;" to "CPLUS_COMPTIME_FLAGS_EMPTY",
+            "comptime import ;" to "CPLUS_COMPTIME_IMPORT_PATH_MISSING",
+            "comptime int @answer = 42;" to null
+        )
+        val orderings = listOf(
+            listOf(0, 1, 2), listOf(0, 2, 1), listOf(1, 0, 2),
+            listOf(1, 2, 0), listOf(2, 0, 1), listOf(2, 1, 0)
+        )
+        val runner = CPlusParserShadowRunner(LegacyCPlusParserBackend(), backend)
+
+        orderings.forEachIndexed { index, ordering ->
+            val lines = ordering.map(constructs::get).map { it.first } + "comptime {"
+            val text = lines.joinToString("\n")
+            val source = sources.open(SourceId.named("shadow-recovery-order-$index.cp"), text)
+            val report = runner.parse(source)
+            val expectedCodes = ordering.mapNotNull { constructs[it].second } + "CPLUS_COMPTIME_BLOCK_UNCLOSED"
+            val legacyErrors = report.authoritative.diagnostics.filter {
+                it.severity == cplus.ParserDiagnosticSeverity.ERROR
+            }
+
+            assertEquals(expectedCodes, legacyErrors.map { it.code }, "ordering=$ordering diagnostics=$legacyErrors")
+            assertEquals(3, report.shadow.diagnostics.count { it.severity == cplus.ParserDiagnosticSeverity.ERROR })
+            assertTrue(report.errorSpansMatch, "ordering=$ordering spans differ: $report")
+            assertTrue(report.diagnosticsMatch, "ordering=$ordering signatures differ: $report")
+            val value = report.authoritative.root.descendants().single { it.kind == "comptime_value_declaration" }
+            assertEquals(text.indexOf("comptime int @answer = 42;"), value.span.startOffset)
+            assertEquals("comptime int @answer = 42;", text.substring(value.span.startOffset, value.span.endOffset).trim())
         }
     }
 
@@ -1287,6 +1440,21 @@ class TreeSitterCPlusParserBackendTest {
             }
 
             assertEquals(legacy.parse(snapshot).root, report.authoritative.root, "$relativePath authoritative result changed")
+            val authoritativeErrors = report.authoritative.diagnostics.filter {
+                it.severity == cplus.ParserDiagnosticSeverity.ERROR
+            }
+            val shadowErrors = report.shadow.diagnostics.filter {
+                it.severity == cplus.ParserDiagnosticSeverity.ERROR
+            }
+            val recoveryNodes = report.shadow.root.descendants()
+                .filter { it.isError || it.isMissing }
+                .map { "${it.kind}@${it.span.startOffset}:${it.span.endOffset}" }
+                .toList()
+            assertTrue(authoritativeErrors.isEmpty(), "$relativePath legacy errors: $authoritativeErrors")
+            assertTrue(shadowErrors.isEmpty(), "$relativePath Tree-sitter errors: $shadowErrors")
+            assertTrue(recoveryNodes.isEmpty(), "$relativePath Tree-sitter recovery nodes: $recoveryNodes")
+            assertTrue(report.errorLocationsAlign, "$relativePath parser error locations diverged")
+            assertTrue(report.errorSpansMatch, "$relativePath parser error spans diverged")
             assertTrue(
                 report.recognizedConstructsMatch,
                 "$relativePath: legacy=${report.authoritativeRecognizedConstructs}; tree-sitter=${report.shadowRecognizedConstructs}; diagnostics=${report.shadow.diagnostics}; CST paths=$unmatchedContext"
@@ -1741,6 +1909,54 @@ class TreeSitterCPlusParserBackendTest {
                 Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
             }
         }
+    }
+
+    @Test
+    fun legacyAndTreeSitterCompilerDiagnosticsAgreeAfterMethodLowering() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val name = "differential-method-error.cp"
+        val text = """
+            typedef struct broken_t {
+                pub int fail(borrowed *self) {
+                    return missing_cplus_symbol;
+                }
+            } broken_t;
+        """.trimIndent()
+        val source = sources.open(SourceId.named(name), text)
+        val legacy = CPlusTranspiler().transpile(text, name)
+        val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(
+            experimental.successful,
+            "parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; unsupported=${experimental.unsupportedNodes}"
+        )
+        val experimentalC = experimental.transcodedSource ?: error("prototype has no mapped C output")
+        val expectedLine = text.lines().indexOfFirst { "missing_cplus_symbol" in it } + 1
+        val expectedColumn = text.lines()[expectedLine - 1].indexOf("missing_cplus_symbol") + 1
+        val locationPattern = Regex("${Regex.escape(name)}:(\\d+):(\\d+)")
+
+        val diagnostics = listOf(legacy, experimentalC).mapIndexed { index, generated ->
+            val process = ProcessBuilder(compiler, "-std=c11", "-fsyntax-only", "-x", "c", "-")
+                .redirectErrorStream(true).start()
+            process.outputStream.bufferedWriter().use { it.write(generated.code) }
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            assertTrue(process.waitFor() != 0, "generated C $index unexpectedly compiled")
+            assertTrue("missing_cplus_symbol" in output, "diagnostic lost the invalid identifier:\n$output")
+            val location = locationPattern.find(output)
+                ?: error("diagnostic did not report $name with a line and column:\n$output")
+            val reportedLine = location.groupValues[1].toInt()
+            assertEquals(expectedLine, reportedLine, "compiler diagnostic points to the wrong C-plus line:\n$output")
+            val reportedColumn = location.groupValues[2].toInt()
+            assertEquals(expectedColumn, reportedColumn, "compiler diagnostic points to the wrong C-plus column:\n$output")
+            location.groupValues.drop(1) to output
+        }
+        assertEquals(
+            diagnostics.first().first,
+            diagnostics.last().first,
+            "legacy and Tree-sitter diagnostic locations differ:\nlegacy=${diagnostics.first().second}\nTree-sitter=${diagnostics.last().second}"
+                + "\nlegacy generated C:\n${legacy.code}\nTree-sitter generated C:\n${experimentalC.code}"
+        )
     }
 
     @Test
@@ -2298,6 +2514,212 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun legacyAndTreeSitterAgreeOnStaticFactoriesAndPointerReceivers() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            #include <stdio.h>
+            typedef struct counter_t {
+                int value;
+                static pub counter_t create(int initial) {
+                    return (counter_t){ .value = initial };
+                }
+                pub void add(borrowed mut *self, int amount) { self->value += amount; }
+                pub int get(borrowed *self) { return self->value; }
+            } counter_t;
+            int main(void) {
+                counter_t counter = counter_t.create(40);
+                counter_t *pointer = &counter;
+                pointer->add(2);
+                printf("%d\n", pointer->get());
+                return pointer->get() == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val name = "differential-static-and-pointer-methods.cp"
+        val source = sources.open(SourceId.named(name), text)
+        val legacy = CPlusTranspiler().transpile(text, name)
+        val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            experimental.successful,
+            "parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; " +
+                "unsupported=${experimental.unsupportedNodes}"
+        )
+        val experimentalC = experimental.transcodedSource ?: error("prototype has no mapped C output")
+        listOf(
+            "counter__create" to "static pub counter_t create",
+            "counter__add" to "pub void add",
+            "counter__get" to "pub int get"
+        ).forEach { (generatedName, declarationText) ->
+            listOf(legacy, experimentalC).forEach { generated ->
+                val generatedLine = generated.code.lines().indexOfFirst { "$generatedName(" in it } + 1
+                assertTrue(generatedLine > 0, "$generatedName missing from generated C:\n${generated.code}")
+                val origin = generated.sourceMap.sourceForGeneratedLine(generatedLine)
+                assertEquals(name, origin?.file)
+                assertEquals(text.lines().indexOfFirst { declarationText in it } + 1, origin?.startLine)
+            }
+        }
+
+        val legacyRun = compileAndCaptureC(compiler, legacy.code)
+        val experimentalRun = compileAndCaptureC(compiler, experimentalC.code)
+        assertEquals(0, legacyRun.first, "legacy executable failed: ${legacyRun.second}")
+        assertEquals(0, experimentalRun.first, "Tree-sitter executable failed: ${experimentalRun.second}")
+        assertEquals("42\n", legacyRun.second)
+        assertEquals(legacyRun, experimentalRun)
+    }
+
+    @Test
+    fun legacyAndTreeSitterPreserveCommonCFunctionPointerAndControlFlowBehavior() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            #include <stddef.h>
+            #include <stdio.h>
+            typedef int (*transform_fn)(int value);
+            typedef struct sample_t { int value; } sample_t;
+            static int increment(int value) { return value + 1; }
+            static int accumulate(const sample_t *items, size_t count, transform_fn transform) {
+                int total = 0;
+                for (size_t index = 0; index < count; ++index) {
+                    if (items[index].value < 0) continue;
+                    total += transform(items[index].value);
+                }
+                return total;
+            }
+            int main(void) {
+                const sample_t values[] = {{1}, {-9}, {3}};
+                int result = accumulate(values, sizeof values / sizeof values[0], increment);
+                switch (result) {
+                    case 6: puts("sum=6"); break;
+                    default: puts("unexpected"); return 1;
+                }
+            }
+        """.trimIndent()
+        val name = "differential-common-c.cp"
+        val source = sources.open(SourceId.named(name), text)
+
+        val legacy = CPlusTranspiler().transpile(text, name)
+        val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            experimental.successful,
+            "parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; unsupported=${experimental.unsupportedNodes}"
+        )
+        val experimentalC = experimental.transcodedSource ?: error("prototype has no mapped C output")
+        assertEquals(
+            cTokenSpellings(legacy.code, "$name.legacy.c"),
+            cTokenSpellings(experimentalC.code, "$name.tree-sitter.c"),
+            "the two C emitters should preserve one C11 token stream apart from layout and #line directives"
+        )
+        val legacyRun = compileAndCaptureC(compiler, legacy.code)
+        val experimentalRun = compileAndCaptureC(compiler, experimentalC.code)
+        assertEquals(0, legacyRun.first, "legacy executable failed: ${legacyRun.second}")
+        assertEquals(0, experimentalRun.first, "Tree-sitter executable failed: ${experimentalRun.second}")
+        assertEquals("sum=6\n", legacyRun.second)
+        assertEquals(legacyRun, experimentalRun)
+    }
+
+    @Test
+    fun legacyAndTreeSitterPreserveC11DeclarationAndInitializerBehavior() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            #include <stdio.h>
+            #define APPLY(function, value) ((function)((value)))
+            typedef enum operation_t { OP_DOUBLE, OP_INCREMENT } operation_t;
+            typedef union payload_t { int integer; const char *text; } payload_t;
+            typedef struct item_t { unsigned kind : 2; payload_t payload; } item_t;
+            typedef int (*unary_fn)(int value);
+            static int double_value(int value) { return value * 2; }
+            static int increment(int value) { return value + 1; }
+            int main(void) {
+                item_t item = { .kind = 1, .payload = { .integer = 20 } };
+                int values[3] = { [0] = 1, [2] = 3 };
+                unary_fn operations[2] = { [OP_DOUBLE] = double_value, [OP_INCREMENT] = increment };
+                int result = APPLY(operations[item.kind - 1], item.payload.integer) + values[0] + values[2];
+                switch (_Generic(result, int: OP_DOUBLE, default: OP_INCREMENT)) {
+                    case OP_DOUBLE:
+                        printf("result=%d\n", result);
+                        return result == 44 ? 0 : 1;
+                    default:
+                        puts("wrong generic type");
+                        return 2;
+                }
+            }
+        """.trimIndent()
+        val name = "differential-c11-initializers.cp"
+        val source = sources.open(SourceId.named(name), text)
+
+        val legacy = CPlusTranspiler().transpile(text, name)
+        val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(
+            experimental.successful,
+            "parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; " +
+                "unsupported=${experimental.unsupportedNodes}"
+        )
+        val experimentalC = experimental.transcodedSource ?: error("prototype has no mapped C output")
+        assertEquals(
+            cTokenSpellings(legacy.code, "$name.legacy.c"),
+            cTokenSpellings(experimentalC.code, "$name.tree-sitter.c"),
+            "the two C emitters should preserve the C11 declaration/initializer token stream"
+        )
+        val legacyRun = compileAndCaptureC(compiler, legacy.code)
+        val experimentalRun = compileAndCaptureC(compiler, experimentalC.code)
+        assertEquals(0, legacyRun.first, "legacy executable failed: ${legacyRun.second}")
+        assertEquals(0, experimentalRun.first, "Tree-sitter executable failed: ${experimentalRun.second}")
+        assertEquals("result=44\n", legacyRun.second)
+        assertEquals(legacyRun, experimentalRun)
+    }
+
+    @Test
+    fun legacyAndTreeSitterOutputsForSupportedRepositoryModulesCompileAsC11() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib")) && Files.isDirectory(it.resolve("examples")) }
+            ?: error("could not locate repository sources from ${Path.of("").toAbsolutePath()}")
+        val modules = listOf(
+            "stdlib/encodings/rune.cp",
+            "stdlib/http/protocol.cp",
+            "stdlib/io/file.cp",
+            "stdlib/memory/xmem.cp",
+            "examples/basic.cp"
+        )
+
+        modules.forEach { relativePath ->
+            val path = repository.resolve(relativePath)
+            val text = Files.readString(path)
+            val name = path.toRealPath().toString()
+            val source = sources.open(SourceId.named(name), text)
+            val legacy = CPlusTranspiler().transpile(text, name)
+            val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+            assertTrue(
+                experimental.successful,
+                "$relativePath: parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; " +
+                    "unsupported=${experimental.unsupportedNodes}"
+            )
+            val treeSitterC = experimental.transcodedSource ?: error("$relativePath has no mapped C output")
+
+            listOf("legacy" to legacy.code, "tree-sitter" to treeSitterC.code).forEach { (frontend, generatedC) ->
+                val compile = ProcessBuilder(compiler, "-std=c11", "-fsyntax-only", "-x", "c", "-")
+                    .redirectErrorStream(true)
+                    .start()
+                compile.outputStream.bufferedWriter().use { it.write(generatedC) }
+                val compilerOutput = compile.inputStream.bufferedReader().use { it.readText() }
+                assertEquals(
+                    0,
+                    compile.waitFor(),
+                    "$compiler rejected $frontend output for $relativePath:\n$compilerOutput\n$generatedC"
+                )
+            }
+        }
+    }
+
+    @Test
     fun legacyAndTreeSitterDeferLoweringPreserveReverseExecutionOrder() {
         val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
@@ -2377,6 +2799,268 @@ class TreeSitterCPlusParserBackendTest {
         assertEquals(0, experimentalRun.first, "Tree-sitter executable failed: ${experimentalRun.second}")
         assertEquals("success\ncaught\n5\n", legacyRun.second)
         assertEquals(legacyRun, experimentalRun)
+    }
+
+    @Test
+    fun legacyAndTreeSitterAgreeOnErrorOutFunctionsAndMethods() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            #include <stdio.h>
+            typedef int error_t;
+            enum { ERROR_NONE = 0, ERROR_BAD = 2 };
+            @throws(error) pub int decode(int input, borrowed mut error_t *error) {
+                if (input == 0) { *error = ERROR_BAD; return -1; }
+                *error = ERROR_NONE;
+                return input * 2;
+            }
+            typedef struct counter_t {
+                int value;
+                @throws(error) pub int read(borrowed *self, borrowed mut error_t *error) {
+                    *error = ERROR_NONE;
+                    return self->value;
+                }
+            } counter_t;
+            int main(void) {
+                int value = 0;
+                counter_t counter = {42};
+                @try { value = decode(21); }
+                @catch (error_t error) { return 1; }
+                printf("decoded=%d\n", value);
+                @try { value = counter.read(); }
+                @catch (error_t error) { return 2; }
+                printf("read=%d\n", value);
+                @try {
+                    value = decode(0);
+                    puts("unreachable");
+                }
+                @catch (ERROR_BAD, error_t caught) { printf("caught=%d\n", caught); }
+                @catch (error_t error) { return 3; }
+                return value == -1 ? 0 : 4;
+            }
+        """.trimIndent()
+        val name = "differential-error-out.cp"
+        val source = sources.open(SourceId.named(name), text)
+        val legacy = CPlusTranspiler().transpile(text, name)
+        val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            experimental.successful,
+            "parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; " +
+                "unsupported=${experimental.unsupportedNodes}"
+        )
+        val experimentalC = experimental.transcodedSource ?: error("prototype has no mapped C output")
+        listOf("decode" to "@throws(error) pub int decode", "counter__read" to "@throws(error) pub int read")
+            .forEach { (generatedName, declarationText) ->
+                listOf(legacy, experimentalC).forEach { generated ->
+                    val generatedLine = generated.code.lines().indexOfFirst { "$generatedName(" in it } + 1
+                    assertTrue(generatedLine > 0, "$generatedName missing from generated C:\n${generated.code}")
+                    assertEquals(name, generated.sourceMap.sourceForGeneratedLine(generatedLine)?.file)
+                    assertEquals(
+                        text.lines().indexOfFirst { declarationText in it } + 1,
+                        generated.sourceMap.sourceForGeneratedLine(generatedLine)?.startLine
+                    )
+                }
+            }
+
+        val legacyRun = compileAndCaptureC(compiler, legacy.code)
+        val experimentalRun = compileAndCaptureC(compiler, experimentalC.code)
+        assertEquals(0, legacyRun.first, "legacy executable failed: ${legacyRun.second}")
+        assertEquals(0, experimentalRun.first, "Tree-sitter executable failed: ${experimentalRun.second}")
+        assertEquals("decoded=42\nread=42\ncaught=2\n", legacyRun.second)
+        assertEquals(legacyRun, experimentalRun)
+    }
+
+    @Test
+    fun legacyAndTreeSitterRuntimePassesComposeAcrossMethodsCheckedCallsAndDefer() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            #include <stdio.h>
+            typedef int error_t;
+            enum { ERROR_BAD = 2 };
+            typedef struct state_t {
+                int total;
+                pub void add(borrowed mut *self, int amount) { self->total += amount; }
+            } state_t;
+            @throws() pub error_t update(int input, borrowed mut int *out) {
+                if (input < 0) return ERROR_BAD;
+                *out = input;
+                return 0;
+            }
+            int main(void) {
+                state_t state = {0};
+                int value = 0;
+                defer { puts("cleanup"); }
+                @try {
+                    state.add(4);
+                    update(3, &value);
+                    printf("body:%d:%d\n", state.total, value);
+                }
+                @catch (error_t error) { puts("unexpected error"); }
+                @try { update(-1, &value); }
+                @catch (ERROR_BAD, error_t error) { puts("caught"); }
+                @catch (error_t error) { puts("unexpected failure"); }
+                printf("end:%d\n", value);
+            }
+        """.trimIndent()
+        val name = "differential-composed-runtime-passes.cp"
+        val source = sources.open(SourceId.named(name), text)
+
+        val legacy = CPlusTranspiler().transpile(text, name)
+        val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            experimental.successful,
+            "parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; unsupported=${experimental.unsupportedNodes}"
+        )
+        val experimentalC = experimental.transcodedSource ?: error("prototype has no mapped C output")
+        listOf(legacy, experimentalC).forEach { generated ->
+            val methodLine = generated.code.lines().indexOfFirst { "state__add(" in it } + 1
+            assertTrue(methodLine > 0, generated.code)
+            val origin = generated.sourceMap.sourceForGeneratedLine(methodLine)
+            assertEquals(name, origin?.file)
+            assertEquals(text.lines().indexOfFirst { "add(borrowed" in it } + 1, origin?.startLine)
+        }
+
+        val legacyRun = compileAndCaptureC(compiler, legacy.code)
+        val experimentalRun = compileAndCaptureC(compiler, experimentalC.code)
+        assertEquals(0, legacyRun.first, "legacy executable failed: ${legacyRun.second}")
+        assertEquals(0, experimentalRun.first, "Tree-sitter executable failed: ${experimentalRun.second}")
+        assertEquals("body:4:3\ncaught\nend:3\ncleanup\n", legacyRun.second)
+        assertEquals(legacyRun, experimentalRun)
+    }
+
+    @Test
+    fun legacyAndTreeSitterModuleImportsAgreeOnRuntimeAndSourceOrigins() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val directory = Files.createTempDirectory("cplus-differential-imports")
+        try {
+            val helper = directory.resolve("helper.cp")
+            val child = directory.resolve("child.cp")
+            val root = directory.resolve("main.cp")
+            Files.writeString(helper, "comptime int imported_answer = 41;\nint imported_value(void) { return comptime imported_answer; }\n")
+            Files.writeString(child, "comptime import \"helper.cp\";\nint child_value(void) { return imported_value() + 1; }\n")
+            val text = """
+                #include <stdio.h>
+                comptime import "child.cp";
+                int main(void) { printf("%d\n", child_value()); return child_value() == 42 ? 0 : 1; }
+            """.trimIndent()
+            Files.writeString(root, text)
+            val name = root.toRealPath().toString()
+            val source = sources.open(SourceId.named(name), text)
+
+            val legacy = CPlusTranspiler().transpile(text, name)
+            val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+            assertTrue(
+                experimental.successful,
+                "parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; unsupported=${experimental.unsupportedNodes}"
+            )
+            val experimentalC = experimental.transcodedSource ?: error("prototype has no mapped C output")
+            val expectedOrder = listOf(SourceId.fromPath(helper), SourceId.fromPath(child), SourceId.fromPath(root))
+            assertEquals(expectedOrder, legacy.sourceOrder)
+            assertEquals(expectedOrder, experimentalC.sourceOrder)
+            listOf(legacy, experimentalC).forEach { generated ->
+                val definitionLine = generated.code.lines().indexOfFirst {
+                    Regex("\\bint\\s+imported_value\\s*\\(").containsMatchIn(it)
+                } + 1
+                assertTrue(definitionLine > 0, generated.code)
+                val original = generated.sourceMap.sourceForGeneratedLine(definitionLine)
+                assertEquals(helper.toRealPath().toString(), original?.file)
+                assertEquals(2, original?.startLine)
+            }
+            val legacyRun = compileAndCaptureC(compiler, legacy.code)
+            val experimentalRun = compileAndCaptureC(compiler, experimentalC.code)
+            assertEquals(0, legacyRun.first, "legacy executable failed: ${legacyRun.second}")
+            assertEquals(0, experimentalRun.first, "Tree-sitter executable failed: ${experimentalRun.second}")
+            assertEquals("42\n", legacyRun.second)
+            assertEquals(legacyRun, experimentalRun)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun legacyAndTreeSitterImportedCompilerErrorsNameTheOriginalModuleLine() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val directory = Files.createTempDirectory("cplus-differential-import-error")
+        try {
+            val helper = directory.resolve("helper.cp")
+            val root = directory.resolve("main.cp")
+            Files.writeString(helper, "comptime int imported_answer = 41;\nint imported_value(void) { return missing_identifier; }\n")
+            val text = "comptime import \"helper.cp\";\nint main(void) { return imported_value(); }\n"
+            Files.writeString(root, text)
+            val name = root.toRealPath().toString()
+            val source = sources.open(SourceId.named(name), text)
+
+            val legacy = CPlusTranspiler().transpile(text, name)
+            val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+            assertTrue(
+                experimental.successful,
+                "parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; unsupported=${experimental.unsupportedNodes}"
+            )
+            val experimentalC = experimental.transcodedSource ?: error("prototype has no mapped C output")
+            val expectedLocation = "${helper.toRealPath()}:2:"
+            listOf(legacy, experimentalC).forEach { generated ->
+                val compile = ProcessBuilder(compiler, "-std=c11", "-fsyntax-only", "-x", "c", "-")
+                    .redirectErrorStream(true).start()
+                compile.outputStream.bufferedWriter().use { it.write(generated.code) }
+                val output = compile.inputStream.bufferedReader().use { it.readText() }
+                assertTrue(compile.waitFor() != 0, "invalid imported C unexpectedly compiled:\n${generated.code}")
+                assertTrue(expectedLocation in output, "$compiler error must name $expectedLocation:\n$output")
+                assertTrue("missing_identifier" in output, output)
+            }
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun legacyAndTreeSitterMethodErrorsMapToTheSameOriginalSourceLine() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            typedef struct broken_t {
+                int value;
+                pub int read(borrowed *self) { return self->missing; }
+            } broken_t;
+            int main(void) { broken_t value = {0}; return value.read(); }
+        """.trimIndent()
+        val name = "differential-method-error.cp"
+        val source = sources.open(SourceId.named(name), text)
+        val legacy = CPlusTranspiler().transpile(text, name)
+        val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            experimental.successful,
+            "parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; " +
+                "unsupported=${experimental.unsupportedNodes}"
+        )
+        val experimentalC = experimental.transcodedSource ?: error("prototype has no mapped C output")
+        val expectedLine = text.lines().indexOfFirst { "self->missing" in it } + 1
+        val diagnosticLocation = Regex("${Regex.escape(name)}:(\\d+):\\d+:")
+        listOf("legacy" to legacy.code, "tree-sitter" to experimentalC.code).forEach { (frontend, generatedC) ->
+            val compile = ProcessBuilder(compiler, "-std=c11", "-fsyntax-only", "-x", "c", "-")
+                .redirectErrorStream(true)
+                .start()
+            compile.outputStream.bufferedWriter().use { it.write(generatedC) }
+            val compilerOutput = compile.inputStream.bufferedReader().use { it.readText() }
+            assertTrue(compile.waitFor() != 0, "$frontend unexpectedly compiled invalid member access:\n$generatedC")
+            val reportedLine = diagnosticLocation.find(compilerOutput)?.groupValues?.get(1)?.toIntOrNull()
+            assertEquals(
+                expectedLine,
+                reportedLine,
+                "$frontend diagnostic must map to $name:$expectedLine:\n$compilerOutput"
+            )
+            assertTrue("missing" in compilerOutput, "$frontend diagnostic lost the invalid field name:\n$compilerOutput")
+        }
     }
 
     @Test
@@ -2631,6 +3315,29 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun prototypeMaterializesScalarExpressionsInsideExtractedTests() {
+        val text = """
+            comptime int answer = 40 + 2;
+            @test "scalar value in fixture" {
+                int observed = comptime answer;
+                @assertEquals(42, observed);
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-test-fixture.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val fixture = result.testFixtures.single()
+        assertFalse("comptime" in fixture.body.text, fixture.body.text)
+        assertTrue("int observed = 42;" in fixture.body.text, fixture.body.text)
+        val generatedValue = fixture.body.text.indexOf("42")
+        assertEquals(text.indexOf("comptime answer"), fixture.body.originAt(generatedValue)?.offset)
+        val testProgram = CPlusTranspiler().transpileExtractedTests(result.cSource!!, result.testFixtures)
+        compileAndRunC(testProgram.source.code)
+    }
+
+    @Test
     fun prototypeExtractsNamedTestsWithoutEmittingThemIntoProgramC() {
         val text = """
             int main(void) { return 0; }
@@ -2660,6 +3367,69 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertTrue(testProgram.source.code.contains("CPLUS_TEST_ASSERT_AT(1, 2, value == 42)"), testProgram.source.code)
         assertTrue(testProgram.source.code.contains("CPLUS_TEST_ASSERT_EQUALS_AT(2, 2, 42, value)"), testProgram.source.code)
         compileAndRunC(testProgram.source.code)
+    }
+
+    @Test
+    fun legacyAndTreeSitterTestDiscoveryProduceTheSameRunnableFixtures() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            #include <stdio.h>
+            typedef struct score_t {
+                int value;
+                pub void add(borrowed mut *self, int amount) { self->value += amount; }
+            } score_t;
+            int main(void) { return 0; }
+            @test "method fixture" {
+                score_t score = {40};
+                score.add(2);
+                @assertEquals(42, score.value);
+                @assert(score.value > 0);
+            }
+            @test second_fixture {
+                const char *text = "@assert(ignored)";
+                @assertEquals(5, 2 + 3);
+            }
+        """.trimIndent()
+        val name = "differential-test-discovery.cp"
+        val source = sources.open(SourceId.named(name), text)
+        val legacy = CPlusTranspiler().transpileTests(text, name)
+        val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            experimental.successful,
+            "parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; " +
+                "unsupported=${experimental.unsupportedNodes}"
+        )
+        val treeSitterC = experimental.cSource ?: error("prototype has no mapped C output")
+        val treeSitterTests = CPlusTranspiler().transpileExtractedTests(treeSitterC, experimental.testFixtures)
+        val firstFixture = experimental.testFixtures.first()
+        val methodCallOffset = text.indexOf("score.add(2)")
+        val assertionOffset = text.indexOf("@assertEquals(42, score.value)")
+        assertEquals(methodCallOffset, firstFixture.body.originAt(firstFixture.body.text.indexOf("score.add(2)"))?.offset)
+        assertEquals(name, firstFixture.assertions.first().span.file)
+        assertEquals(assertionOffset, firstFixture.assertions.first().span.startOffset)
+        val generatedTestCode = treeSitterTests.source.code
+        val generatedAssertionOffset = generatedTestCode.indexOf("CPLUS_TEST_ASSERT_EQUALS_AT(1, 2, 42, score.value)")
+        assertTrue(generatedAssertionOffset >= 0, generatedTestCode)
+        val generatedAssertionLine = generatedTestCode.take(generatedAssertionOffset).count { it == '\n' } + 1
+        val expectedAssertionLine = text.take(assertionOffset).count { it == '\n' } + 1
+        assertEquals(
+            expectedAssertionLine,
+            treeSitterTests.source.sourceMap.sourceForGeneratedLine(generatedAssertionLine)?.startLine
+        )
+        assertEquals(legacy.testNames, treeSitterTests.testNames)
+        assertEquals(listOf("method fixture", "second_fixture"), treeSitterTests.testNames)
+        assertEquals(legacy.fixtures.map { it.assertionCount }, treeSitterTests.fixtures.map { it.assertionCount })
+        assertEquals(listOf(2, 1), treeSitterTests.fixtures.map { it.assertionCount })
+
+        val legacyRun = compileAndCaptureC(compiler, legacy.source.code)
+        val treeSitterRun = compileAndCaptureC(compiler, treeSitterTests.source.code)
+        assertEquals(0, legacyRun.first, "legacy test harness failed: ${legacyRun.second}")
+        assertEquals(0, treeSitterRun.first, "Tree-sitter test harness failed: ${treeSitterRun.second}")
+        assertEquals(legacyRun, treeSitterRun)
+        assertTrue(legacyRun.second.contains("TEST SUMMARY: 2 selected, 0 failed"), legacyRun.second)
     }
 
     @Test
@@ -2822,14 +3592,18 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertTrue(text.substring(diagnostic.span.startOffset, diagnostic.span.endOffset).contains("checked()"))
     }
 
-    private fun compileAndCaptureC(compiler: String, code: String): Pair<Int, String> {
+    private fun compileAndCaptureC(
+        compiler: String,
+        code: String,
+        compilerOptions: List<String> = emptyList()
+    ): Pair<Int, String> {
         val temporaryDirectory = Files.createTempDirectory("cplus-frontend-differential")
         try {
             val executable = temporaryDirectory.resolve(
                 "parity" + if (System.getProperty("os.name").startsWith("Windows", true)) ".exe" else ""
             )
             val compile = ProcessBuilder(
-                compiler, "-std=c11", "-x", "c", "-", "-o", executable.toString()
+                listOf(compiler) + compilerOptions + listOf("-std=c11", "-x", "c", "-", "-o", executable.toString())
             ).redirectErrorStream(true).start()
             compile.outputStream.bufferedWriter().use { it.write(code) }
             val compilerOutput = compile.inputStream.bufferedReader().use { it.readText() }
@@ -2840,6 +3614,42 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             return run.waitFor() to runtimeOutput
         } finally {
             Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    private fun cTokenSpellings(code: String, sourceName: String): List<String> {
+        // #line is compiler-facing mapping metadata, not part of the generated C token stream.
+        // Tree-sitter's grammar can recover differently when these directives split a declarator
+        // or initializer, so remove only those directives before lexical-token comparison.
+        val syntaxCode = code.replace(Regex("(?m)^[ \\t]*#line[^\\r\\n]*(?:\\r?\\n|$)"), "")
+        val snapshot = sources.open(SourceId.named(sourceName), syntaxCode)
+        val parsed = backend.parse(snapshot)
+        if (parsed.diagnostics.isNotEmpty()) {
+            val snippets = parsed.diagnostics.map { diagnostic ->
+                val start = (diagnostic.span.startOffset - 80).coerceAtLeast(0)
+                val end = (diagnostic.span.endOffset + 80).coerceAtMost(syntaxCode.length)
+                "${diagnostic.span.startLine}:${diagnostic.span.startColumn}: " + syntaxCode.substring(start, end)
+            }
+            assertTrue(false, "$sourceName parser diagnostics: ${parsed.diagnostics}\n${snippets.joinToString("\n---\n")}")
+        }
+        val preprocessorNodes = setOf(
+            "preproc_if", "preproc_ifdef", "preproc_include", "preproc_def", "preproc_function_def", "preproc_call"
+        )
+        return buildList {
+            fun visit(node: CPlusSyntaxNode) {
+                if (node.kind in preprocessorNodes) {
+                    add(syntaxCode.substring(node.span.startOffset, node.span.endOffset))
+                } else if (node.kind == "comment") {
+                    return
+                } else if (node.children.isEmpty()) {
+                    if (node.span.endOffset > node.span.startOffset) {
+                        add(syntaxCode.substring(node.span.startOffset, node.span.endOffset))
+                    }
+                } else {
+                    node.children.sortedBy { it.span.startOffset }.forEach(::visit)
+                }
+            }
+            visit(parsed.root)
         }
     }
 
@@ -3175,6 +3985,59 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun legacyAndTreeSitterAgreeOnPlatformConditionalCodeAndCompilerFlags() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            comptime {
+                @if (os == "linux") {
+                    comptime int @selected_platform = 11;
+                    comptime flags -DEXPECTED_PLATFORM=11;
+                } @else {
+                    comptime int @selected_platform = 22;
+                    comptime flags -DEXPECTED_PLATFORM=22;
+                }
+            }
+            int selected_runtime = comptime selected_platform;
+            int main(void) { return selected_runtime == EXPECTED_PLATFORM ? 0 : 1; }
+        """.trimIndent()
+        val name = "differential-platform-flags.cp"
+        for ((targetOs, expectedOption) in listOf("linux" to "-DEXPECTED_PLATFORM=11", "windows" to "-DEXPECTED_PLATFORM=22")) {
+            val source = sources.open(SourceId.named(name), text)
+            val legacy = CPlusTranspiler().transpile(text, name, targetOs = targetOs)
+            val experimental = TreeSitterCPlusPrototypeTranspiler(backend, sources, targetOs = targetOs).transpile(source)
+            assertTrue(
+                experimental.successful,
+                "$targetOs parser=${experimental.parserDiagnostics}; lowering=${experimental.loweringDiagnostics}; " +
+                    "unsupported=${experimental.unsupportedNodes}"
+            )
+            val treeSitterC = experimental.transcodedSource ?: error("$targetOs prototype has no mapped C output")
+            assertEquals(listOf(expectedOption), legacy.compilerOptions)
+            assertEquals(legacy.compilerOptions, treeSitterC.compilerOptions)
+            val legacyRun = compileAndCaptureC(compiler, legacy.code, legacy.compilerOptions)
+            val treeSitterRun = compileAndCaptureC(compiler, treeSitterC.code, treeSitterC.compilerOptions)
+            assertEquals(0, legacyRun.first, "$targetOs legacy output failed: ${legacyRun.second}")
+            assertEquals(0, treeSitterRun.first, "$targetOs Tree-sitter output failed: ${treeSitterRun.second}")
+            assertEquals(legacyRun, treeSitterRun, "$targetOs runtime output differs")
+        }
+    }
+
+    @Test
+    fun prototypeFailsClosedOnRuntimeStatementsInsideComptimeBlocks() {
+        val text = "comptime { int runtime_value = 7; }"
+        val source = sources.open(SourceId.named("unsupported-comptime-block.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful)
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_BLOCK_UNSUPPORTED", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("int runtime_value"), diagnostic.span.startOffset)
+    }
+
+    @Test
     fun prototypeMaterializesNestedAndNotEqualPlatformConditionsAcrossPasses() {
         val text = """
             @if (os != "windows") {
@@ -3232,6 +4095,59 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals(source.sourceFile, mapped?.file)
         assertEquals(text.indexOf("comptime answer"), mapped?.offset)
         compileAndRunC(generated.text)
+    }
+
+    @Test
+    fun prototypeEvaluatesPureScalarComptimeFunctionsFromAst() {
+        val text = """
+            comptime int @twice(int value) { return value * 2; }
+            comptime int @named_answer = twice(42);
+            int runtime_answer = comptime named_answer;
+            int inline_answer = comptime twice(21);
+            int main(void) { return runtime_answer == 84 && inline_answer == 42 ? 0 : 1; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-functions.cp"), text)
+        val parsed = backend.parse(source)
+        val indexedFunctions = CPlusComptimeIndexer().index(CPlusAstAdapter().adapt(parsed)).constructs
+            .filter { it.syntaxKind == "cplus_comptime_function_definition" }
+        assertEquals(listOf("twice"), indexedFunctions.map { it.symbol })
+        assertEquals(listOf("int"), indexedFunctions.single().parameters.map { it.typeText })
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.cSource ?: error("successful prototype result must contain C")
+        assertFalse("comptime" in generated.text)
+        assertFalse("twice" in generated.text)
+        assertTrue("comptime int @answer" !in generated.text)
+        assertTrue("int runtime_answer = 84;" in generated.text, generated.text)
+        assertTrue("int inline_answer = 42;" in generated.text, generated.text)
+        compileAndRunC(generated.text)
+    }
+
+    @Test
+    fun prototypeRejectsRecursiveAndWrongArityScalarComptimeFunctionCalls() {
+        val cases = listOf(
+            """
+                comptime int @loop(int value) { return loop(value); }
+                int result = comptime loop(1);
+            """ to "CPLUS_COMPTIME_SCALAR_FUNCTION_RECURSION",
+            """
+                comptime int @twice(int value) { return value * 2; }
+                int result = comptime twice();
+            """ to "CPLUS_COMPTIME_SCALAR_FUNCTION_ARITY"
+        )
+
+        cases.forEachIndexed { index, (textBlock, expectedCode) ->
+            val text = textBlock.trimIndent()
+            val source = sources.open(SourceId.named("scalar-comptime-function-error-$index.cp"), text)
+            val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+            assertFalse(result.successful, "case $index should fail closed")
+            val diagnostic = result.loweringDiagnostics.single { it.code == expectedCode }
+            assertEquals(source.id.value, diagnostic.span.file)
+            assertTrue(diagnostic.span.startOffset in text.indices)
+        }
     }
 
     @Test

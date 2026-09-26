@@ -1342,7 +1342,10 @@ private class ComptimeParser(private val source: SourceFile) {
         val argumentsStart = skipHorizontalWhitespace(source.text, flagsAt + "flags".length)
         val (arguments, end) = readFlagsDirective(argumentsStart)
         val options = tokenizeFlags(arguments, argumentsStart)
-        if (options.isEmpty()) throw syntax("comptime flags requires at least one compiler argument", source, flagsAt)
+        if (options.isEmpty()) {
+            val diagnosticOffset = if (end > argumentsStart && source.text[end - 1] == ';') end - 1 else argumentsStart
+            throw syntax("comptime flags requires at least one compiler argument", source, diagnosticOffset)
+        }
         return ComptimeFlags(source, start, end, options)
     }
 
@@ -1521,7 +1524,7 @@ private class ComptimeParser(private val source: SourceFile) {
         }
         if (name.isBlank()) throw syntax("@test requires a non-empty name", source, at)
         val close = Delimiters.match(masked, open, '{', '}')
-        if (close < 0) throw syntax("unclosed @test body", source, open)
+        if (close < 0) throw syntax("unclosed @test body", source, source.text.length)
         val semicolon = skipWhitespace(masked, close + 1).takeIf { it < masked.length && masked[it] == ';' }
         return ComptimeTest(source, start, (semicolon ?: close) + 1, name, open + 1, close)
     }
@@ -1558,6 +1561,9 @@ private class ComptimeParser(private val source: SourceFile) {
         val parenthesized = cursor < source.text.length && source.text[cursor] == '('
         if (parenthesized) cursor = skipWhitespace(source.text, cursor + 1)
         if (cursor >= source.text.length || source.text[cursor] != '"') {
+            if (keyword == "import" && cursor < source.text.length && source.text[cursor] == ';') {
+                throw syntax("comptime import requires a quoted path", source, cursor)
+            }
             throw syntax("malformed $keyword; expected $keyword \"file.cp\" or $keyword(\"file.c\")", source, keywordAt)
         }
 
@@ -1606,7 +1612,7 @@ private class ComptimeParser(private val source: SourceFile) {
 
     private fun parseBlockAt(start: Int, open: Int): ComptimeBlock {
         val close = Delimiters.match(masked, open, '{', '}')
-        if (close < 0) throw syntax("unclosed comptime block", source, open)
+        if (close < 0) throw syntax("unclosed comptime block", source, source.text.length)
         return ComptimeBlock(source, start, close + 1, open + 1, close)
     }
 
@@ -1761,8 +1767,11 @@ private class ComptimeParser(private val source: SourceFile) {
 
     private fun isStandaloneReference(start: Int, at: Int): Boolean = source.text.substring(start, at).trim().isEmpty()
 
-    private fun parseParameters(text: String, offset: Int): List<ComptimeParameter> =
-        splitArguments(text).filter { it.isNotBlank() }.map { parameter ->
+    private fun parseParameters(text: String, offset: Int): List<ComptimeParameter> {
+        var searchOffset = 0
+        return splitArguments(text).filter { it.isNotBlank() }.map { parameter ->
+            val parameterOffset = text.indexOf(parameter, searchOffset).takeIf { it >= 0 } ?: searchOffset
+            searchOffset = parameterOffset + parameter.length
             val trimmed = parameter.trim()
             val typeParameter = Regex("(?:@type|type)\\s+([A-Za-z_]\\w*)\\s*").matchEntire(trimmed)
             if (typeParameter != null) {
@@ -1773,11 +1782,17 @@ private class ComptimeParser(private val source: SourceFile) {
                     ComptimeParameter(sigiled.groupValues[2], sigiled.groupValues[1].trim())
                 } else {
                     val ordinary = Regex("(.+?)\\s+([A-Za-z_]\\w*)\\s*$").matchEntire(trimmed)
-                        ?: throw syntax("comptime parameters must be typed names", source, offset)
+                        ?: throw syntax(
+                            "comptime parameters must be typed names",
+                            source,
+                            offset + parameterOffset,
+                            parameter.length.coerceAtLeast(1)
+                        )
                     ComptimeParameter(ordinary.groupValues[2], ordinary.groupValues[1].trim())
                 }
             }
         }
+    }
 
     private fun parseTypeParameters(text: String, offset: Int): List<ComptimeParameter> =
         splitArguments(text).filter { it.isNotBlank() }.map { parameter ->
@@ -1799,32 +1814,89 @@ internal data class LegacyComptimeScan(
 /** Adapts the existing comptime scanner to the backend-neutral syntax model without claiming full C parsing. */
 internal fun parseLegacyComptimeSyntax(snapshot: SourceSnapshot): LegacyComptimeScan {
     val source = snapshot.sourceFile
-    return try {
-        val items = ComptimeParser(source).parse().items
-        val nodes = items.map { item ->
-            val kind = when (item) {
-                is ComptimeImport -> "comptime_import"
-                is ComptimeCImport -> "c_import_expression"
-                is ComptimeFlags -> "comptime_flags"
-                is ComptimeBlock -> "comptime_block"
-                is ComptimeTest -> "test_declaration"
-                is ComptimeValue -> "comptime_value_declaration"
-                is ComptimeFunction -> "comptime_function_declaration"
-                is ComptimeTypeGenerator -> "comptime_type_declaration"
-                is ComptimeStruct -> "comptime_struct_declaration"
-                is ComptimeInvocation -> "comptime_invocation"
-                is ComptimeReference -> "comptime_reference"
+    val diagnostics = mutableListOf<ParserDiagnostic>()
+    var scanText = snapshot.text
+    var attempts = 0
+    while (true) {
+        val scanSource = if (scanText == snapshot.text) source else SourceFile(scanText, source.name)
+        try {
+            val items = ComptimeParser(scanSource).parse().items
+            val nodes = items.map { item ->
+                val kind = when (item) {
+                    is ComptimeImport -> "comptime_import"
+                    is ComptimeCImport -> "c_import_expression"
+                    is ComptimeFlags -> "comptime_flags"
+                    is ComptimeBlock -> "comptime_block"
+                    is ComptimeTest -> "test_declaration"
+                    is ComptimeValue -> "comptime_value_declaration"
+                    is ComptimeFunction -> "comptime_function_declaration"
+                    is ComptimeTypeGenerator -> "comptime_type_declaration"
+                    is ComptimeStruct -> "comptime_struct_declaration"
+                    is ComptimeInvocation -> "comptime_invocation"
+                    is ComptimeReference -> "comptime_reference"
+                }
+                CPlusSyntaxNode(kind, source.span(item.start, item.end))
             }
-            CPlusSyntaxNode(kind, source.span(item.start, item.end))
+            return LegacyComptimeScan(nodes, diagnostics)
+        } catch (error: CPlusSyntaxException) {
+            val parserMessage = error.message ?: "invalid comptime syntax"
+            val errorSpan = error.sourceSpan ?: scanSource.span(0, 0)
+            val diagnosticSpan = source.span(errorSpan.startOffset, errorSpan.endOffset)
+            val code = when (parserMessage) {
+                "comptime flags requires at least one compiler argument" -> "CPLUS_COMPTIME_FLAGS_EMPTY"
+                "comptime import requires a quoted path" -> "CPLUS_COMPTIME_IMPORT_PATH_MISSING"
+                "comptime parameters must be typed names" -> "CPLUS_COMPTIME_PARAMETER_INVALID"
+                "unclosed comptime block" -> "CPLUS_COMPTIME_BLOCK_UNCLOSED"
+                "unclosed @test body" -> "CPLUS_TEST_BODY_UNCLOSED"
+                "unclosed @type generator body" -> "CPLUS_TYPE_GENERATOR_BODY_UNCLOSED"
+                else -> "legacy.comptime.syntax"
+            }
+            diagnostics += ParserDiagnostic(code, parserMessage, ParserDiagnosticSeverity.ERROR, diagnosticSpan)
+            val recovery = legacyComptimeRecoveryRange(scanText, errorSpan.startOffset)
+            if (recovery == null || attempts++ >= 255) {
+                // Preserve diagnostics already found and fail closed if recovery cannot advance.
+                return LegacyComptimeScan(emptyList(), diagnostics)
+            }
+            scanText = buildString(scanText.length) {
+                append(scanText, 0, recovery.first)
+                for (index in recovery.first until recovery.second) {
+                    append(if (scanText[index] == '\n' || scanText[index] == '\r') scanText[index] else ' ')
+                }
+                append(scanText, recovery.second, scanText.length)
+            }
         }
-        LegacyComptimeScan(nodes, emptyList())
-    } catch (error: CPlusSyntaxException) {
-        val span = error.sourceSpan ?: source.span(0, 0)
-        LegacyComptimeScan(
-            nodes = emptyList(),
-            diagnostics = listOf(ParserDiagnostic("legacy.comptime.syntax", error.message ?: "invalid comptime syntax", ParserDiagnosticSeverity.ERROR, span))
-        )
     }
+}
+
+/** Finds a single top-level comptime construct to blank in the diagnostic-only recovery scan. */
+private fun legacyComptimeRecoveryRange(text: String, errorOffset: Int): Pair<Int, Int>? {
+    if (text.isEmpty()) return null
+    val offset = errorOffset.coerceIn(0, text.length)
+    val masked = SourceMasker.mask(text)
+    val markerRegex = Regex("\\bcomptime\\b|@(?:test|type|import)\\b")
+    val marker = markerRegex.findAll(masked.substring(0, offset))
+        .lastOrNull { match ->
+            val afterMarker = match.range.last + 1
+            masked.indexOf(';', afterMarker).let { semicolon -> semicolon < 0 || semicolon >= offset }
+        }
+    var start = marker?.range?.first ?: (masked.lastIndexOf('\n', (offset - 1).coerceAtLeast(0)) + 1)
+    if (start > offset) start = offset
+
+    val openingBrace = masked.indexOf('{', start).takeIf { it >= start && it < text.length }
+    val closingBrace = openingBrace?.let { Delimiters.match(masked, it, '{', '}') }
+    val semicolon = masked.indexOf(';', offset).takeIf { it >= offset }
+    val endExclusive = when {
+        semicolon != null && (openingBrace == null || semicolon < openingBrace) -> semicolon + 1
+        openingBrace != null && (closingBrace == null || closingBrace < 0) -> text.length
+        openingBrace != null && closingBrace != null && closingBrace >= offset -> {
+            val afterBrace = closingBrace + 1
+            if (masked.getOrNull(afterBrace) == ';') afterBrace + 1 else afterBrace
+        }
+        semicolon != null -> semicolon + 1
+        else -> text.indexOf('\n', offset).let { if (it < 0) text.length else it + 1 }
+    }.coerceIn(0, text.length)
+    val safeStart = start.coerceIn(0, text.length)
+    return if (endExclusive > safeStart) safeStart to endExclusive else null
 }
 
 private class ComptimeEnvironment(
@@ -2205,8 +2277,8 @@ private fun CtValue.asBoolean(): Boolean = when (this) {
     else -> true
 }
 
-private fun syntax(message: String, source: SourceFile, offset: Int): CPlusSyntaxException =
-    CPlusSyntaxException(message, source.span(offset))
+private fun syntax(message: String, source: SourceFile, offset: Int, length: Int = 1): CPlusSyntaxException =
+    CPlusSyntaxException(message, source.span(offset, offset + length))
 
 private fun isKeywordAt(text: String, offset: Int, keyword: String): Boolean =
     offset >= 0 && offset + keyword.length <= text.length &&

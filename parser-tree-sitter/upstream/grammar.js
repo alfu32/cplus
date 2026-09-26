@@ -36,6 +36,8 @@ module.exports = grammar({
   name: 'c',
 
   conflicts: $ => [
+    [$.cplus_comptime_function_definition, $.cplus_comptime_value],
+    [$.type_specifier, $.cplus_comptime_function_definition],
     [$.type_specifier, $._declarator],
     [$.type_specifier, $._declarator, $.macro_type_specifier],
     [$.type_specifier, $.expression],
@@ -858,11 +860,10 @@ module.exports = grammar({
       $.cplus_comptime_value,
     ),
 
-    cplus_comptime_function_definition: $ => prec(2, seq(
+    cplus_comptime_function_definition: $ => prec.dynamic(2, seq(
       'comptime',
       field('result_kind', choice('type', 'function', 'variable', 'string', 'code', $.identifier, $.primitive_type)),
-      '@',
-      field('name', $.identifier),
+      field('name', alias($.cplus_comptime_marked_identifier, $.identifier)),
       '(',
       commaSep(choice($.cplus_generic_type_parameter, $.parameter_declaration)),
       ')',
@@ -910,9 +911,11 @@ module.exports = grammar({
       field('body', $.cplus_comptime_body),
     ),
 
-    cplus_comptime_import: $ => seq('comptime', 'import', $.string_literal, ';'),
+    cplus_comptime_import: $ => seq('comptime', 'import', optional($.string_literal), ';'),
 
-    cplus_comptime_flags: $ => seq('comptime', 'flags', repeat1(choice(
+    // Empty argument lists remain structurally parseable so the compiler can emit a precise
+    // semantic diagnostic at the terminating semicolon instead of a whole-directive ERROR node.
+    cplus_comptime_flags: $ => seq('comptime', 'flags', repeat(choice(
       $.identifier,
       $.number_literal,
       $.string_literal,

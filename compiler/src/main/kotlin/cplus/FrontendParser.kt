@@ -91,6 +91,8 @@ data class CPlusParserShadowReport(
     val diagnosticsMatch: Boolean,
     /** True when both backends report errors on intersecting ranges/insert points (or both are clean). */
     val errorLocationsAlign: Boolean,
+    /** True when the sorted error spans are exactly equal, independent of backend-specific messages/codes. */
+    val errorSpansMatch: Boolean,
     /** Equality for the deliberately shared comptime/test syntax subset only. */
     val recognizedConstructsMatch: Boolean,
     val authoritativeRecognizedConstructs: List<String>,
@@ -127,8 +129,19 @@ class CPlusParserShadowRunner(
         val diagnosticSignature: (ParserDiagnostic) -> List<Any?> = { diagnostic ->
             listOf(diagnostic.code, diagnostic.message, diagnostic.severity, diagnostic.span)
         }
+        val diagnosticOrder = compareBy<ParserDiagnostic>(
+            { it.span.file.orEmpty() },
+            { it.span.startOffset },
+            { it.span.endOffset },
+            { it.code },
+            { it.message },
+            { it.severity.ordinal }
+        )
         val authoritativeErrors = authoritative.diagnostics.filter { it.severity == ParserDiagnosticSeverity.ERROR }
         val shadowErrors = shadow.diagnostics.filter { it.severity == ParserDiagnosticSeverity.ERROR }
+        fun sortedErrorSpans(errors: List<ParserDiagnostic>): List<SourceSpan> = errors
+            .map(ParserDiagnostic::span)
+            .sortedWith(compareBy(SourceSpan::file, SourceSpan::startOffset, SourceSpan::endOffset))
         fun locationsAlign(left: SourceSpan, right: SourceSpan): Boolean {
             if (left.file != right.file) return false
             if (left.startOffset == left.endOffset) {
@@ -142,8 +155,29 @@ class CPlusParserShadowRunner(
         val errorsAlign = when {
             authoritativeErrors.isEmpty() && shadowErrors.isEmpty() -> true
             authoritativeErrors.isEmpty() || shadowErrors.isEmpty() -> false
-            else -> authoritativeErrors.all { left -> shadowErrors.any { right -> locationsAlign(left.span, right.span) } } &&
-                shadowErrors.all { right -> authoritativeErrors.any { left -> locationsAlign(left.span, right.span) } }
+            authoritativeErrors.size != shadowErrors.size -> false
+            else -> {
+                // Require a one-to-one overlap rather than allowing one broad diagnostic to
+                // make several unrelated errors appear aligned.
+                val matchedAuthoritative = IntArray(authoritativeErrors.size) { -1 }
+                fun matchShadow(shadowIndex: Int, visited: BooleanArray): Boolean {
+                    authoritativeErrors.indices.forEach { authoritativeIndex ->
+                        if (visited[authoritativeIndex] ||
+                            !locationsAlign(shadowErrors[shadowIndex].span, authoritativeErrors[authoritativeIndex].span)
+                        ) return@forEach
+
+                        visited[authoritativeIndex] = true
+                        val previousShadow = matchedAuthoritative[authoritativeIndex]
+                        if (previousShadow == -1 || matchShadow(previousShadow, visited)) {
+                            matchedAuthoritative[authoritativeIndex] = shadowIndex
+                            return true
+                        }
+                    }
+                    return false
+                }
+
+                shadowErrors.indices.all { shadowIndex -> matchShadow(shadowIndex, BooleanArray(authoritativeErrors.size)) }
+            }
         }
         val authoritativeRecognized = recognizedConstructs(authoritative)
         val shadowRecognized = recognizedConstructs(shadow)
@@ -151,8 +185,13 @@ class CPlusParserShadowRunner(
             authoritative = authoritative,
             shadow = shadow,
             coverageMatches = authoritative.coverage == shadow.coverage,
-            diagnosticsMatch = authoritative.diagnostics.map(diagnosticSignature) == shadow.diagnostics.map(diagnosticSignature),
+            // Error traversal order is backend-specific (for example, parser recovery may find an
+            // EOF insertion before a later semantic pass reports an earlier source construct).
+            // Compare the complete signatures as a sorted multiset, not as an ordered sequence.
+            diagnosticsMatch = authoritative.diagnostics.sortedWith(diagnosticOrder).map(diagnosticSignature) ==
+                shadow.diagnostics.sortedWith(diagnosticOrder).map(diagnosticSignature),
             errorLocationsAlign = errorsAlign,
+            errorSpansMatch = sortedErrorSpans(authoritativeErrors) == sortedErrorSpans(shadowErrors),
             recognizedConstructsMatch = authoritativeRecognized == shadowRecognized,
             authoritativeRecognizedConstructs = authoritativeRecognized,
             shadowRecognizedConstructs = shadowRecognized,

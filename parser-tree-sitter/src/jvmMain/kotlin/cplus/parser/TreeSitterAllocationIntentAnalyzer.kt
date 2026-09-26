@@ -15,10 +15,14 @@ import cplus.CPlusSemanticAnalyzer
  *
  * Reports allocator provenance on variable declarations and follows straightforward
  * initializer aliases within lexical scopes, and annotated function/method return values
- * at call sites. Branch-sensitive and general expression flow remains with the legacy
- * analyzer until equivalent AST data-flow exists.
+ * at call sites. Structured branches and bounded loop transfer are modeled; unsupported
+ * control exits and general C expression-order cases remain conservative.
  */
 class TreeSitterAllocationIntentAnalyzer {
+    private companion object {
+        const val MAX_LOOP_DATAFLOW_ITERATIONS = 32
+    }
+
     fun analyze(ast: CPlusAst): AllocationAnalysisResult {
         val symbols = mutableListOf<AllocationSymbol>()
         val diagnostics = mutableListOf<CPlusDiagnostic>()
@@ -452,14 +456,85 @@ class TreeSitterAllocationIntentAnalyzer {
                     mergePossibleScopes(scope, incoming, listOf(thenScope, elseScope))
                 }
                 "for_statement", "while_statement", "do_statement" -> {
-                    val outerNames = scope.keys.toSet()
+                    val incoming = scope.toMap()
                     val loopScope = scope.toMutableMap()
-                    // A single structural walk catches diagnostics and declarations without
-                    // pretending that one traversal computes a loop fixed point. New for-init
-                    // variables stay local to this loop scope.
-                    node.children.forEach { visit(it, loopScope, currentFunction) }
-                    modifiedVariablesIn(node).intersect(outerNames).forEach { name ->
-                        scope[name]?.let { state -> scope[name] = state.copy(provenance = null) }
+                    val initializer = node.children.firstOrNull { it.fieldName == "initializer" }
+                    if (node.syntaxKind == "for_statement") {
+                        initializer?.let { visit(it, loopScope, currentFunction) }
+                    }
+                    val loopEntry = loopScope.toMap()
+                    val condition = node.children.firstOrNull { it.fieldName == "condition" }
+                    val body = node.children.firstOrNull { it.fieldName == "body" }
+                    val update = node.children.firstOrNull { it.fieldName == "update" }
+                    val hasUnmodeledExit = node.descendantsAndSelf().any {
+                        it.syntaxKind in setOf(
+                            "break_statement", "continue_statement", "goto_statement",
+                            "return_statement", "labeled_statement"
+                        )
+                    }
+                    if (hasUnmodeledExit || body == null) {
+                        // Preserve soundness where the transfer function cannot yet model early
+                        // exits or labels. The bounded solver below handles straight-line and
+                        // structured branch effects only.
+                        node.children.filterNot { node.syntaxKind == "for_statement" && it === initializer }
+                            .forEach { visit(it, loopScope, currentFunction) }
+                        modifiedVariablesIn(node).intersect(incoming.keys).forEach { name ->
+                            scope[name]?.let { state -> scope[name] = state.copy(provenance = null) }
+                        }
+                    } else {
+                        fun joinedStates(
+                            baseline: Map<String, VariableState>,
+                            paths: List<Map<String, VariableState>>
+                        ): Map<String, VariableState> = baseline.toMutableMap().also { joined ->
+                            mergePossibleScopes(joined, baseline, paths)
+                        }.toMap()
+
+                        fun iterationStates(head: Map<String, VariableState>): Pair<
+                            Map<String, VariableState>,
+                            Map<String, VariableState>
+                        > {
+                            val beforeBody = head.toMutableMap()
+                            if (node.syntaxKind == "do_statement") {
+                                val afterBody = beforeBody
+                                visit(body, afterBody, currentFunction)
+                                condition?.let { visit(it, afterBody, currentFunction) }
+                                return afterBody.toMap() to afterBody.toMap()
+                            }
+                            condition?.let { visit(it, beforeBody, currentFunction) }
+                            val exitState = beforeBody.toMap()
+                            val afterBody = beforeBody.toMutableMap()
+                            visit(body, afterBody, currentFunction)
+                            update?.let { visit(it, afterBody, currentFunction) }
+                            return exitState to afterBody.toMap()
+                        }
+
+                        val possibleExits = mutableListOf<Map<String, VariableState>>()
+                        var head = loopEntry
+                        var converged = false
+                        for (iterationNumber in 0 until MAX_LOOP_DATAFLOW_ITERATIONS) {
+                            val (exitState, afterIteration) = iterationStates(head)
+                            possibleExits += exitState
+
+                            val nextHead = when {
+                                node.syntaxKind == "do_statement" && iterationNumber == 0 -> afterIteration
+                                node.syntaxKind == "do_statement" -> joinedStates(head, listOf(head, afterIteration))
+                                else -> joinedStates(loopEntry, listOf(loopEntry, afterIteration))
+                            }
+                            if (nextHead == head) {
+                                converged = true
+                                break
+                            }
+                            head = nextHead
+                        }
+
+                        if (!converged) {
+                            modifiedVariablesIn(node).intersect(incoming.keys).forEach { name ->
+                                scope[name]?.let { state -> scope[name] = state.copy(provenance = null) }
+                            }
+                        } else if (possibleExits.isNotEmpty()) {
+                            val mergedExits = joinedStates(incoming, possibleExits)
+                            incoming.keys.forEach { name -> mergedExits[name]?.let { scope[name] = it } }
+                        }
                     }
                 }
                 "switch_statement" -> {
