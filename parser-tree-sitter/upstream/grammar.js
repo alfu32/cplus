@@ -1032,13 +1032,13 @@ module.exports = grammar({
     ),
 
     cplus_try_statement: $ => prec.right(seq(
-      '@', 'try',
+      '@try',
       field('body', $.compound_statement),
       repeat1($.cplus_catch_clause),
     )),
 
     cplus_catch_clause: $ => seq(
-      '@', 'catch', '(',
+      '@catch', '(',
       choice(
         seq(
           $.identifier,

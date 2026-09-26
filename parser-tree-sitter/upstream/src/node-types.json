@@ -5598,6 +5598,14 @@
     "named": false
   },
   {
+    "type": "@catch",
+    "named": false
+  },
+  {
+    "type": "@try",
+    "named": false
+  },
+  {
     "type": "L\"",
     "named": false
   },
@@ -5815,10 +5823,6 @@
   },
   {
     "type": "case",
-    "named": false
-  },
-  {
-    "type": "catch",
     "named": false
   },
   {
@@ -6069,10 +6073,6 @@
   {
     "type": "true",
     "named": true
-  },
-  {
-    "type": "try",
-    "named": false
   },
   {
     "type": "type",

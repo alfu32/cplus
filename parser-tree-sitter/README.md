@@ -19,7 +19,7 @@ tree-sitter generate --abi 15
 tree-sitter test
 ```
 
-Generated parser files are committed so downstream builds do not need the CLI. The Kotlin/JVM adapter uses KTreeSitter 0.25.1. Gradle builds the grammar JNI library under the current host's OS/architecture resource path. CI's six-host matrix uploads those libraries and merges them into the CLI runtime before packaging; ordinary local builds include the JNI library for the local host only. The Linux x86_64 JVM parser jar is about 149 KiB with its bridge library; parsing through JNI is tested on Temurin 21. The full upstream-plus-extension corpus currently has 91 passing cases. The release workflow verifies that both application distributions contain all six bridge libraries. See the compiler frontend implementation follow-up for remaining migration gates.
+Generated parser files are committed so downstream builds do not need the CLI. The Kotlin/JVM adapter uses KTreeSitter 0.25.1. Gradle builds the grammar JNI library under the current host's OS/architecture resource path. CI's six-host matrix uploads those libraries and merges them into the CLI runtime before packaging; ordinary local builds include the JNI library for the local host only. The Linux x86_64 JVM parser jar is about 149 KiB with its bridge library; parsing through JNI is tested on Temurin 21. The full upstream-plus-extension corpus currently has 92 passing cases, including adjacent `@try` statements with multiple catches. The release workflow verifies that both application distributions contain all six bridge libraries. See the compiler frontend implementation follow-up for remaining migration gates.
 
 ## Experimental transpilation slice
 

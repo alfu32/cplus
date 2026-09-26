@@ -133,3 +133,44 @@ void run(void) {
                 (identifier)
                 (argument_list
                   (identifier))))))))))
+
+================================================================================
+Adjacent C-plus try statements with multiple catches
+================================================================================
+
+void run(void) {
+  @try {} @catch (error_t error) {}
+  @try {} @catch (ERROR_BAD, error_t error) {} @catch (error_t error) {}
+}
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (function_definition
+    (primitive_type)
+    (function_declarator
+      (identifier)
+      (parameter_list
+        (parameter_declaration
+          (primitive_type))))
+    (compound_statement
+      (cplus_try_statement
+        (compound_statement)
+        (cplus_catch_clause
+          (parameter_declaration
+            (type_identifier)
+            (identifier))
+          (compound_statement)))
+      (cplus_try_statement
+        (compound_statement)
+        (cplus_catch_clause
+          (identifier)
+          (parameter_declaration
+            (type_identifier)
+            (identifier))
+          (compound_statement))
+        (cplus_catch_clause
+          (parameter_declaration
+            (type_identifier)
+            (identifier))
+          (compound_statement))))))

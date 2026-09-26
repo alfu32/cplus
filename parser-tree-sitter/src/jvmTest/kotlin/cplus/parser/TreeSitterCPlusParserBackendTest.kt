@@ -2348,6 +2348,9 @@ class TreeSitterCPlusParserBackendTest {
                 @try {
                     read_value(4, &value);
                     puts("success");
+                }
+                @catch (error_t error) { puts("unexpected success error"); }
+                @try {
                     read_value(-1, &value);
                     puts("unreachable");
                 }
