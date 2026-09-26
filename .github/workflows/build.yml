@@ -12,6 +12,9 @@ permissions:
 jobs:
   parser-host-matrix:
     name: Test Tree-sitter parser (${{ matrix.host }})
+    needs:
+      - prepare-tinycc
+
     strategy:
       fail-fast: false
       matrix:
@@ -28,17 +31,28 @@ jobs:
             runner: windows-latest
           - host: windows-arm64
             runner: windows-11-arm
+
     runs-on: ${{ matrix.runner }}
+
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinycc-cli-payloads
+          path: lib
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
       - uses: gradle/actions/setup-gradle@v4
+
       - name: Build native parser and run corpus/JVM tests
         shell: bash
         env:
@@ -46,15 +60,31 @@ jobs:
         run: |
           npm install --global tree-sitter-cli@0.25.10
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            export PATH="$(cygpath -u "$(npm config get prefix)"):$PATH"
+          export PATH="$(cygpath -u "$(npm config get prefix)"):$PATH"
           fi
-          ./gradlew :parser-tree-sitter:jvmTest :parser-tree-sitter:testTreeSitterGrammar --no-daemon
+  
+          ./gradlew \
+          :parser-tree-sitter:jvmTest \
+          :parser-tree-sitter:testTreeSitterGrammar \
+          --no-daemon
+  
           host_os="${PARSER_HOST%%-*}"
           host_arch="${PARSER_HOST#*-}"
-          if [[ "$host_arch" == "x86_64" ]]; then host_arch=x64; else host_arch=aarch64; fi
-          case "$host_os" in linux) library=libktreesitter-c.so ;; macos) library=libktreesitter-c.dylib ;; windows) library=ktreesitter-c.dll ;; esac
+          if [[ "$host_arch" == "x86_64" ]]; then
+          host_arch=x64
+          else
+          host_arch=aarch64
+          fi
+  
+          case "$host_os" in
+          linux)   library=libktreesitter-c.so ;;
+          macos)   library=libktreesitter-c.dylib ;;
+          windows) library=ktreesitter-c.dll ;;
+          esac
+  
           library_path="$(find parser-tree-sitter/build -type f -name "$library" -print -quit)"
           test -n "$library_path"
+  
           destination="parser-tree-sitter/build/parser-native-payload/lib/$host_os/$host_arch"
           mkdir -p "$destination"
           cp "$library_path" "$destination/$library"
