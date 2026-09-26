@@ -254,29 +254,68 @@ function localDiagnostics(document: vscode.TextDocument): vscode.Diagnostic[] {
 
 async function compilerDiagnostics(document: vscode.TextDocument, collection: vscode.DiagnosticCollection): Promise<void> {
     const configuration = vscode.workspace.getConfiguration("cplus");
-    if (!configuration.get<boolean>("compilerDiagnostics", false) || document.uri.scheme !== "file") return;
+    if (document.uri.scheme !== "file") return;
+    const version = document.version;
     const local = localDiagnostics(document);
-    collection.set(document.uri, local);
-    const command = splitCommand(configuration.get<string>("compilerCommand", "cplus compile"));
-    const extraArgs = configuration.get<string[]>("compilerArguments", []);
-    const output = join(tmpdir(), "cplus-vscode-" + Date.now());
-    await new Promise<void>((resolve) => {
-        execFile(command[0], [...command.slice(1), document.uri.fsPath, "-o", output, ...extraArgs], {
-            cwd: vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath,
-            maxBuffer: 1024 * 1024
-        }, (error, stdout, stderr) => {
-            const compiler = [] as vscode.Diagnostic[];
-            for (const line of (stderr + "\n" + stdout).split(/\r?\n/)) {
-                const match = /^(.*?):(\d+):(\d+):\s*(?:error|warning):\s*(.*)$/.exec(line);
-                if (!match || match[1] !== document.uri.fsPath) continue;
-                const range = new vscode.Range(Number(match[2]) - 1, Number(match[3]) - 1, Number(match[2]) - 1, Number(match[3]));
-                compiler.push(new vscode.Diagnostic(range, match[4], error ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning));
-            }
-            collection.set(document.uri, [...local, ...compiler]);
-            void unlink(output).catch(() => undefined);
-            resolve();
+    const parsed: vscode.Diagnostic[] = [];
+    if (configuration.get<boolean>("parserDiagnostics", false)) {
+        const command = splitCommand(configuration.get<string>("parserCommand", "cplus parse"));
+        await new Promise<void>((resolve) => {
+            execFile(command[0], [...command.slice(1), document.uri.fsPath], {
+                cwd: vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath,
+                maxBuffer: 16 * 1024 * 1024
+            }, (_error, stdout) => {
+                try {
+                    const payload = JSON.parse(stdout) as {
+                        diagnostics?: Array<{
+                            code?: string;
+                            message: string;
+                            severity: string;
+                            span: { startOffset: number; endOffset: number };
+                        }>;
+                    };
+                    if (document.version === version) {
+                        for (const item of payload.diagnostics ?? []) {
+                            const diagnostic = new vscode.Diagnostic(
+                                new vscode.Range(document.positionAt(item.span.startOffset), document.positionAt(item.span.endOffset)),
+                                item.message,
+                                item.severity === "warning" ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error
+                            );
+                            diagnostic.source = "C-plus parser";
+                            diagnostic.code = item.code;
+                            parsed.push(diagnostic);
+                        }
+                    }
+                } catch {
+                    // The configured parser command may be absent or may not implement cplus.parse.v1.
+                }
+                resolve();
+            });
         });
-    });
+    }
+
+    const compiler: vscode.Diagnostic[] = [];
+    if (configuration.get<boolean>("compilerDiagnostics", false)) {
+        const command = splitCommand(configuration.get<string>("compilerCommand", "cplus compile"));
+        const extraArgs = configuration.get<string[]>("compilerArguments", []);
+        const output = join(tmpdir(), "cplus-vscode-" + Date.now());
+        await new Promise<void>((resolve) => {
+            execFile(command[0], [...command.slice(1), document.uri.fsPath, "-o", output, ...extraArgs], {
+                cwd: vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath,
+                maxBuffer: 1024 * 1024
+            }, (error, stdout, stderr) => {
+                for (const line of (stderr + "\n" + stdout).split(/\r?\n/)) {
+                    const match = /^(.*?):(\d+):(\d+):\s*(?:error|warning):\s*(.*)$/.exec(line);
+                    if (!match || match[1] !== document.uri.fsPath) continue;
+                    const range = new vscode.Range(Number(match[2]) - 1, Number(match[3]) - 1, Number(match[2]) - 1, Number(match[3]));
+                    compiler.push(new vscode.Diagnostic(range, match[4], error ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning));
+                }
+                void unlink(output).catch(() => undefined);
+                resolve();
+            });
+        });
+    }
+    if (document.version === version) collection.set(document.uri, [...local, ...parsed, ...compiler]);
 }
 
 function registerCommands(context: vscode.ExtensionContext, diagnostics: vscode.DiagnosticCollection): void {

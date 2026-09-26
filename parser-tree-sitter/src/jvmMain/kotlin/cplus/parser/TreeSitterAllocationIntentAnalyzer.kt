@@ -8,13 +8,15 @@ import cplus.AllocationSymbolKind
 import cplus.CPlusAst
 import cplus.CPlusAstNode
 import cplus.CPlusDiagnostic
+import cplus.CPlusSemanticAnalyzer
 
 /**
  * AST-backed allocation-intent analysis for the prototype frontend.
  *
  * Reports allocator provenance on variable declarations and follows straightforward
- * initializer aliases within lexical scopes. Branch-sensitive and interprocedural flow
- * remains with the legacy analyzer until equivalent AST data-flow exists.
+ * initializer aliases within lexical scopes, and annotated function/method return values
+ * at call sites. Branch-sensitive and general expression flow remains with the legacy
+ * analyzer until equivalent AST data-flow exists.
  */
 class TreeSitterAllocationIntentAnalyzer {
     fun analyze(ast: CPlusAst): AllocationAnalysisResult {
@@ -22,6 +24,9 @@ class TreeSitterAllocationIntentAnalyzer {
         val diagnostics = mutableListOf<CPlusDiagnostic>()
         val source = ast.source.text
         val functionContracts = collectFunctionContracts(ast, source)
+        val methodContracts = collectMethodContracts(ast, source)
+        val resolvedMethodCalls = CPlusSemanticAnalyzer().analyze(ast).resolvedCalls.associateBy { it.span.startOffset }
+        val methodContractsByDeclaration = methodContracts
         functionContracts.values.forEach { contract ->
             if (contract.returnIntent != AllocationIntent.NONE || contract.returnOwnership != AllocationOwnership.NONE) {
                 symbols += AllocationSymbol(
@@ -47,6 +52,18 @@ class TreeSitterAllocationIntentAnalyzer {
                 }
             }
         }
+        methodContracts.values.forEach { contract ->
+            if (contract.returnIntent != AllocationIntent.NONE || contract.returnOwnership != AllocationOwnership.NONE) {
+                symbols += AllocationSymbol(
+                    contract.name,
+                    AllocationSymbolKind.FUNCTION_RETURN,
+                    contract.returnIntent,
+                    contract.returnOwnership,
+                    contract.returnIntent,
+                    ast.source.sourceFile.span(contract.nameSpan.startOffset, contract.nameSpan.endOffset)
+                )
+            }
+        }
 
         fun visitDeclaration(declaration: CPlusAstNode, scope: MutableMap<String, VariableState>) {
             val annotations = declaration.children
@@ -66,7 +83,9 @@ class TreeSitterAllocationIntentAnalyzer {
                     ?: return@forEach
                 val name = text(source, nameNode)
                 val initializer = initDeclarator?.children?.firstOrNull { it.fieldName == "value" }
-                val provenance = initializer?.let { infer(it, scope, source) }
+                val provenance = initializer?.let {
+                    infer(it, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
+                }
 
                 symbols += AllocationSymbol(
                     name = name,
@@ -105,7 +124,7 @@ class TreeSitterAllocationIntentAnalyzer {
             } else null
             if (outputParameter != null) {
                 val (parameter, target) = outputParameter
-                val provenance = infer(valueNode, scope, source)
+                val provenance = infer(valueNode, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
                 if (parameter.intent != AllocationIntent.NONE && provenance != null && parameter.intent != provenance.intent) {
                     diagnostics += CPlusDiagnostic(
                         "allocation intent mismatch: '${parameter.name}' is declared ${parameter.intent.label()} but receives memory from ${provenance.source}",
@@ -117,7 +136,7 @@ class TreeSitterAllocationIntentAnalyzer {
             val targetNode = leftNode.takeIf { it.syntaxKind == "identifier" } ?: return
             val name = text(source, targetNode)
             val current = scope[name] ?: return
-            val provenance = infer(valueNode, scope, source)
+            val provenance = infer(valueNode, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
             if (current.intent != AllocationIntent.NONE && provenance != null && current.intent != provenance.intent) {
                 diagnostics += CPlusDiagnostic(
                     "allocation intent mismatch: '$name' is declared ${current.intent.label()} but receives memory from ${provenance.source}",
@@ -128,14 +147,35 @@ class TreeSitterAllocationIntentAnalyzer {
         }
 
         fun checkCall(node: CPlusAstNode, scope: Map<String, VariableState>) {
-            val functionNode = node.children.firstOrNull { it.fieldName == "function" } ?: return
-            val signature = functionContracts[text(source, functionNode)] ?: return
             val argumentList = node.children.firstOrNull { it.fieldName == "arguments" } ?: return
             val arguments = argumentList.children.filter { it.named }
+            val methodCall = resolvedMethodCalls[node.span.startOffset]
+            if (methodCall != null) {
+                val method = methodCall.declaration
+                val parameters = if (!methodCall.staticCall && method.parameters.firstOrNull()?.receiver == true) {
+                    method.parameters.drop(1)
+                } else method.parameters
+                parameters.zip(arguments).forEach { (parameter, argument) ->
+                    val expected = parameter.annotations.asSequence().map(::allocationIntent)
+                        .firstOrNull { it != AllocationIntent.NONE } ?: AllocationIntent.NONE
+                    if (expected == AllocationIntent.NONE) return@forEach
+                    val actual = infer(argument, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
+                        ?: return@forEach
+                    if (actual.intent == expected) return@forEach
+                    diagnostics += CPlusDiagnostic(
+                        "allocation intent mismatch: argument for '${method.ownerType}.${method.name}.${parameter.name}' is ${actual.intent.label()} but the parameter expects ${expected.label()}",
+                        ast.source.sourceFile.span(argument.span.startOffset, argument.span.endOffset)
+                    )
+                }
+                return
+            }
+            val functionNode = node.children.firstOrNull { it.fieldName == "function" } ?: return
+            val signature = functionContracts[text(source, functionNode)] ?: return
             signature.parameters.zip(arguments).forEach { (parameter, argument) ->
                 if (parameter.isOutputPointer) return@forEach
                 if (parameter.intent == AllocationIntent.NONE) return@forEach
-                val actual = infer(argument, scope, source) ?: return@forEach
+                val actual = infer(argument, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
+                    ?: return@forEach
                 if (actual.intent == parameter.intent) return@forEach
                 diagnostics += CPlusDiagnostic(
                     "allocation intent mismatch: argument for '${signature.name}.${parameter.name}' is ${actual.intent.label()} but the parameter expects ${parameter.intent.label()}",
@@ -169,12 +209,14 @@ class TreeSitterAllocationIntentAnalyzer {
                 }
                 "return_statement" -> {
                     val returnValue = node.children.firstOrNull { it.named }
-                    val actual = returnValue?.let { infer(it, scope, source) }
+                    val actual = returnValue?.let {
+                        infer(it, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
+                    }
                     if (currentFunction?.returnIntent != null && currentFunction.returnIntent != AllocationIntent.NONE &&
                         actual != null && actual.intent != currentFunction.returnIntent
                     ) {
                         diagnostics += CPlusDiagnostic(
-                            "allocation intent mismatch: function '${currentFunction.name}' is annotated ${currentFunction.returnIntent.label()} but returns ${actual.source}",
+                            "allocation intent mismatch: ${currentFunction.kind} '${currentFunction.name}' is annotated ${currentFunction.returnIntent.label()} but returns ${actual.source}",
                             ast.source.sourceFile.span(returnValue!!.span.startOffset, returnValue.span.endOffset)
                         )
                     }
@@ -182,7 +224,14 @@ class TreeSitterAllocationIntentAnalyzer {
                 }
                 "compound_statement" -> {
                     val blockScope = scope.toMutableMap()
+                    val shadowedNames = node.children
+                        .filter { it.syntaxKind == "declaration" }
+                        .flatMap { declaredNames(it, source) }
+                        .toSet()
                     node.children.forEach { visit(it, blockScope, currentFunction) }
+                    scope.keys.filterNot { it in shadowedNames }.forEach { name ->
+                        blockScope[name]?.let { scope[name] = it }
+                    }
                 }
                 "function_definition" -> {
                     val functionScope = mutableMapOf<String, VariableState>()
@@ -207,7 +256,45 @@ class TreeSitterAllocationIntentAnalyzer {
                         if (child.syntaxKind == "compound_statement") visit(child, functionScope, function)
                     }
                 }
-                "if_statement", "for_statement", "while_statement", "do_statement", "switch_statement" ->
+                "cplus_method_definition" -> {
+                    val function = methodContracts[node.span.startOffset]
+                    val methodScope = mutableMapOf<String, VariableState>()
+                    function?.parameters.orEmpty().forEach { parameter ->
+                        if (parameter.name.isNotEmpty()) {
+                            val initialProvenance = parameter.intent.takeIf {
+                                it != AllocationIntent.NONE && !parameter.isOutputPointer
+                            }?.let { Provenance(it, "${it.label()} parameter '${parameter.name}'") }
+                            methodScope[parameter.name] = VariableState(
+                                parameter.intent,
+                                parameter.ownership,
+                                initialProvenance
+                            )
+                        }
+                    }
+                    node.children.forEach { child ->
+                        if (child.syntaxKind == "compound_statement") visit(child, methodScope, function)
+                    }
+                }
+                "if_statement" -> {
+                    val condition = node.children.firstOrNull { it.fieldName == "condition" }
+                    condition?.let { visit(it, scope.toMutableMap(), currentFunction) }
+                    val consequence = node.children.firstOrNull { it.fieldName == "consequence" }
+                    val alternative = node.children.firstOrNull { it.fieldName == "alternative" }
+                    val thenScope = scope.toMutableMap()
+                    consequence?.let { visit(it, thenScope, currentFunction) }
+                    val elseScope = scope.toMutableMap()
+                    alternative?.let { visit(it, elseScope, currentFunction) }
+                    if (consequence != null) {
+                        scope.keys.toList().forEach { name ->
+                            val thenState = thenScope[name] ?: return@forEach
+                            val elseState = elseScope[name] ?: return@forEach
+                            if (thenState.provenance == elseState.provenance) {
+                                scope[name] = thenState
+                            }
+                        }
+                    }
+                }
+                "for_statement", "while_statement", "do_statement", "switch_statement" ->
                     node.children.forEach { visit(it, scope.toMutableMap(), currentFunction) }
                 else -> node.children.forEach { visit(it, scope, currentFunction) }
             }
@@ -318,26 +405,120 @@ class TreeSitterAllocationIntentAnalyzer {
                 }
             }
 
+    private fun collectMethodContracts(ast: CPlusAst, source: String): Map<Int, FunctionContract> =
+        ast.root.descendantsAndSelf()
+            .filter { it.syntaxKind == "cplus_method_definition" }
+            .mapNotNull { method ->
+                val functionDeclarator = method.descendantsAndSelf()
+                    .firstOrNull { it.syntaxKind == "function_declarator" } ?: return@mapNotNull null
+                val nameNode = functionDeclarator.children.firstOrNull { it.fieldName == "declarator" }
+                    ?.descendantsAndSelf()?.firstOrNull { it.syntaxKind == "identifier" }
+                    ?: return@mapNotNull null
+                val parameterList = functionDeclarator.children.firstOrNull { it.fieldName == "parameters" }
+                    ?: return@mapNotNull null
+                val parameters = parameterList.children
+                    .filter { it.syntaxKind in setOf("parameter_declaration", "cplus_parameter_declaration") }
+                    .map { parameter ->
+                        val declarator = parameter.children.firstOrNull { it.fieldName == "declarator" }
+                        val parameterNameNode = declarator?.descendantsAndSelf()
+                            ?.firstOrNull { it.syntaxKind == "identifier" }
+                        val parameterName = parameterNameNode?.let { text(source, it) }.orEmpty()
+                        val annotations = parameter.descendantsAndSelf()
+                            .filter { it.syntaxKind == "cplus_parameter_annotation" }
+                            .map { text(source, it) }
+                            .toList()
+                        val pointerDepth = declarator?.let { text(source, it).count { char -> char == '*' } } ?: 0
+                        ParameterContract(
+                            parameterName,
+                            parameterNameNode?.span,
+                            annotations.map(::allocationIntent).firstOrNull { it != AllocationIntent.NONE }
+                                ?: AllocationIntent.NONE,
+                            annotations.map(::allocationOwnership).firstOrNull { it != AllocationOwnership.NONE }
+                                ?: AllocationOwnership.NONE,
+                            pointerDepth
+                        )
+                    }
+                val resultAnnotations = method.children
+                    .filter { it.syntaxKind == "cplus_result_annotation" }
+                    .map { text(source, it) }
+                val returnIntent = resultAnnotations.map(::allocationIntent)
+                    .firstOrNull { it != AllocationIntent.NONE } ?: AllocationIntent.NONE
+                val returnOwnership = resultAnnotations.map(::allocationOwnership)
+                    .firstOrNull { it != AllocationOwnership.NONE } ?: AllocationOwnership.NONE
+                if (returnIntent == AllocationIntent.NONE && returnOwnership == AllocationOwnership.NONE) {
+                    return@mapNotNull null
+                }
+                method.span.startOffset to FunctionContract(
+                    text(source, nameNode),
+                    nameNode.span,
+                    parameters,
+                    returnIntent,
+                    returnOwnership,
+                    "method"
+                )
+            }
+            .toMap()
+
     private fun infer(
         expression: CPlusAstNode,
         scope: Map<String, VariableState>,
-        source: String
+        source: String,
+        functionContracts: Map<String, FunctionContract>,
+        methodContracts: Map<Int, FunctionContract>,
+        resolvedMethodCalls: Map<Int, cplus.CPlusResolvedCall>
     ): Provenance? = when (expression.syntaxKind) {
-        "call_expression" -> expression.children.firstOrNull { it.fieldName == "function" }
-            ?.let { text(source, it) }
-            ?.let { functionName -> allocatorIntent(functionName)?.let { Provenance(it, "$functionName()") } }
+        "call_expression" -> {
+            val resolvedMethod = resolvedMethodCalls[expression.span.startOffset]
+            val contract = resolvedMethod?.let { methodContracts[it.declaration.span.startOffset] }
+                ?: expression.children.firstOrNull { it.fieldName == "function" }
+                    ?.let { functionContracts[text(source, it)] }
+            val functionName = resolvedMethod?.let { "${it.ownerType}.${it.methodName}" }
+                ?: expression.children.firstOrNull { it.fieldName == "function" }?.let { text(source, it) }
+            val intent = contract?.returnIntent?.takeIf { it != AllocationIntent.NONE }
+                ?: functionName?.let(::allocatorIntent)
+            intent?.let { Provenance(it, "$functionName()") }
+        }
         "identifier" -> scope[text(source, expression)]?.let { state ->
             state.provenance ?: state.intent.takeIf { it != AllocationIntent.NONE }
                 ?.let { Provenance(it, "${it.label()} pointer '${text(source, expression)}'") }
         }
+        "conditional_expression" -> {
+            val consequence = expression.children.firstOrNull { it.fieldName == "consequence" }
+            val alternative = expression.children.firstOrNull { it.fieldName == "alternative" }
+            val left = consequence?.let {
+                infer(it, scope, source, functionContracts, methodContracts, resolvedMethodCalls)
+            }
+            val right = alternative?.let {
+                infer(it, scope, source, functionContracts, methodContracts, resolvedMethodCalls)
+            }
+            if (left != null && right != null && left.intent == right.intent) {
+                Provenance(left.intent, "both conditional branches (${left.source}, ${right.source})")
+            } else null
+        }
+        "assignment_expression" -> expression.children.firstOrNull { it.fieldName == "right" }
+            ?.let { infer(it, scope, source, functionContracts, methodContracts, resolvedMethodCalls) }
+        "comma_expression" -> expression.children
+            .lastOrNull { it.named }
+            ?.let { infer(it, scope, source, functionContracts, methodContracts, resolvedMethodCalls) }
         "parenthesized_expression", "cast_expression" -> expression.children
             .lastOrNull { it.named }
-            ?.let { infer(it, scope, source) }
+            ?.let { infer(it, scope, source, functionContracts, methodContracts, resolvedMethodCalls) }
         else -> null
     }
 
     private fun text(source: String, node: CPlusAstNode): String =
         source.substring(node.span.startOffset, node.span.endOffset)
+
+    private fun declaredNames(declaration: CPlusAstNode, source: String): List<String> =
+        declaration.children.filter { it.fieldName == "declarator" }
+            .mapNotNull { declarator ->
+                val initDeclarator = declarator.takeIf { it.syntaxKind == "init_declarator" }
+                val nameDeclarator = initDeclarator?.children?.firstOrNull { it.fieldName == "declarator" }
+                    ?: declarator
+                nameDeclarator.descendantsAndSelf()
+                    .firstOrNull { it.syntaxKind == "identifier" }
+                    ?.let { text(source, it) }
+            }
 
     private fun AllocationIntent.label(): String = name.lowercase()
 
@@ -354,7 +535,8 @@ class TreeSitterAllocationIntentAnalyzer {
         val nameSpan: cplus.SourceSpan,
         val parameters: List<ParameterContract>,
         val returnIntent: AllocationIntent,
-        val returnOwnership: AllocationOwnership
+        val returnOwnership: AllocationOwnership,
+        val kind: String = "function"
     )
 
     private data class ParameterContract(

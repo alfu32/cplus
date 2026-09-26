@@ -12,6 +12,7 @@ version = rootProject.version
 
 dependencies {
     implementation(project(":compiler"))
+    implementation(project(":parser-tree-sitter"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
     testRuntimeOnly(files(rootProject.file("lib/tinycc-cross-cli-no-sysroots.jar")))

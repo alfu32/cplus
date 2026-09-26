@@ -91,7 +91,8 @@ class MappedText internal constructor(
         require(text.length == origins.size) { "mapped text and origin arrays must have equal lengths" }
     }
 
-    fun originAt(index: Int): SourceOrigin? = origins[index]
+    /** Returns no origin for the legal end-of-buffer boundary or any other out-of-range offset. */
+    fun originAt(index: Int): SourceOrigin? = origins.getOrNull(index)
 
     fun slice(start: Int, end: Int): MappedText = MappedText(
         text.substring(start, end),

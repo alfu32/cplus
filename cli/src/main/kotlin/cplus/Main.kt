@@ -70,6 +70,7 @@ class CPlusCli(
         }
 
         return when (val command = commandArguments.first()) {
+            "parse" -> parse(commandArguments.drop(1))
             "transcode" -> transcode(commandArguments.drop(1))
             "compile" -> compile(commandArguments.drop(1), runAfter = false)
             "run" -> compile(commandArguments.drop(1), runAfter = true)
@@ -81,6 +82,42 @@ class CPlusCli(
             }
             else -> throw IllegalArgumentException("unknown command '$command'; use 'cplus help'")
         }
+    }
+
+    private fun parse(arguments: List<String>): Int {
+        if (arguments.isEmpty()) throw IllegalArgumentException("parse requires a .cp, .c+, or .c source file")
+        var source: Path? = null
+        var destination: Path? = null
+        var index = 0
+        while (index < arguments.size) {
+            when (val argument = arguments[index]) {
+                "-o" -> {
+                    if (index + 1 >= arguments.size) throw IllegalArgumentException("parse -o requires a JSON output path")
+                    destination = Path(arguments[index + 1]).toAbsolutePath().normalize()
+                    index += 2
+                }
+                else -> {
+                    if (source != null) throw IllegalArgumentException("parse accepts one source file, got '$argument'")
+                    source = Path(argument).toAbsolutePath().normalize()
+                    index++
+                }
+            }
+        }
+        val sourcePath = source ?: throw IllegalArgumentException("parse requires a source file")
+        if (!Files.isRegularFile(sourcePath)) throw IllegalArgumentException("source file does not exist: $sourcePath")
+        val manager = SourceManager()
+        val snapshot = manager.load(sourcePath)
+        val result = cplus.parser.TreeSitterCPlusParserBackend().parse(
+            snapshot,
+            CPlusParseOptions(editorMode = true)
+        )
+        val json = cplus.parser.CPlusParseJson.encode(result)
+        if (destination == null) {
+            output.append(json).append('\n')
+        } else {
+            writeText(destination, json + "\n")
+        }
+        return if (result.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) 1 else 0
     }
 
     private fun transcode(arguments: List<String>): Int {
@@ -468,6 +505,7 @@ class CPlusCli(
 usage:
   cplus help
   cplus version
+  cplus parse filename.cp [-o ast.json]
   cplus transcode filename.cp [-o some_file_name.c] [--target=TRIPLE]
   cplus compile filename.cp [-o executable] [passthrough tcc parameters]
   cplus run filename.cp [-o executable] [passthrough tcc parameters]
@@ -485,6 +523,7 @@ global options:
 
 defaults:
   transcode: filename.cp -> filename.c
+  parse: emits the versioned cplus.parse.v1 normalized AST and diagnostics as JSON
   compile/run: filename.cp -> filename
   compiler: bundled TinyCC, then TCC, system tcc on PATH, then compiler from CC
   test: runs all @test blocks by default; run, compile, and transcode are explicit modes

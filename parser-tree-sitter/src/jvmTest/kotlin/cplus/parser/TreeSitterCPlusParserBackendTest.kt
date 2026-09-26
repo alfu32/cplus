@@ -189,7 +189,10 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(result.diagnostics.any { it.message.contains("'mismatch' is declared warm") })
         assertTrue(result.diagnostics.any { it.message.contains("'reassigned' is declared warm") })
         assertTrue(result.diagnostics.any { it.message.contains("'outer_mismatch' is declared warm") })
-        assertTrue(result.diagnostics.any { it.message.contains("argument for 'consume.value' is scratch but the parameter expects warm") })
+        assertTrue(
+            result.diagnostics.any { it.message.contains("argument for 'consume.value' is scratch but the parameter expects warm") },
+            result.diagnostics.toString()
+        )
         assertEquals(snapshot.text.lastIndexOf("alias"), result.diagnostics.single { it.message.contains("argument for 'consume.value'") }.sourceSpan.startOffset)
         val parameter = result.symbols.single { it.kind == AllocationSymbolKind.PARAMETER && it.name == "value" }
         assertEquals(AllocationIntent.WARM, parameter.intent)
@@ -225,6 +228,32 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun checksAnnotatedMethodReturnAllocationIntentFromAst() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-method-return.cp"),
+            """
+                typedef struct factory_t {
+                    pub owned warm char* make(borrowed *self) { return alloc_cold(24); }
+                    pub owned cold char* make_matching(borrowed *self) { return alloc_cold(16); }
+                } factory_t;
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.single().message.contains("method 'make' is annotated warm but returns alloc_cold()"))
+        val returned = result.symbols.single { it.kind == AllocationSymbolKind.FUNCTION_RETURN && it.name == "make" }
+        assertEquals(AllocationIntent.WARM, returned.intent)
+        assertEquals(AllocationOwnership.OWNED, returned.ownership)
+        assertEquals("alloc_cold(24)", snapshot.text.substring(
+            result.diagnostics.single().sourceSpan.startOffset,
+            result.diagnostics.single().sourceSpan.endOffset
+        ))
+    }
+
+    @Test
     fun checksOwnedOutputPointerAllocationAndSkipsTheCallArgumentAsAnInput() {
         val snapshot = sources.open(
             SourceId.named("allocation-output.cp"),
@@ -246,6 +275,164 @@ class TreeSitterCPlusParserBackendTest {
         assertEquals(setOf(AllocationIntent.WARM, AllocationIntent.COLD), outputs.map { it.intent }.toSet())
         assertTrue(outputs.all { it.ownership == AllocationOwnership.OWNED })
         assertTrue(outputs.all { it.knownProvenance == AllocationIntent.NONE })
+    }
+
+    @Test
+    fun checksAllocationContractsOnResolvedInstanceAndStaticMethods() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-methods.cp"),
+            """
+                typedef struct sink_t {
+                    pub int consume(borrowed warm char* value) { return value == 0; }
+                    static pub int validate(borrowed warm char* value) { return value == 0; }
+                } sink_t;
+                int main(void) {
+                    scratch char* input = alloc_scratch(16);
+                    warm char* compatible = alloc_warm(8);
+                    sink_t sink;
+                    sink.consume(input);
+                    sink_t.validate(input);
+                    sink.consume(compatible);
+                    sink_t.validate(compatible);
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val semanticCalls = CPlusSemanticAnalyzer().analyze(ast).resolvedCalls
+        assertEquals(setOf("consume", "validate"), semanticCalls.map { it.methodName }.toSet())
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(ast)
+
+        assertEquals(2, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.any { it.message.contains("argument for 'sink_t.consume.value'") })
+        assertTrue(result.diagnostics.any { it.message.contains("argument for 'sink_t.validate.value'") })
+        assertTrue(result.diagnostics.all { it.sourceSpan.startOffset == snapshot.text.indexOf("input", it.sourceSpan.startOffset) })
+    }
+
+    @Test
+    fun propagatesAnnotatedFunctionAndMethodReturnProvenanceIntoCallArguments() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-call-provenance.cp"),
+            """
+                owned scratch char* make_scratch(void) { return alloc_scratch(8); }
+                void consume(borrowed cold char* value);
+                typedef struct maker_t {
+                    pub owned warm char* make(borrowed *self) { return alloc_warm(8); }
+                } maker_t;
+                int main(void) {
+                    maker_t maker;
+                    consume(make_scratch());
+                    consume(maker.make());
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(2, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.any {
+            it.message.contains("argument for 'consume.value' is scratch but the parameter expects cold")
+        })
+        assertTrue(result.diagnostics.any {
+            it.message.contains("argument for 'consume.value' is warm but the parameter expects cold")
+        })
+        assertTrue(result.diagnostics.all {
+            snapshot.text.substring(it.sourceSpan.startOffset, it.sourceSpan.endOffset)
+                .startsWith(if (it.message.contains("scratch")) "make_scratch" else "maker.make")
+        })
+    }
+
+    @Test
+    fun mergesAllocationProvenanceOnlyWhenEveryIfBranchAgrees() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-branch-merge.cp"),
+            """
+                int main(int flag) {
+                    scratch char* scratch_source = alloc_scratch(8);
+                    char* selected = alloc_warm(8);
+                    if (flag) {
+                        selected = scratch_source;
+                    } else {
+                        selected = alloc_scratch(16);
+                    }
+                    warm char* known_mismatch = selected;
+
+                    char* uncertain = alloc_warm(8);
+                    if (flag) uncertain = scratch_source;
+                    warm char* not_proven = uncertain;
+
+                    char* divergent = alloc_warm(8);
+                    if (flag) {
+                        divergent = alloc_scratch(8);
+                    } else {
+                        divergent = alloc_cold(8);
+                    }
+                    warm char* branch_disagreement = divergent;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(ast)
+
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.single().message.contains("'known_mismatch' is declared warm"))
+        assertFalse(result.diagnostics.any { it.message.contains("'not_proven'") })
+        assertFalse(result.diagnostics.any { it.message.contains("'branch_disagreement'") })
+        assertEquals(snapshot.text.indexOf("known_mismatch"), result.diagnostics.single().sourceSpan.startOffset)
+    }
+
+    @Test
+    fun infersTernaryAllocationProvenanceOnlyWhenBothArmsAgree() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-conditional-expression.cp"),
+            """
+                int main(int flag) {
+                    scratch char* scratch_value = alloc_scratch(8);
+                    char* same_domain = flag ? scratch_value : alloc_scratch(16);
+                    warm char* mismatch = same_domain;
+
+                    char* different_domains = flag ? alloc_scratch(8) : alloc_warm(8);
+                    warm char* unknown_domain = different_domains;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.single().message.contains("'mismatch' is declared warm"))
+        assertFalse(result.diagnostics.any { it.message.contains("'unknown_domain'") })
+    }
+
+    @Test
+    fun infersAllocationProvenanceFromAssignmentAndCommaExpressionResults() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-expression-results.cp"),
+            """
+                int main(void) {
+                    scratch char* target = alloc_scratch(8);
+                    warm char* from_assignment = (target = alloc_cold(8));
+                    warm char* from_comma = (0, alloc_cold(16));
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(2, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.any { it.message.contains("'from_assignment' is declared warm") })
+        assertTrue(result.diagnostics.any { it.message.contains("'from_comma' is declared warm") })
     }
 
     @Test
@@ -476,6 +663,134 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(index.symbols.any { it.kind == CPlusSymbolKind.STRUCT && it.name == "widget_t" }, index.symbols.toString())
         assertTrue(index.symbols.any { it.kind == CPlusSymbolKind.FIELD && it.ownerType == "widget_t" && it.name == "value" })
         assertEquals(listOf("read"), index.resolvedCalls.map { it.methodName })
+    }
+
+    @Test
+    fun infersSelfReceiverTypeForCallsInsideInstanceMethods() {
+        val snapshot = sources.open(
+            SourceId.named("self-receiver-resolution.cp"),
+            """
+                typedef struct counter_t {
+                    pub int value(borrowed *self) { return 1; }
+                    pub int read_again(borrowed *self) { return self->value(); }
+                } counter_t;
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val index = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        val call = index.resolvedCalls.single()
+        assertEquals("counter_t", call.ownerType)
+        assertEquals("value", call.methodName)
+        assertFalse(call.staticCall)
+        assertEquals("self", snapshot.text.substring(call.receiverSpan.startOffset, call.receiverSpan.endOffset))
+    }
+
+    @Test
+    fun resolvesAndLowersExplicitAddressOfReceiverWithoutTakingItsAddressAgain() {
+        val text = """
+            typedef struct box_t {
+                int value;
+                pub int read(borrowed *self) { return self->value; }
+            } box_t;
+            int main(void) {
+                box_t box = { 37 };
+                return (&box).read() == 37 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("address-receiver.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val semantics = CPlusSemanticAnalyzer().analyze(ast)
+
+        assertEquals(1, semantics.resolvedCalls.size, ast.dump())
+        val resolved = semantics.resolvedCalls.single()
+        assertEquals("read", resolved.methodName)
+        assertEquals("box_t", resolved.ownerType)
+        assertTrue(resolved.receiverAlreadyPointer)
+        val lowered = CPlusMethodCallLoweringPass().lower(ast, MappedText.identity(source.sourceFile), semantics)
+        assertTrue(lowered.diagnostics.isEmpty(), lowered.diagnostics.toString())
+        assertTrue("box__read((&box))" in lowered.source.text, lowered.source.text)
+        assertFalse("box__read(&((&box))" in lowered.source.text, lowered.source.text)
+
+        val pipeline = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(pipeline.successful, "parser=${pipeline.parserDiagnostics}; lower=${pipeline.loweringDiagnostics}")
+        compileAndRunC(pipeline.cSource!!.text)
+    }
+
+    @Test
+    fun resolvesReceiversThroughDeclaredStructFieldTypes() {
+        val text = """
+            typedef struct child_t {
+                pub int value(borrowed *self) { return 9; }
+            } child_t;
+            typedef struct holder_t {
+                child_t child;
+                pub int read_child(borrowed *self) { return self->child.value(); }
+            } holder_t;
+            int main(void) {
+                holder_t holder = {0};
+                return holder.child.value() == 9 && holder.read_child() == 9 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("field-receiver-resolution.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val semantics = CPlusSemanticAnalyzer().analyze(ast)
+
+        assertEquals(3, semantics.resolvedCalls.size)
+        assertEquals(2, semantics.resolvedCalls.count { it.ownerType == "child_t" && it.methodName == "value" })
+        assertEquals(1, semantics.resolvedCalls.count { it.ownerType == "holder_t" && it.methodName == "read_child" })
+        val pipeline = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(pipeline.successful, "parser=${pipeline.parserDiagnostics}; lower=${pipeline.loweringDiagnostics}")
+        compileAndRunC(pipeline.cSource!!.text)
+    }
+
+    @Test
+    fun externalCompilersReportGeneratedMethodErrorsAtTheOriginalCPlusLine() {
+        val text = """
+            typedef struct broken_t {
+                pub int fail(borrowed *self) {
+                    return missing_cplus_symbol;
+                }
+            } broken_t;
+        """.trimIndent()
+        val source = sources.open(SourceId.named("mapped-method-error.cp"), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("prototype did not create mapped compiler input")
+
+        listOf("tcc", "gcc", "clang").forEach { compiler ->
+            val available = runCatching {
+                ProcessBuilder(compiler, "--version").redirectErrorStream(true).start().let { process ->
+                    process.inputStream.bufferedReader().use { it.readText() }
+                    process.waitFor() == 0
+                }
+            }.getOrDefault(false)
+            if (!available) return@forEach
+
+            val temporaryDirectory = Files.createTempDirectory("cplus-mapped-diagnostic")
+            try {
+                val sourceFile = temporaryDirectory.resolve("generated.c")
+                val objectFile = temporaryDirectory.resolve("generated.o")
+                Files.writeString(sourceFile, generated.code)
+                val process = ProcessBuilder(
+                    compiler, "-c", sourceFile.toString(), "-o", objectFile.toString()
+                ).redirectErrorStream(true).start()
+                val diagnostics = process.inputStream.bufferedReader().use { it.readText() }
+                assertTrue(process.waitFor() != 0, "$compiler unexpectedly accepted invalid generated C")
+                assertTrue(diagnostics.contains("mapped-method-error.cp"), "$compiler diagnostic lost .cp origin:\n$diagnostics")
+                assertTrue(
+                    Regex("mapped-method-error\\.cp(?::3(?::\\d+)?|\\(3(?:,\\d+)?\\))").containsMatchIn(diagnostics),
+                    "$compiler diagnostic did not point at source line 3:\n$diagnostics"
+                )
+            } finally {
+                Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
     }
 
     @Test

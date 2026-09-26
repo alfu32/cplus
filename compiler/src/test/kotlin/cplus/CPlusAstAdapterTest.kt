@@ -2,6 +2,7 @@ package cplus
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -145,6 +146,8 @@ class CPlusAstAdapterTest {
         assertEquals("int result;\n", emitted.text)
         assertEquals(0, emitted.originAt(0)?.offset)
         assertEquals(replaceStart, emitted.originAt(replaceStart)?.offset)
+        assertNull(emitted.originAt(emitted.text.length))
+        assertNull(emitted.originAt(-1))
         assertEquals(source.text.length - replaceStart - 5, emitted.text.length - replaceStart - "result".length)
     }
 }

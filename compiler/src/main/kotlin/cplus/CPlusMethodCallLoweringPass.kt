@@ -15,7 +15,7 @@ class CPlusMethodCallLoweringPass {
             } else {
                 val receiver = source.text.substring(call.receiverSpan.startOffset, call.receiverSpan.endOffset).trim()
                 val receiverArgument = when {
-                    call.pointerAccess -> receiver
+                    call.pointerAccess || call.receiverAlreadyPointer -> receiver
                     receiver.matches(IDENTIFIER) -> "&$receiver"
                     else -> "&($receiver)"
                 }

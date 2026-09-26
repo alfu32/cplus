@@ -58,6 +58,8 @@ data class CPlusResolvedCall(
     val memberNameSpan: SourceSpan,
     val operatorSpan: SourceSpan,
     val pointerAccess: Boolean,
+    /** The receiver expression is already pointer-valued, as in `(&value).method()`. */
+    val receiverAlreadyPointer: Boolean,
     val argumentInsertionOffset: Int,
     val hasArguments: Boolean
 )
@@ -281,6 +283,44 @@ class CPlusSemanticAnalyzer {
             return type
         }
 
+        fun operatorText(node: CPlusAstNode): String? =
+            node.children.firstOrNull { it.fieldName == "operator" }?.text(ast.source.text)
+                ?: node.children.firstOrNull { !it.named }?.text(ast.source.text)
+
+        fun receiverType(expression: CPlusAstNode, variables: Map<String, String>): String? = when (expression.syntaxKind) {
+            "identifier" -> variables[expression.text(ast.source.text)]?.let(::canonicalType)
+            "parenthesized_expression" -> expression.children.firstOrNull { it.named }
+                ?.let { receiverType(it, variables) }
+            "field_expression" -> {
+                val base = expression.children.firstOrNull { it.named }
+                val fieldName = expression.children.lastOrNull { it.syntaxKind == "field_identifier" }
+                    ?.text(ast.source.text)
+                val owner = base?.let { receiverType(it, variables) }
+                val fieldType = symbols.firstOrNull {
+                    it.kind == CPlusSymbolKind.FIELD && it.ownerType == owner && it.name == fieldName
+                }?.typeName
+                val knownTypeNames = methodsByType.keys + typeAliases.keys
+                fieldType?.let { declaredType ->
+                    Regex("[A-Za-z_][A-Za-z0-9_]*").findAll(declaredType)
+                        .map { it.value }
+                        .firstOrNull { it in knownTypeNames }
+                        ?.let(::canonicalType)
+                }
+            }
+            "unary_expression", "pointer_expression" -> {
+                val argument = expression.children.firstOrNull { it.fieldName == "argument" }
+                    ?: expression.children.lastOrNull { it.named }
+                if (operatorText(expression) in setOf("&", "*")) argument?.let { receiverType(it, variables) } else null
+            }
+            else -> null
+        }
+
+        fun isAddressExpression(expression: CPlusAstNode): Boolean = when (expression.syntaxKind) {
+            "parenthesized_expression" -> expression.children.firstOrNull { it.named }?.let(::isAddressExpression) == true
+            "unary_expression", "pointer_expression" -> operatorText(expression) == "&"
+            else -> false
+        }
+
         val resolvedCalls = mutableListOf<CPlusResolvedCall>()
         val catchBindings = ast.root.descendantsAndSelf()
             .filter { it.syntaxKind == "cplus_catch_clause" }
@@ -295,7 +335,12 @@ class CPlusSemanticAnalyzer {
                     .map { it.text(ast.source.text) }.takeIf { it.isNotEmpty() }
                 CPlusCatchBinding(codes, typeName, parameterName, clause.span)
             }.toList()
-        fun visit(node: CPlusAstNode, variables: Map<String, String>) {
+        fun visit(node: CPlusAstNode, variables: Map<String, String>, enclosingType: String?) {
+            val ownerType = if (node.syntaxKind in setOf("struct_specifier", "union_specifier")) {
+                node.children.firstOrNull { it.syntaxKind == "type_identifier" }?.text(ast.source.text)
+                    ?: anonymousStructNames[node.span.startOffset]
+                    ?: enclosingType
+            } else enclosingType
             if (node.syntaxKind == "call_expression") {
                 val called = node.children.firstOrNull { it.fieldName == "function" }
                 val memberAccess = called?.descendantsAndSelf()?.firstOrNull { it.syntaxKind == "field_expression" }
@@ -304,8 +349,9 @@ class CPlusSemanticAnalyzer {
                     val memberName = memberAccess.children.lastOrNull { it.syntaxKind == "field_identifier" }
                         ?.text(ast.source.text)
                     val receiverText = receiver?.text(ast.source.text)
-                    val instanceType = receiverText?.let(variables::get)?.let(::canonicalType)
-                    val staticType = receiverText?.takeIf { it in methodsByType }
+                    val instanceType = receiver?.let { receiverType(it, variables) }
+                    val staticType = receiver?.takeIf { it.syntaxKind == "identifier" }
+                        ?.text(ast.source.text)?.takeIf { it in methodsByType }
                     val owner = instanceType?.takeIf { it in methodsByType } ?: staticType
                     val method = owner?.let { ownerType ->
                         methodsByType[ownerType]?.firstOrNull { it.name == memberName }
@@ -323,7 +369,8 @@ class CPlusSemanticAnalyzer {
                         resolvedCalls += CPlusResolvedCall(
                             method.name, owner!!, isStatic, node.span, method,
                             receiver.span, memberAccess.span, memberNode.span, operator.span,
-                            operator.syntaxKind == "->", openingParen.span.endOffset,
+                            operator.syntaxKind == "->", receiver?.let(::isAddressExpression) == true,
+                            openingParen.span.endOffset,
                             SourceMasker.mask(innerArguments).trim().isNotEmpty()
                         )
                     }
@@ -333,7 +380,7 @@ class CPlusSemanticAnalyzer {
             if (node.syntaxKind == "compound_statement") {
                 val blockVariables = variables.toMutableMap()
                 node.children.forEach { child ->
-                    visit(child, blockVariables)
+                    visit(child, blockVariables, ownerType)
                     registerVariable(child, ast.source.text, blockVariables, ::canonicalType)
                 }
                 return
@@ -354,15 +401,16 @@ class CPlusSemanticAnalyzer {
                             ?: parameter.descendantsAndSelf().firstOrNull {
                                 it.syntaxKind in setOf("type_identifier", "primitive_type")
                             }?.text(ast.source.text)
-                        if (parameterName != null && parameterType != null) {
-                            visibleVariables[parameterName] = canonicalType(parameterType)
+                        val resolvedParameterType = parameterType ?: ownerType.takeIf { parameterName == "self" }
+                        if (parameterName != null && resolvedParameterType != null) {
+                            visibleVariables[parameterName] = canonicalType(resolvedParameterType)
                         }
                     }
             }
             registerVariable(node, ast.source.text, visibleVariables, ::canonicalType)
-            node.children.forEach { visit(it, visibleVariables) }
+            node.children.forEach { visit(it, visibleVariables, ownerType) }
         }
-        visit(ast.root, emptyMap())
+        visit(ast.root, emptyMap(), null)
         return CPlusSemanticIndex(symbols, resolvedCalls, catchBindings)
     }
 

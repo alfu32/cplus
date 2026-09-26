@@ -8,6 +8,7 @@ The executable is named `cplus` and accepts these subcommands:
 
 ```text
 cplus help
+cplus parse filename.cp [-o ast.json]
 cplus transcode filename.cp [-o some_file_name.c] [--target=TRIPLE]
 cplus compile filename.cp [-o executable] [passthrough tcc parameters]
 cplus run filename.cp [-o executable] [passthrough tcc parameters]
@@ -18,6 +19,8 @@ cplus new project_name|.
 cplus --stdlib directory <subcommand> ...
 cplus -v0|-v1|-v2 <subcommand> ...
 ```
+
+`parse` emits the recovered normalized syntax tree and diagnostics as JSON using schema `cplus.parse.v1`. All offsets are UTF-16 code units. Its default output is stdout; `-o` writes the JSON to a file. Syntax errors still produce the partial tree and diagnostic list, then return status `1`; command or file errors return `2`. The command is intended as an editor integration boundary and does not change the production transpilation backend.
 
 `transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. `transcode` accepts only `--target` among compiler options; it uses the option to choose comptime branches but does not compile. Additional arguments for `compile` and `run` are passed to the selected C compiler; for example, `-DFLAG=1` or `-Iinclude`. Code-processing commands print the C-plus transcoder version. Before each C compilation, the CLI reports whether the compiler is bundled or external and its payload/JAR or executable location.
 

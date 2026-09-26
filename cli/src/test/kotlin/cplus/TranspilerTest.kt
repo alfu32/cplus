@@ -10,6 +10,36 @@ import java.nio.file.Files
 
 class TranspilerTest {
     @Test
+    fun cliParseEmitsNormalizedAstJsonAndPreservesRecoveredDiagnostics() {
+        val directory = Files.createTempDirectory("cplus-parse-json")
+        try {
+            val valid = directory.resolve("valid.cp")
+            Files.writeString(valid, "typedef struct box_t { pub int read(borrowed *self); } box_t;\n")
+            val output = StringBuilder()
+            val status = CPlusCli(output = output, errors = StringBuilder()).run(listOf("parse", valid.toString()))
+
+            assertEquals(0, status)
+            assertTrue(output.toString().contains("\"schema\":\"cplus.parse.v1\""), output.toString())
+            assertTrue(output.toString().contains("\"offsetEncoding\":\"utf16\""), output.toString())
+            assertTrue(output.toString().contains("\"kind\":\"struct_declaration\""), output.toString())
+
+            val malformed = directory.resolve("malformed.cp")
+            Files.writeString(malformed, "int main( { return 0; }")
+            val malformedOutput = StringBuilder()
+            val malformedStatus = CPlusCli(output = malformedOutput, errors = StringBuilder())
+                .run(listOf("parse", malformed.toString()))
+
+            assertEquals(1, malformedStatus)
+            assertTrue(malformedOutput.toString().contains("\"diagnostics\":[{"), malformedOutput.toString())
+            assertTrue(malformedOutput.toString().contains("\"severity\":\"error\""), malformedOutput.toString())
+        } finally {
+            Files.deleteIfExists(directory.resolve("valid.cp"))
+            Files.deleteIfExists(directory.resolve("malformed.cp"))
+            Files.deleteIfExists(directory)
+        }
+    }
+
+    @Test
     fun preservesLegacyOutputAndSourceMappingGolden() {
         fun resource(name: String): String = checkNotNull(javaClass.getResourceAsStream("/$name"))
             .bufferedReader().use { it.readText() }

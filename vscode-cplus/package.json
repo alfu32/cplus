@@ -68,6 +68,11 @@
           "default": "cplus compile",
           "description": "Compiler command, including its subcommand and any fixed arguments."
         },
+        "cplus.parserCommand": {
+          "type": "string",
+          "default": "cplus parse",
+          "description": "Parser command implementing the cplus.parse.v1 JSON protocol."
+        },
         "cplus.runnerCommand": {
           "type": "string",
           "default": "cplus run",
@@ -90,6 +95,11 @@
           "type": "boolean",
           "default": false,
           "description": "Run the C-plus compiler on save and map diagnostics back to the .cp file."
+        },
+        "cplus.parserDiagnostics": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run the normalized Tree-sitter parser on save and show its source-mapped diagnostics. Requires a C-plus CLI with the parse command."
         }
       }
     }
