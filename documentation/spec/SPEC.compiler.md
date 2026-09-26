@@ -8,8 +8,8 @@ The executable is named `cplus` and accepts these subcommands:
 
 ```text
 cplus help
-cplus parse filename.cp [-o ast.json]
-cplus parse --stdin [--source filename.cp] [-o ast.json]
+cplus parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
+cplus parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
 cplus graph filename.cp [-o imports.json]
 cplus transcode filename.cp [-o some_file_name.c] [--target=TRIPLE]
 cplus compile filename.cp [-o executable] [passthrough tcc parameters]
@@ -22,7 +22,7 @@ cplus --stdlib directory <subcommand> ...
 cplus -v0|-v1|-v2 <subcommand> ...
 ```
 
-`parse` emits the recovered normalized syntax tree and diagnostics as JSON using schema `cplus.parse.v1`. All offsets are UTF-16 code units. Its default output is stdout; `-o` writes the JSON to a file. Syntax errors still produce the partial tree and diagnostic list, then return status `1`; command or file errors return `2`. The command is intended as an editor integration boundary and does not change the production transpilation backend.
+`parse` emits the recovered normalized syntax tree and diagnostics as JSON using schema `cplus.parse.v1`. All offsets are UTF-16 code units. Its default backend is `tree-sitter`; `--backend legacy` selects the legacy scanner adapter, whose ordinary C/C-plus regions are explicitly opaque. This option is for parser comparison and does not change the production transpilation backend. Its default output is stdout; `-o` writes the JSON to a file. Syntax errors still produce the partial tree and diagnostic list, then return status `1`; command or file errors return `2`.
 
 Use `parse --stdin` to parse unsaved editor text. The source is read from stdin; optional `--source filename.cp` supplies the canonical path used in AST spans and diagnostics (without reading that file). The stdin form cannot be combined with a positional source filename, and `--source` is valid only with `--stdin`.
 

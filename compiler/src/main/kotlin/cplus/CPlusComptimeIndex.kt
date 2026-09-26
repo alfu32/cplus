@@ -14,7 +14,9 @@ data class CPlusComptimeConstruct(
     /** Argument expression/type spans in source order, without comma or delimiter tokens. */
     val argumentSpans: List<SourceSpan> = emptyList(),
     val resultKind: String? = null,
-    val alias: String? = null
+    val alias: String? = null,
+    /** Whether a generator declaration belongs to the module-level comptime namespace. */
+    val moduleScope: Boolean = true
 )
 
 data class CPlusComptimeParameter(
@@ -36,16 +38,19 @@ class CPlusComptimeIndexer {
         data class IndexedNode(
             val node: CPlusAstNode,
             val dormant: Boolean,
-            val enclosingGeneratorSpan: SourceSpan?
+            val enclosingGeneratorSpan: SourceSpan?,
+            val moduleScope: Boolean
         )
 
         val nodes = mutableListOf<IndexedNode>()
         fun collect(
             node: CPlusAstNode,
             dormant: Boolean = false,
-            enclosingGeneratorSpan: SourceSpan? = null
+            enclosingGeneratorSpan: SourceSpan? = null,
+            moduleScope: Boolean = true
         ) {
-            nodes += IndexedNode(node, dormant, enclosingGeneratorSpan)
+            val nestedModuleScope = moduleScope && node.syntaxKind !in NON_MODULE_SCOPE_NODES
+            nodes += IndexedNode(node, dormant, enclosingGeneratorSpan, nestedModuleScope)
             node.children.forEach { child ->
                 val bodyOfGenerator = node.syntaxKind in setOf(
                     "cplus_comptime_function_definition",
@@ -56,7 +61,8 @@ class CPlusComptimeIndexer {
                 collect(
                     child,
                     dormant || bodyOfGenerator,
-                    if (bodyOfGenerator) node.span else enclosingGeneratorSpan
+                    if (bodyOfGenerator) node.span else enclosingGeneratorSpan,
+                    nestedModuleScope
                 )
             }
         }
@@ -118,7 +124,8 @@ class CPlusComptimeIndexer {
                     parameters = parameters,
                     argumentSpans = argumentSpans,
                     resultKind = node.children.firstOrNull { it.fieldName == "result_kind" }?.text(ast.source.text),
-                    alias = node.children.firstOrNull { it.fieldName == "alias" }?.text(ast.source.text)
+                    alias = node.children.firstOrNull { it.fieldName == "alias" }?.text(ast.source.text),
+                    moduleScope = indexed.moduleScope
                 )
             }.toList()
         return CPlusComptimeIndex(
@@ -149,5 +156,13 @@ class CPlusComptimeIndexer {
             "parameter_declaration", "cplus_parameter_declaration"
         )
         val GENERIC_PARAMETER_NODES = setOf("cplus_generic_type_parameter", "cplus_legacy_generic_type_parameter")
+        val NON_MODULE_SCOPE_NODES = setOf(
+            "function_definition",
+            "cplus_method_definition",
+            "struct_specifier",
+            "union_specifier",
+            "enum_specifier",
+            "field_declaration_list"
+        )
     }
 }

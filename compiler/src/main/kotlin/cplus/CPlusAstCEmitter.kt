@@ -74,6 +74,16 @@ class CPlusAstCEmitter {
                 )
                 return
             }
+            // Tree-sitter exposes quotes, contents, and escape sequences as child nodes.
+            // Reformatting those children would change the value of a C literal.
+            if (node.syntaxKind in setOf("string_literal", "char_literal", "number_literal")) {
+                tokens += Token(
+                    source.text.substring(node.span.startOffset, node.span.endOffset),
+                    node,
+                    ancestors
+                )
+                return
+            }
             val children = node.children
                 .filter { it.span.endOffset > it.span.startOffset }
                 .sortedWith(compareBy<CPlusAstNode> { it.span.startOffset }.thenBy { it.span.endOffset })

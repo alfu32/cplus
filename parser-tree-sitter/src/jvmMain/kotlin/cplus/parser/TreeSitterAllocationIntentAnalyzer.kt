@@ -146,43 +146,152 @@ class TreeSitterAllocationIntentAnalyzer {
             scope[name] = current.copy(provenance = provenance)
         }
 
-        fun checkCall(node: CPlusAstNode, scope: Map<String, VariableState>) {
+        fun outputTargetName(argument: CPlusAstNode): String? {
+            var expression = argument
+            while (expression.syntaxKind == "parenthesized_expression") {
+                expression = expression.children.firstOrNull { it.named } ?: return null
+            }
+            if (expression.syntaxKind !in setOf("pointer_expression", "unary_expression")) return null
+            val operator = expression.children.firstOrNull { it.fieldName == "operator" }
+                ?.let { text(source, it) }
+                ?: expression.children.firstOrNull { !it.named }?.let { text(source, it) }
+            if (operator != "&") return null
+            return expression.children.firstOrNull { it.fieldName == "argument" }
+                ?.takeIf { it.syntaxKind == "identifier" }
+                ?.let { text(source, it) }
+        }
+
+        fun applyOutputCallEffect(
+            argument: CPlusAstNode,
+            parameter: ParameterContract,
+            scope: MutableMap<String, VariableState>
+        ) {
+            if (!parameter.isOutputPointer) return
+            val name = outputTargetName(argument) ?: return
+            val current = scope[name] ?: return
+            val before = current.provenance?.intent
+                ?: current.intent.takeIf { it != AllocationIntent.NONE }
+            val output = parameter.intent.takeIf { it != AllocationIntent.NONE }
+            val joined = before?.takeIf { it == output }
+            scope[name] = current.copy(
+                provenance = joined?.let {
+                    current.provenance ?: Provenance(it, "output from '${parameter.name}'")
+                }
+            )
+        }
+
+        fun checkCall(node: CPlusAstNode, scope: MutableMap<String, VariableState>) {
             val argumentList = node.children.firstOrNull { it.fieldName == "arguments" } ?: return
             val arguments = argumentList.children.filter { it.named }
             val methodCall = resolvedMethodCalls[node.span.startOffset]
             if (methodCall != null) {
                 val method = methodCall.declaration
-                val parameters = if (!methodCall.staticCall && method.parameters.firstOrNull()?.receiver == true) {
+                val contract = methodContractsByDeclaration[method.span.startOffset]
+                val explicitReceiver = methodCall.explicitReceiver && !methodCall.staticCall
+                val hasReceiverParameter = !methodCall.staticCall && method.parameters.firstOrNull()?.receiver == true
+                val parameters = if (hasReceiverParameter) {
                     method.parameters.drop(1)
                 } else method.parameters
-                parameters.zip(arguments).forEach { (parameter, argument) ->
+                val contracts = if (hasReceiverParameter && contract?.parameters?.firstOrNull()?.name == "self") {
+                    contract.parameters.drop(1)
+                } else contract?.parameters.orEmpty()
+                val checkedArguments = if (explicitReceiver) arguments.drop(1) else arguments
+                parameters.zip(checkedArguments).forEach { (parameter, argument) ->
                     val expected = parameter.annotations.asSequence().map(::allocationIntent)
                         .firstOrNull { it != AllocationIntent.NONE } ?: AllocationIntent.NONE
-                    if (expected == AllocationIntent.NONE) return@forEach
-                    val actual = infer(argument, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
-                        ?: return@forEach
-                    if (actual.intent == expected) return@forEach
-                    diagnostics += CPlusDiagnostic(
-                        "allocation intent mismatch: argument for '${method.ownerType}.${method.name}.${parameter.name}' is ${actual.intent.label()} but the parameter expects ${expected.label()}",
-                        ast.source.sourceFile.span(argument.span.startOffset, argument.span.endOffset)
-                    )
+                    if (expected != AllocationIntent.NONE) {
+                        val actual = infer(argument, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
+                        if (actual != null && actual.intent != expected) {
+                            diagnostics += CPlusDiagnostic(
+                                "allocation intent mismatch: argument for '${method.ownerType}.${method.name}.${parameter.name}' is ${actual.intent.label()} but the parameter expects ${expected.label()}",
+                                ast.source.sourceFile.span(argument.span.startOffset, argument.span.endOffset)
+                            )
+                        }
+                    }
+                }
+                contracts.zip(checkedArguments).forEach { (parameter, argument) ->
+                    applyOutputCallEffect(argument, parameter, scope)
                 }
                 return
             }
             val functionNode = node.children.firstOrNull { it.fieldName == "function" } ?: return
             val signature = functionContracts[text(source, functionNode)] ?: return
             signature.parameters.zip(arguments).forEach { (parameter, argument) ->
-                if (parameter.isOutputPointer) return@forEach
-                if (parameter.intent == AllocationIntent.NONE) return@forEach
-                val actual = infer(argument, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
-                    ?: return@forEach
-                if (actual.intent == parameter.intent) return@forEach
-                diagnostics += CPlusDiagnostic(
-                    "allocation intent mismatch: argument for '${signature.name}.${parameter.name}' is ${actual.intent.label()} but the parameter expects ${parameter.intent.label()}",
-                    ast.source.sourceFile.span(argument.span.startOffset, argument.span.endOffset)
-                )
+                if (!parameter.isOutputPointer && parameter.intent != AllocationIntent.NONE) {
+                    val actual = infer(argument, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
+                    if (actual != null && actual.intent != parameter.intent) {
+                        diagnostics += CPlusDiagnostic(
+                            "allocation intent mismatch: argument for '${signature.name}.${parameter.name}' is ${actual.intent.label()} but the parameter expects ${parameter.intent.label()}",
+                            ast.source.sourceFile.span(argument.span.startOffset, argument.span.endOffset)
+                        )
+                    }
+                }
+                applyOutputCallEffect(argument, parameter, scope)
             }
         }
+
+        fun mergePossibleScopes(
+            target: MutableMap<String, VariableState>,
+            incoming: Map<String, VariableState>,
+            branches: List<Map<String, VariableState>>
+        ) {
+            incoming.forEach { (name, initial) ->
+                val states = branches.map { it[name] ?: initial }
+                val domains = states.map { it.provenance?.intent }.distinct()
+                target[name] = if (domains.size == 1) {
+                    initial.copy(provenance = states.first().provenance)
+                } else {
+                    // A known incoming value is not valid after a branch that can replace it
+                    // with a different or unknown allocation domain.
+                    initial.copy(provenance = null)
+                }
+            }
+        }
+
+        fun modifiedVariablesIn(node: CPlusAstNode): Set<String> = node.descendantsAndSelf()
+            .flatMap { expression ->
+                when (expression.syntaxKind) {
+                    "assignment_expression" -> listOfNotNull(
+                        expression.children.firstOrNull { it.fieldName == "left" }
+                            ?.takeIf { it.syntaxKind == "identifier" }
+                            ?.let { text(source, it) }
+                    ).asSequence()
+                    "update_expression" -> listOfNotNull(
+                        expression.descendantsAndSelf()
+                            .firstOrNull { it.syntaxKind == "identifier" }
+                            ?.let { text(source, it) }
+                    ).asSequence()
+                    "call_expression" -> {
+                        val arguments = expression.children.firstOrNull { it.fieldName == "arguments" }
+                            ?.children.orEmpty().filter { it.named }
+                        val methodCall = resolvedMethodCalls[expression.span.startOffset]
+                        val contractAndArguments = if (methodCall != null) {
+                            val method = methodCall.declaration
+                            val contract = methodContractsByDeclaration[method.span.startOffset]
+                            val hasReceiverParameter = !methodCall.staticCall && method.parameters.firstOrNull()?.receiver == true
+                            val contracts = if (hasReceiverParameter && contract?.parameters?.firstOrNull()?.name == "self") {
+                                contract.parameters.drop(1)
+                            } else contract?.parameters.orEmpty()
+                            val callArguments = if (methodCall.explicitReceiver && !methodCall.staticCall) {
+                                arguments.drop(1)
+                            } else arguments
+                            contracts to callArguments
+                        } else {
+                            val functionNode = expression.children.firstOrNull { it.fieldName == "function" }
+                            val contract = functionNode?.let { functionContracts[text(source, it)] }
+                            contract?.parameters.orEmpty() to arguments
+                        }
+                        contractAndArguments.first.zip(contractAndArguments.second).asSequence()
+                            .filter { (parameter, _) -> parameter.isOutputPointer }
+                            .mapNotNull { (parameter, argument) ->
+                                // Reuse the regular call-effect logic so aliases and unknown
+                                // prior values are treated identically inside and outside branches.
+                                outputTargetName(argument)
+                            }
+                    }
+                    else -> emptySequence()
+                }
+            }.toSet()
 
         fun visit(
             node: CPlusAstNode,
@@ -198,13 +307,68 @@ class TreeSitterAllocationIntentAnalyzer {
                 }
                 "call_expression" -> {
                     checkCall(node, scope)
-                    node.children.forEach { visit(it, scope, currentFunction) }
+                    // C does not specify argument evaluation order. Analyze nested expressions
+                    // independently, then retain only allocation domains that agree across
+                    // every possible single-argument effect. This intentionally loses some
+                    // precision, but never carries a stale pre-call value forward.
+                    val beforeCall = scope.toMap()
+                    val functionExpression = node.children.firstOrNull { it.fieldName == "function" }
+                    val arguments = node.children.firstOrNull { it.fieldName == "arguments" }
+                        ?.children.orEmpty().filter { it.named }
+                    val evaluatedExpressions = listOfNotNull(functionExpression) + arguments
+                    val possibleEffects = evaluatedExpressions.map { expression ->
+                        scope.toMutableMap().also { visit(expression, it, currentFunction) }
+                    }
+                    if (possibleEffects.isNotEmpty()) {
+                        mergePossibleScopes(scope, beforeCall, possibleEffects)
+                    }
+                }
+                "assignment_expression" -> {
+                    node.children.firstOrNull { it.fieldName == "right" }
+                        ?.let { visit(it, scope, currentFunction) }
+                    applySimpleAssignment(node, scope, currentFunction)
+                }
+                "comma_expression" -> {
+                    // The comma operator sequences its operands left-to-right.
+                    node.children.filter { it.named }.forEach { visit(it, scope, currentFunction) }
+                }
+                "binary_expression" -> {
+                    val left = node.children.firstOrNull { it.fieldName == "left" }
+                    val right = node.children.firstOrNull { it.fieldName == "right" }
+                    val operator = node.children.firstOrNull { it.fieldName == "operator" }
+                        ?.let { text(source, it) }
+                    if (left == null || right == null) {
+                        node.children.forEach { visit(it, scope.toMutableMap(), currentFunction) }
+                    } else if (operator == "&&" || operator == "||") {
+                        // The left side always runs; the right side may be skipped.
+                        visit(left, scope, currentFunction)
+                        val afterLeft = scope.toMap()
+                        val rightScope = scope.toMutableMap()
+                        visit(right, rightScope, currentFunction)
+                        mergePossibleScopes(scope, afterLeft, listOf(afterLeft, rightScope))
+                    } else {
+                        // Other binary operands may be evaluated in either order. Preserve only
+                        // provenance that agrees with both independently analyzed possibilities.
+                        val incoming = scope.toMap()
+                        val paths = listOf(left, right).map { operand ->
+                            scope.toMutableMap().also { visit(operand, it, currentFunction) }
+                        }
+                        mergePossibleScopes(scope, incoming, listOf(incoming) + paths)
+                    }
+                }
+                "conditional_expression" -> {
+                    node.children.firstOrNull { it.fieldName == "condition" }
+                        ?.let { visit(it, scope, currentFunction) }
+                    val incoming = scope.toMap()
+                    val consequence = node.children.firstOrNull { it.fieldName == "consequence" }
+                    val alternative = node.children.firstOrNull { it.fieldName == "alternative" }
+                    val thenScope = scope.toMutableMap()
+                    consequence?.let { visit(it, thenScope, currentFunction) }
+                    val elseScope = scope.toMutableMap()
+                    alternative?.let { visit(it, elseScope, currentFunction) }
+                    mergePossibleScopes(scope, incoming, listOf(thenScope, elseScope))
                 }
                 "expression_statement" -> {
-                    val expressions = node.children.filter { it.named }
-                    if (expressions.size == 1 && expressions.single().syntaxKind == "assignment_expression") {
-                        applySimpleAssignment(expressions.single(), scope, currentFunction)
-                    }
                     node.children.forEach { visit(it, scope, currentFunction) }
                 }
                 "return_statement" -> {
@@ -277,25 +441,49 @@ class TreeSitterAllocationIntentAnalyzer {
                 }
                 "if_statement" -> {
                     val condition = node.children.firstOrNull { it.fieldName == "condition" }
-                    condition?.let { visit(it, scope.toMutableMap(), currentFunction) }
+                    condition?.let { visit(it, scope, currentFunction) }
+                    val incoming = scope.toMap()
                     val consequence = node.children.firstOrNull { it.fieldName == "consequence" }
                     val alternative = node.children.firstOrNull { it.fieldName == "alternative" }
                     val thenScope = scope.toMutableMap()
                     consequence?.let { visit(it, thenScope, currentFunction) }
                     val elseScope = scope.toMutableMap()
                     alternative?.let { visit(it, elseScope, currentFunction) }
-                    if (consequence != null) {
-                        scope.keys.toList().forEach { name ->
-                            val thenState = thenScope[name] ?: return@forEach
-                            val elseState = elseScope[name] ?: return@forEach
-                            if (thenState.provenance == elseState.provenance) {
-                                scope[name] = thenState
-                            }
-                        }
+                    mergePossibleScopes(scope, incoming, listOf(thenScope, elseScope))
+                }
+                "for_statement", "while_statement", "do_statement" -> {
+                    val outerNames = scope.keys.toSet()
+                    val loopScope = scope.toMutableMap()
+                    // A single structural walk catches diagnostics and declarations without
+                    // pretending that one traversal computes a loop fixed point. New for-init
+                    // variables stay local to this loop scope.
+                    node.children.forEach { visit(it, loopScope, currentFunction) }
+                    modifiedVariablesIn(node).intersect(outerNames).forEach { name ->
+                        scope[name]?.let { state -> scope[name] = state.copy(provenance = null) }
                     }
                 }
-                "for_statement", "while_statement", "do_statement", "switch_statement" ->
-                    node.children.forEach { visit(it, scope.toMutableMap(), currentFunction) }
+                "switch_statement" -> {
+                    val outerNames = scope.keys.toSet()
+                    val switchScope = scope.mapValues { (_, state) -> state.copy(provenance = null) }.toMutableMap()
+                    val body = node.children.firstOrNull { it.fieldName == "body" }
+                        ?: node.children.firstOrNull { it.syntaxKind == "compound_statement" }
+                    node.children.filterNot { it === body }.forEach {
+                        visit(it, switchScope.toMutableMap(), currentFunction)
+                    }
+                    val caseBranches = body?.children.orEmpty().filter { it.syntaxKind == "case_statement" }
+                    if (caseBranches.isNotEmpty()) {
+                        // A case may be entered directly or reached by fallthrough. Start each
+                        // branch without outer provenance rather than sequencing sibling cases.
+                        caseBranches.forEach { visit(it, switchScope.toMutableMap(), currentFunction) }
+                    } else {
+                        body?.let { visit(it, switchScope.toMutableMap(), currentFunction) }
+                    }
+                    // Cases can be skipped or fall through, so a single traversal cannot
+                    // establish the post-switch allocation domain for a written outer value.
+                    modifiedVariablesIn(node).intersect(outerNames).forEach { name ->
+                        scope[name]?.let { state -> scope[name] = state.copy(provenance = null) }
+                    }
+                }
                 else -> node.children.forEach { visit(it, scope, currentFunction) }
             }
         }

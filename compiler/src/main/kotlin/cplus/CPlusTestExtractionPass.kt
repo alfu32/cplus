@@ -34,7 +34,7 @@ class CPlusTestExtractionPass {
             val bodyNode = test.children.firstOrNull { it.syntaxKind == "compound_statement" }
             if (nameNode == null || bodyNode == null) {
                 diagnostics += CPlusLoweringDiagnostic(
-                    "CPLUS_TEST_SHAPE", "test declaration must have a name and a compound body", test.span
+                    "CPLUS_TEST_SHAPE", "test declaration must have a name and a compound body", source.toOriginalSpan(test.span)
                 )
                 continue
             }
@@ -42,7 +42,7 @@ class CPlusTestExtractionPass {
             val name = if (nameNode.syntaxKind == "string_literal") decodeStringLiteral(rawName) else rawName
             if (name.isBlank()) {
                 diagnostics += CPlusLoweringDiagnostic(
-                    "CPLUS_TEST_NAME", "test declaration requires a non-empty name", nameNode.span
+                    "CPLUS_TEST_NAME", "test declaration requires a non-empty name", source.toOriginalSpan(nameNode.span)
                 )
                 continue
             }
@@ -67,7 +67,7 @@ class CPlusTestExtractionPass {
                         diagnostics += CPlusLoweringDiagnostic(
                             "CPLUS_TEST_ASSERT_ARGUMENTS",
                             "@$name expects $expectedCount argument${if (expectedCount == 1) "" else "s"}",
-                            call.span
+                            source.toOriginalSpan(call.span)
                         )
                         return@mapNotNull null
                     }
@@ -76,13 +76,13 @@ class CPlusTestExtractionPass {
                         arguments,
                         call.span.startOffset - bodyNode.span.startOffset,
                         call.span.endOffset - bodyNode.span.startOffset,
-                        call.span
+                        source.toOriginalSpan(call.span)
                     )
                 }.toList()
             fixtures += CPlusExtractedTestFixture(
                 name = name,
                 body = source.slice(bodyNode.span.startOffset, bodyNode.span.endOffset),
-                span = test.span,
+                span = source.toOriginalSpan(test.span),
                 assertions = assertions
             )
         }

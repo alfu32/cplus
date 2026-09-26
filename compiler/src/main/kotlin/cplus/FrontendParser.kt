@@ -89,6 +89,8 @@ data class CPlusParserShadowReport(
     val shadow: CPlusParseResult,
     val coverageMatches: Boolean,
     val diagnosticsMatch: Boolean,
+    /** True when both backends report errors on intersecting ranges/insert points (or both are clean). */
+    val errorLocationsAlign: Boolean,
     /** Equality for the deliberately shared comptime/test syntax subset only. */
     val recognizedConstructsMatch: Boolean,
     val authoritativeRecognizedConstructs: List<String>,
@@ -125,6 +127,24 @@ class CPlusParserShadowRunner(
         val diagnosticSignature: (ParserDiagnostic) -> List<Any?> = { diagnostic ->
             listOf(diagnostic.code, diagnostic.message, diagnostic.severity, diagnostic.span)
         }
+        val authoritativeErrors = authoritative.diagnostics.filter { it.severity == ParserDiagnosticSeverity.ERROR }
+        val shadowErrors = shadow.diagnostics.filter { it.severity == ParserDiagnosticSeverity.ERROR }
+        fun locationsAlign(left: SourceSpan, right: SourceSpan): Boolean {
+            if (left.file != right.file) return false
+            if (left.startOffset == left.endOffset) {
+                return left.startOffset in right.startOffset..right.endOffset
+            }
+            if (right.startOffset == right.endOffset) {
+                return right.startOffset in left.startOffset..left.endOffset
+            }
+            return left.startOffset < right.endOffset && right.startOffset < left.endOffset
+        }
+        val errorsAlign = when {
+            authoritativeErrors.isEmpty() && shadowErrors.isEmpty() -> true
+            authoritativeErrors.isEmpty() || shadowErrors.isEmpty() -> false
+            else -> authoritativeErrors.all { left -> shadowErrors.any { right -> locationsAlign(left.span, right.span) } } &&
+                shadowErrors.all { right -> authoritativeErrors.any { left -> locationsAlign(left.span, right.span) } }
+        }
         val authoritativeRecognized = recognizedConstructs(authoritative)
         val shadowRecognized = recognizedConstructs(shadow)
         return CPlusParserShadowReport(
@@ -132,6 +152,7 @@ class CPlusParserShadowRunner(
             shadow = shadow,
             coverageMatches = authoritative.coverage == shadow.coverage,
             diagnosticsMatch = authoritative.diagnostics.map(diagnosticSignature) == shadow.diagnostics.map(diagnosticSignature),
+            errorLocationsAlign = errorsAlign,
             recognizedConstructsMatch = authoritativeRecognized == shadowRecognized,
             authoritativeRecognizedConstructs = authoritativeRecognized,
             shadowRecognizedConstructs = shadowRecognized,

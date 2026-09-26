@@ -328,46 +328,10 @@ internal class ComptimeCompiler(
         offset: Int,
         requestedPath: String,
         extensionlessCandidates: List<String>
-    ): Path {
-        val (roots, relativePath, confined) = when {
-            requestedPath.startsWith("stdlib:/") -> Triple(importPaths.standardLibraryRoots, requestedPath.removePrefix("stdlib:/"), true)
-            requestedPath.startsWith("module:/") -> Triple(importPaths.moduleRoots, requestedPath.removePrefix("module:/"), true)
-            requestedPath.startsWith("project:/") -> Triple(importPaths.moduleRoots, requestedPath.removePrefix("project:/"), true)
-            else -> {
-                val sourceName = source.name
-                    ?: throw syntax("import requires a named source file", source, offset)
-                val base = Paths.get(sourceName).toAbsolutePath().normalize().parent
-                    ?: throw syntax("cannot determine the directory of $sourceName", source, offset)
-                Triple(listOf(base), requestedPath, false)
-            }
-        }
-        if (roots.isEmpty()) {
-            val namespace = requestedPath.substringBefore(":/")
-            throw syntax("no $namespace search path is configured for import '$requestedPath'", source, offset)
-        }
-
-        val requested = try {
-            Paths.get(relativePath.replace('/', java.io.File.separatorChar))
-        } catch (error: Exception) {
-            throw syntax("invalid import path '$requestedPath': ${error.message}", source, offset)
-        }
-        val extension = requestedPath.substringAfterLast('/').substringAfterLast('\\').substringAfterLast('.', "")
-        val candidates = if (extension.isNotEmpty()) {
-            listOf(requested)
-        } else {
-            extensionlessCandidates.map { suffix -> requested.resolveSibling(requested.fileName.toString() + ".$suffix") }
-        }
-        for (rootPath in roots) {
-            val normalizedRoot = rootPath.toAbsolutePath().normalize()
-            for (candidate in candidates) {
-                val resolved = (if (requested.isAbsolute) requested else normalizedRoot.resolve(candidate)).normalize()
-                if (confined && !resolved.startsWith(normalizedRoot)) {
-                    throw syntax("import path escapes its configured root: '$requestedPath'", source, offset)
-                }
-                if (Files.isRegularFile(resolved)) return resolved
-            }
-        }
-        throw syntax("imported file does not exist: '$requestedPath'", source, offset)
+    ): Path = try {
+        CPlusImportResolver(importPaths).resolve(source, requestedPath, extensionlessCandidates)
+    } catch (error: CPlusImportResolutionException) {
+        throw syntax(error.message ?: "cannot resolve import '$requestedPath'", source, offset)
     }
 
     private fun materializeModule(
@@ -1659,9 +1623,13 @@ private class ComptimeParser(private val source: SourceFile) {
         val close = Delimiters.match(masked, open, '(', ')')
         if (close < 0) throw syntax("unclosed @type parameter list", source, at)
         val bodyOpen = skipWhitespace(masked, close + 1)
+        if (bodyOpen >= masked.length || masked[bodyOpen] != '{') {
+            throw syntax("@type generator requires a body", source, bodyOpen.coerceAtMost(source.text.length))
+        }
         val bodyClose = Delimiters.match(masked, bodyOpen, '{', '}')
-        if (bodyOpen >= masked.length || masked[bodyOpen] != '{' || bodyClose < 0) {
-            throw syntax("@type generator requires a body", source, at)
+        if (bodyClose < 0) {
+            // Point at the expected closing brace, matching parser recovery's insertion span.
+            throw syntax("unclosed @type generator body", source, source.text.length)
         }
         return ComptimeTypeGenerator(
             source,

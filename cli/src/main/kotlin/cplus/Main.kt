@@ -92,6 +92,7 @@ class CPlusCli(
         var sourceHint: Path? = null
         var readStdin = false
         var destination: Path? = null
+        var parserBackend = ParserBackendId.TREE_SITTER
         var index = 0
         while (index < arguments.size) {
             when (val argument = arguments[index]) {
@@ -106,12 +107,20 @@ class CPlusCli(
                     sourceHint = Path(arguments[index + 1]).toAbsolutePath().normalize()
                     index += 2
                 }
+                "--backend" -> {
+                    if (index + 1 >= arguments.size) throw IllegalArgumentException("parse --backend requires 'legacy' or 'tree-sitter'")
+                    parserBackend = parseBackend(arguments[index + 1])
+                    index += 2
+                }
                 "-o" -> {
                     if (index + 1 >= arguments.size) throw IllegalArgumentException("parse -o requires a JSON output path")
                     destination = Path(arguments[index + 1]).toAbsolutePath().normalize()
                     index += 2
                 }
-                else -> {
+                else -> if (argument.startsWith("--backend=")) {
+                    parserBackend = parseBackend(argument.substringAfter('='))
+                    index++
+                } else {
                     if (source != null) throw IllegalArgumentException("parse accepts one source file, got '$argument'")
                     source = Path(argument).toAbsolutePath().normalize()
                     index++
@@ -132,10 +141,11 @@ class CPlusCli(
         } else {
             manager.load(sourcePath!!)
         }
-        val result = cplus.parser.TreeSitterCPlusParserBackend().parse(
-            snapshot,
-            CPlusParseOptions(editorMode = true)
+        val parser = CPlusParserService(
+            backends = listOf(LegacyCPlusParserBackend(), cplus.parser.TreeSitterCPlusParserBackend()),
+            defaultBackend = ParserBackendId.TREE_SITTER
         )
+        val result = parser.parse(snapshot, parserBackend, CPlusParseOptions(editorMode = true))
         val json = cplus.parser.CPlusParseJson.encode(result)
         if (destination == null) {
             output.append(json).append('\n')
@@ -143,6 +153,12 @@ class CPlusCli(
             writeText(destination, json + "\n")
         }
         return if (result.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) 1 else 0
+    }
+
+    private fun parseBackend(value: String): ParserBackendId = when (value.trim().lowercase()) {
+        "legacy" -> ParserBackendId.LEGACY
+        "tree-sitter", "treesitter" -> ParserBackendId.TREE_SITTER
+        else -> throw IllegalArgumentException("unknown parser backend '$value'; expected 'legacy' or 'tree-sitter'")
     }
 
     private fun importGraph(arguments: List<String>): Int {
@@ -562,8 +578,8 @@ class CPlusCli(
 usage:
   cplus help
   cplus version
-  cplus parse filename.cp [-o ast.json]
-  cplus parse --stdin [--source filename.cp] [-o ast.json]
+  cplus parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
+  cplus parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
   cplus graph filename.cp [-o imports.json]
   cplus transcode filename.cp [-o some_file_name.c] [--target=TRIPLE]
   cplus compile filename.cp [-o executable] [passthrough tcc parameters]

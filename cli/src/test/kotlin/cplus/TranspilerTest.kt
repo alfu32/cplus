@@ -23,6 +23,22 @@ class TranspilerTest {
             assertTrue(output.toString().contains("\"offsetEncoding\":\"utf16\""), output.toString())
             assertTrue(output.toString().contains("\"kind\":\"struct_declaration\""), output.toString())
 
+            val legacyOutput = StringBuilder()
+            val legacyStatus = CPlusCli(output = legacyOutput, errors = StringBuilder()).run(
+                listOf("parse", "--backend", "legacy", valid.toString())
+            )
+            assertEquals(0, legacyStatus)
+            assertTrue(legacyOutput.toString().contains("\"backend\":\"legacy\""), legacyOutput.toString())
+            assertTrue(legacyOutput.toString().contains("\"coverage\":\"opaque\""), legacyOutput.toString())
+            assertTrue(legacyOutput.toString().contains("\"opaque\":true"), legacyOutput.toString())
+
+            val explicitTreeOutput = StringBuilder()
+            val explicitTreeStatus = CPlusCli(output = explicitTreeOutput, errors = StringBuilder()).run(
+                listOf("parse", "--backend=tree-sitter", valid.toString())
+            )
+            assertEquals(0, explicitTreeStatus)
+            assertTrue(explicitTreeOutput.toString().contains("\"backend\":\"tree_sitter\""), explicitTreeOutput.toString())
+
             val malformed = directory.resolve("malformed.cp")
             Files.writeString(malformed, "int main( { return 0; }")
             val malformedOutput = StringBuilder()

@@ -1,7 +1,11 @@
 package cplus.parser
 
 import cplus.CPlusAstAdapter
+import cplus.CPlusAstLoweringPipeline
+import cplus.CPlusAstLoweringStep
 import cplus.CPlusAstCEmitter
+import cplus.CPlusComptimeIndexer
+import cplus.CPlusImportPaths
 import cplus.CPlusDeferLoweringPass
 import cplus.CPlusLoweringDiagnostic
 import cplus.CPlusMethodCallLoweringPass
@@ -33,7 +37,9 @@ data class TreeSitterPrototypeResult(
     /** Compiler-facing mapped emission for consumers that need the established source-map facade. */
     val transcodedSource: TranscodedSource? = null,
     val allocationAnalysis: cplus.AllocationAnalysisResult = cplus.AllocationAnalysisResult(),
-    val compilerOptions: List<String> = emptyList()
+    val compilerOptions: List<String> = emptyList(),
+    val sourceOrder: List<SourceId> = emptyList(),
+    val sourceImports: List<cplus.SourceImportEdge> = emptyList()
 ) {
     val successful: Boolean
         get() = cSource != null && parserDiagnostics.isEmpty() && loweringDiagnostics.isEmpty() && unsupportedNodes.isEmpty()
@@ -45,12 +51,13 @@ data class TreeSitterUnsupportedConstruct(val syntaxKind: String, val span: cplu
  * Experimental phase-7 vertical slice. The production CPlusTranspiler remains authoritative.
  * This pipeline lowers ordinary C plus struct methods, explicit receiver calls, simple defer, and
  * extracts/removes @throws declarations and @test fixtures, and lowers statement-oriented
- * @try/@catch. Comptime and C-plus imports still fail closed.
+ * @try/@catch plus AST-lowered C imports and C-plus module import graphs.
  */
 class TreeSitterCPlusPrototypeTranspiler(
     private val backend: CPlusParserBackend = TreeSitterCPlusParserBackend(),
     private val sourceManager: SourceManager = SourceManager(),
-    private val targetOs: String = cplus.CPlusTarget.hostOs()
+    private val targetOs: String = cplus.CPlusTarget.hostOs(),
+    private val importPaths: CPlusImportPaths = CPlusImportPaths()
 ) {
     fun transpile(source: SourceSnapshot): TreeSitterPrototypeResult {
         var revision = 0
@@ -64,19 +71,12 @@ class TreeSitterCPlusPrototypeTranspiler(
         if (parsed.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mappedIdentity(source), it.span) }, emptyList(), emptyList())
         }
-        var ast = CPlusAstAdapter().adapt(parsed)
-        val allocationAnalysis = TreeSitterAllocationIntentAnalyzer().analyze(ast)
         var mapped = MappedText.identity(source.sourceFile)
-        val extractedTests = CPlusTestExtractionPass().extract(ast, mapped)
-        if (extractedTests.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), extractedTests.diagnostics, emptyList())
-        }
-        mapped = extractedTests.source
-        snapshot = snapshotFor(mapped.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
-        }
+        var ast = CPlusAstAdapter().adapt(parsed)
+        var testFixtures: List<cplus.CPlusExtractedTestFixture> = emptyList()
+        var allocationAnalysis = cplus.AllocationAnalysisResult()
+        var sourceOrder: List<SourceId> = emptyList()
+        var sourceImports: List<cplus.SourceImportEdge> = emptyList()
         val conditionalPass = TreeSitterComptimeConditionalLowering()
         var conditionalPassCount = 0
         while (conditionalPassCount < MAX_COMPTIME_CONDITIONAL_PASSES) {
@@ -87,7 +87,7 @@ class TreeSitterCPlusPrototypeTranspiler(
                     emptyList(),
                     materialized.diagnostics.map { it.withMappedSpan(mapped, it.span) },
                     emptyList(),
-                    testFixtures = extractedTests.fixtures
+                    testFixtures = testFixtures
                 )
             }
             if (materialized.source.text == mapped.text) break
@@ -101,7 +101,7 @@ class TreeSitterCPlusPrototypeTranspiler(
                     parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
                     emptyList(),
                     emptyList(),
-                    testFixtures = extractedTests.fixtures
+                    testFixtures = testFixtures
                 )
             }
         }
@@ -116,9 +116,71 @@ class TreeSitterCPlusPrototypeTranspiler(
                     mapped.toOriginalSpan(remainingConditional.span)
                 )),
                 emptyList(),
-                testFixtures = extractedTests.fixtures
+                testFixtures = testFixtures
             )
         }
+
+        val imports = TreeSitterComptimeImportLowering(backend, sourceManager, importPaths, targetOs)
+            .lower(parsed, mapped)
+        if (imports.parserDiagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, imports.parserDiagnostics, emptyList(), emptyList())
+        }
+        if (imports.loweringDiagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, emptyList(), imports.loweringDiagnostics, emptyList())
+        }
+        mapped = imports.source ?: error("successful import expansion must produce mapped source")
+        sourceOrder = imports.sourceOrder
+        sourceImports = imports.sourceImports
+        snapshot = snapshotFor(mapped.text)
+        parsed = backend.parse(snapshot)
+        if (parsed.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
+        }
+
+        ast = CPlusAstAdapter().adapt(parsed)
+        val cImports = TreeSitterCImportLowering(importPaths).lower(ast, mapped)
+        if (cImports.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, emptyList(), cImports.diagnostics, emptyList())
+        }
+        if (cImports.source.text != mapped.text) {
+            mapped = cImports.source
+            snapshot = snapshotFor(mapped.text)
+            parsed = backend.parse(snapshot)
+            if (parsed.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
+            }
+            ast = CPlusAstAdapter().adapt(parsed)
+        }
+
+        val comptimeResolution = cplus.CPlusComptimeResolver().resolve(CPlusComptimeIndexer().index(ast))
+        if (comptimeResolution.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(
+                null,
+                emptyList(),
+                comptimeResolution.diagnostics.map { diagnostic ->
+                    CPlusLoweringDiagnostic(
+                        diagnostic.code,
+                        diagnostic.message,
+                        mapped.toOriginalSpan(diagnostic.span)
+                    )
+                },
+                emptyList()
+            )
+        }
+
+        allocationAnalysis = TreeSitterAllocationIntentAnalyzer().analyze(ast)
+        val extractedTests = CPlusTestExtractionPass().extract(ast, mapped)
+        if (extractedTests.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, emptyList(), extractedTests.diagnostics, emptyList())
+        }
+        testFixtures = extractedTests.fixtures
+        mapped = extractedTests.source
+        snapshot = snapshotFor(mapped.text)
+        parsed = backend.parse(snapshot)
+        if (parsed.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
+        }
+
         val scalarMaterialized = TreeSitterComptimeScalarLowering().lower(parsed, mapped)
         if (scalarMaterialized.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(
@@ -126,7 +188,7 @@ class TreeSitterCPlusPrototypeTranspiler(
                 emptyList(),
                 scalarMaterialized.diagnostics.map { it.withMappedSpan(mapped, it.span) },
                 emptyList(),
-                testFixtures = extractedTests.fixtures
+                testFixtures = testFixtures
             )
         }
         if (scalarMaterialized.source.text != mapped.text) {
@@ -139,7 +201,7 @@ class TreeSitterCPlusPrototypeTranspiler(
                     parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
                     emptyList(),
                     emptyList(),
-                    testFixtures = extractedTests.fixtures
+                    testFixtures = testFixtures
                 )
             }
         }
@@ -150,7 +212,7 @@ class TreeSitterCPlusPrototypeTranspiler(
                 emptyList(),
                 flagsMaterialized.diagnostics.map { it.withMappedSpan(mapped, it.span) },
                 emptyList(),
-                testFixtures = extractedTests.fixtures
+                testFixtures = testFixtures
             )
         }
         val compilerOptions = flagsMaterialized.compilerOptions
@@ -164,88 +226,98 @@ class TreeSitterCPlusPrototypeTranspiler(
                     parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
                     emptyList(),
                     emptyList(),
-                    testFixtures = extractedTests.fixtures
+                    testFixtures = testFixtures
                 )
             }
         }
         ast = CPlusAstAdapter().adapt(parsed)
         val unsupported = unsupportedConstructs(parsed.root).map { it.copy(span = mapped.toOriginalSpan(it.span)) }
         if (unsupported.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), emptyList(), unsupported, testFixtures = extractedTests.fixtures)
+            return TreeSitterPrototypeResult(null, emptyList(), emptyList(), unsupported, testFixtures = testFixtures)
         }
-        val throws = CPlusThrowsLoweringPass().lower(ast, mapped)
-        if (throws.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), throws.diagnostics, emptyList())
-        }
-        mapped = throws.source
-
-        snapshot = snapshotFor(mapped.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
-        }
-        ast = CPlusAstAdapter().adapt(parsed)
-
-        val tryCatch = CPlusTryCatchLoweringPass().lower(ast, mapped, throws.functions)
-        if (tryCatch.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), tryCatch.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), throws.functions)
-        }
-        mapped = tryCatch.source
-
-        snapshot = snapshotFor(mapped.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList(), throws.functions)
-        }
-        ast = CPlusAstAdapter().adapt(parsed)
-
-        val deferred = CPlusDeferLoweringPass().lower(ast, mapped)
-        if (deferred.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), deferred.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), throws.functions)
-        }
-        mapped = deferred.source
-
-        snapshot = snapshotFor(mapped.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
-        }
-        ast = CPlusAstAdapter().adapt(parsed)
-        val semantics = CPlusSemanticAnalyzer().analyze(ast)
-        if (semantics.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(
-                null,
-                emptyList(),
-                semantics.diagnostics.map { diagnostic ->
-                    CPlusLoweringDiagnostic(
-                        diagnostic.code,
-                        diagnostic.message,
-                        mapped.toOriginalSpan(diagnostic.span)
+        var throwingFunctions: Map<String, CPlusThrowingFunction> = emptyMap()
+        val runtimeLowering = CPlusAstLoweringPipeline().run(
+            ast,
+            mapped,
+            listOf(
+                CPlusAstLoweringStep("extract-throws") { stageAst, stageSource ->
+                    val result = CPlusThrowsLoweringPass().lower(stageAst, stageSource)
+                    throwingFunctions = result.functions
+                    cplus.CPlusLoweringResult(
+                        result.source,
+                        result.diagnostics.map { it.withMappedSpan(stageSource, it.span) }
                     )
                 },
+                CPlusAstLoweringStep("lower-try-catch") { stageAst, stageSource ->
+                    val result = CPlusTryCatchLoweringPass().lower(stageAst, stageSource, throwingFunctions)
+                    cplus.CPlusLoweringResult(
+                        result.source,
+                        result.diagnostics.map { it.withMappedSpan(stageSource, it.span) }
+                    )
+                },
+                CPlusAstLoweringStep("lower-defer") { stageAst, stageSource ->
+                    val result = CPlusDeferLoweringPass().lower(stageAst, stageSource)
+                    cplus.CPlusLoweringResult(
+                        result.source,
+                        result.diagnostics.map { it.withMappedSpan(stageSource, it.span) }
+                    )
+                },
+                CPlusAstLoweringStep("validate-semantics") { stageAst, stageSource ->
+                    val semantics = CPlusSemanticAnalyzer().analyze(stageAst)
+                    cplus.CPlusLoweringResult(
+                        stageSource,
+                        semantics.diagnostics.map { diagnostic ->
+                            CPlusLoweringDiagnostic(
+                                diagnostic.code,
+                                diagnostic.message,
+                                stageSource.toOriginalSpan(diagnostic.span)
+                            )
+                        }
+                    )
+                },
+                CPlusAstLoweringStep("lower-method-calls") { stageAst, stageSource ->
+                    val semantics = CPlusSemanticAnalyzer().analyze(stageAst)
+                    val result = CPlusMethodCallLoweringPass().lower(stageAst, stageSource, semantics)
+                    cplus.CPlusLoweringResult(
+                        result.source,
+                        result.diagnostics.map { it.withMappedSpan(stageSource, it.span) }
+                    )
+                },
+                CPlusAstLoweringStep("lower-struct-methods") { stageAst, stageSource ->
+                    val result = CPlusStructMethodLoweringPass().lower(stageAst, stageSource)
+                    cplus.CPlusLoweringResult(
+                        result.source,
+                        result.diagnostics.map { it.withMappedSpan(stageSource, it.span) }
+                    )
+                }
+            )
+        ) { stageSource ->
+            backend.parse(snapshotFor(stageSource.text))
+        }
+        if (runtimeLowering.parserDiagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(
+                null,
+                runtimeLowering.parserDiagnostics,
                 emptyList(),
-                throws.functions,
-                extractedTests.fixtures,
+                emptyList(),
+                throwingFunctions,
+                testFixtures,
                 allocationAnalysis = allocationAnalysis
             )
         }
-        val calls = CPlusMethodCallLoweringPass().lower(ast, mapped, semantics)
-        if (calls.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), calls.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList())
+        if (runtimeLowering.loweringDiagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(
+                null,
+                emptyList(),
+                runtimeLowering.loweringDiagnostics,
+                emptyList(),
+                throwingFunctions,
+                testFixtures,
+                allocationAnalysis = allocationAnalysis
+            )
         }
-        mapped = calls.source
-
-        snapshot = snapshotFor(mapped.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
-        }
-        ast = CPlusAstAdapter().adapt(parsed)
-        val methods = CPlusStructMethodLoweringPass().lower(ast, mapped)
-        if (methods.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), methods.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList())
-        }
-        mapped = methods.source
+        mapped = runtimeLowering.source
+        ast = runtimeLowering.ast
 
         val preamble = """
             #ifndef CPLUS_ANNOTATIONS_DEFINED
@@ -275,8 +347,8 @@ class TreeSitterCPlusPrototypeTranspiler(
                 parsed.diagnostics.map { it.withMappedSpan(emittedSource, it.span) },
                 emptyList(),
                 emptyList(),
-                throws.functions,
-                extractedTests.fixtures
+                throwingFunctions,
+                testFixtures
             )
         }
         val cEmission = CPlusAstCEmitter().emit(CPlusAstAdapter().adapt(parsed), emittedSource)
@@ -286,8 +358,8 @@ class TreeSitterCPlusPrototypeTranspiler(
                 emptyList(),
                 cEmission.diagnostics.map { it.withMappedSpan(emittedSource, it.span) },
                 emptyList(),
-                throws.functions,
-                extractedTests.fixtures
+                throwingFunctions,
+                testFixtures
             )
         }
         val generatedC = cEmission.source ?: error("successful AST C emission must contain output")
@@ -298,20 +370,25 @@ class TreeSitterCPlusPrototypeTranspiler(
                 emittedParse.diagnostics.map { it.withMappedSpan(generatedC, it.span) },
                 emptyList(),
                 emptyList(),
-                throws.functions,
-                extractedTests.fixtures
+                throwingFunctions,
+                testFixtures
             )
         }
+        val transcoded = MappedEmitter(source.sourceFile)
+            .emit(generatedC, "", allocationAnalysis, compilerOptions)
+            .copy(sourceOrder = sourceOrder, sourceImports = sourceImports)
         return TreeSitterPrototypeResult(
             generatedC,
             emptyList(),
             emptyList(),
             emptyList(),
-            throws.functions,
-            extractedTests.fixtures,
-            MappedEmitter(source.sourceFile).emit(generatedC, "", allocationAnalysis),
+            throwingFunctions,
+            testFixtures,
+            transcoded,
             allocationAnalysis,
-            compilerOptions
+            compilerOptions,
+            sourceOrder,
+            sourceImports
         )
     }
 
@@ -319,8 +396,7 @@ class TreeSitterCPlusPrototypeTranspiler(
         val unsupportedKinds = setOf(
             "cplus_comptime_declaration", "cplus_comptime_block", "cplus_comptime_function_definition",
             "cplus_comptime_invocation", "cplus_comptime_value", "cplus_comptime_import", "cplus_comptime_flags",
-            "cplus_comptime_expression", "cplus_comptime_conditional", "cplus_code_fragment", "cplus_at_call_expression",
-            "cplus_at_import"
+            "cplus_comptime_expression", "cplus_comptime_conditional", "cplus_code_fragment", "cplus_at_call_expression"
         )
         val nodes = sequenceOf(root) + root.children.asSequence().flatMap { descendants(it) }
         return nodes.filter { it.kind in unsupportedKinds }
@@ -339,17 +415,6 @@ class TreeSitterCPlusPrototypeTranspiler(
 
     private fun CPlusLoweringDiagnostic.withMappedSpan(mapped: MappedText, span: SourceSpan): CPlusLoweringDiagnostic =
         copy(span = mapped.toOriginalSpan(span))
-
-    private fun MappedText.toOriginalSpan(span: SourceSpan): SourceSpan {
-        val start = originAt(span.startOffset)
-            ?: (span.startOffset - 1).takeIf { it >= 0 }?.let(::originAt)
-            ?: return span
-        if (span.endOffset <= span.startOffset) return start.file.span(start.offset, start.offset)
-        val lastIndex = (span.endOffset - 1).coerceAtLeast(span.startOffset)
-        val end = originAt(lastIndex)
-        val mappedEnd = if (end?.file === start.file && end.offset >= start.offset) end.offset + 1 else start.offset + 1
-        return start.file.span(start.offset, mappedEnd)
-    }
 
     private companion object {
         const val MAX_COMPTIME_CONDITIONAL_PASSES = 64

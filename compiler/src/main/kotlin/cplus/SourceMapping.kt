@@ -106,6 +106,27 @@ class MappedText internal constructor(
         return null
     }
 
+    /** Maps a half-open span in this generated text back to its original source coordinates. */
+    fun toOriginalSpan(span: SourceSpan): SourceSpan {
+        require(span.startOffset in 0..text.length && span.endOffset in span.startOffset..text.length) {
+            "source span ${span.startOffset}..${span.endOffset} is outside mapped text of length ${text.length}"
+        }
+        val start = originAt(span.startOffset)
+            ?: (span.startOffset - 1).takeIf { it >= 0 }?.let { previous ->
+                originAt(previous)?.let { SourceOrigin(it.file, it.offset + 1) }
+            }
+            ?: return span
+        val last = if (span.endOffset > span.startOffset) originAt(span.endOffset - 1) else null
+        val mappedEnd = if (last?.file === start.file && last.offset >= start.offset) {
+            last.offset + 1
+        } else if (span.endOffset == span.startOffset) {
+            start.offset
+        } else {
+            start.offset + 1
+        }
+        return start.file.span(start.offset, mappedEnd)
+    }
+
     companion object {
         fun identity(sourceFile: SourceFile): MappedText = MappedText(
             sourceFile.text,
