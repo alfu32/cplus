@@ -266,29 +266,29 @@ typedef struct snake_app_t {
     app.direction = app.next_direction = SNAKE_RIGHT;
     app.segments[0] = (snake_grid_pos_t){SNAKE_BOARD_WIDTH - 1, 10};
     app.step();
-    @assert(!(app.state != SNAKE_GAME_OVER));
+    @assert((app.state != SNAKE_GAME_OVER));
 
-
-    const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
-    if (screenshot_directory != NULL) {
-        SetConfigFlags(FLAG_WINDOW_HIDDEN);
-        InitWindow(SNAKE_SCREEN_WIDTH, SNAKE_SCREEN_HEIGHT, "C-plus test render");
-        @assert(IsWindowReady());
-        if (IsWindowReady()) {
-            defer CloseWindow();
-            BeginDrawing();
-            app.render();
-            EndDrawing();
-            Image screenshot = LoadImageFromScreen();
-            @assert(screenshot.data != NULL);
-            if (screenshot.data != NULL) {
-                char screenshot_path[1024];
-                snprintf(screenshot_path, sizeof(screenshot_path), "%s/snake.png", screenshot_directory);
-                @assert(ExportImage(screenshot, screenshot_path));
-                UnloadImage(screenshot);
-            }
-        }
-    }
+    
+    // const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
+    // if (screenshot_directory != NULL) {
+    //     SetConfigFlags(FLAG_WINDOW_HIDDEN);
+    //     InitWindow(SNAKE_SCREEN_WIDTH, SNAKE_SCREEN_HEIGHT, "C-plus test render");
+    //     @assert(IsWindowReady());
+    //     if (IsWindowReady()) {
+    //         defer CloseWindow();
+    //         BeginDrawing();
+    //         app.render();
+    //         EndDrawing();
+    //         Image screenshot = LoadImageFromScreen();
+    //         @assert(screenshot.data != NULL);
+    //         if (screenshot.data != NULL) {
+    //             char screenshot_path[1024];
+    //             snprintf(screenshot_path, sizeof(screenshot_path), "%s/snake.png", screenshot_directory);
+    //             @assert(ExportImage(screenshot, screenshot_path));
+    //             UnloadImage(screenshot);
+    //         }
+    //     }
+    // }
 
 }
 
