@@ -53,6 +53,20 @@ val nativeHostArch = when (System.getProperty("os.arch").lowercase()) {
     "aarch64", "arm64" -> "aarch64"
     else -> error("Unsupported JNI parser architecture: ${System.getProperty("os.arch")}")
 }
+tasks.generateGrammarFiles.configure {
+    doLast {
+        val cmakeFile = cmakeListsFile.get().asFile
+
+        if (cmakeFile.isFile) {
+            val original = cmakeFile.readText()
+            val normalized = original.replace('\\', '/')
+
+            if (normalized != original) {
+                cmakeFile.writeText(normalized)
+            }
+        }
+    }
+}
 
 val configureNativeParser = tasks.register<Exec>("configureNativeParser") {
     group = "build"
