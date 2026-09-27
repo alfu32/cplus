@@ -43,8 +43,6 @@ module.exports = grammar({
     [$.type_specifier, $.expression],
     [$.type_specifier, $.expression, $.macro_type_specifier],
     [$.type_specifier, $.macro_type_specifier],
-    [$.cplus_block_type_declaration, $.statement],
-    [$.cplus_block_type_declaration, $.expression],
     [$.cplus_block_type_declaration, $.type_specifier, $.expression, $.macro_type_specifier],
     [$.cplus_block_type_declaration, $.type_specifier, $.expression],
     [$.cplus_block_type_declaration, $.type_specifier],

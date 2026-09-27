@@ -3360,7 +3360,7 @@ class TreeSitterCPlusParserBackendTest {
         val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
 
         assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
-        assertEquals(listOf("add"), semantic.resolvedCalls.map { it.methodName }, CPlusAstAdapter().adapt(parsed).dump())
+        assertEquals(listOf("add"), semantic.resolvedCalls.map { it.methodName })
         assertTrue(semantic.resolvedCalls.single().pointerAccess)
 
         val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)

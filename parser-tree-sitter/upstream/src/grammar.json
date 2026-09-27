@@ -11861,14 +11861,6 @@
     ],
     [
       "cplus_block_type_declaration",
-      "statement"
-    ],
-    [
-      "cplus_block_type_declaration",
-      "expression"
-    ],
-    [
-      "cplus_block_type_declaration",
       "type_specifier",
       "expression",
       "macro_type_specifier"

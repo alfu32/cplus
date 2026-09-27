@@ -1,0 +1,51 @@
+================================================================================
+Block-scope typedef-name function-pointer declarations
+================================================================================
+
+typedef struct widget_t {
+  int value;
+} widget_t;
+
+int main(void) {
+  widget_t *(*factory)(void);
+  return factory() == 0 ? 0 : 1;
+}
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (type_definition
+    (struct_specifier
+      (type_identifier)
+      (field_declaration_list
+        (field_declaration
+          (primitive_type)
+          (field_identifier))))
+    (type_identifier))
+  (function_definition
+    (primitive_type)
+    (function_declarator
+      (identifier)
+      (parameter_list
+        (parameter_declaration
+          (primitive_type))))
+    (compound_statement
+      (declaration
+        (type_identifier)
+        (pointer_declarator
+          (function_declarator
+            (parenthesized_declarator
+              (pointer_declarator
+                (identifier)))
+            (parameter_list
+              (parameter_declaration
+                (primitive_type))))))
+      (return_statement
+        (conditional_expression
+          (binary_expression
+            (call_expression
+              (identifier)
+              (argument_list))
+            (number_literal))
+          (number_literal)
+          (number_literal))))))

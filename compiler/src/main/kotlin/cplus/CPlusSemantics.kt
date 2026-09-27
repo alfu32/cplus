@@ -859,13 +859,15 @@ class CPlusSemanticAnalyzer {
             // Function-pointer declarators do declare objects and retain their pointer indirection.
             val layers = declarator.declaratorLayers()
             if (layers.firstOrNull() == CPlusDeclaratorLayer.FUNCTION) return@forEach
-            val callableReturn = if (CPlusDeclaratorLayer.FUNCTION in layers && typeNode != null) {
-                val sourcePointerCount = source
-                    .substring(typeNode.span.endOffset, declarator.span.endOffset)
-                    .count { it == '*' }
-                val returnPointerCount = (sourcePointerCount - layers.count { it == CPlusDeclaratorLayer.POINTER })
-                    .coerceAtLeast(0)
-                canonicalType(type, List(returnPointerCount) { CPlusDeclaratorLayer.POINTER })
+            val functionLayer = layers.indexOfFirst { it == CPlusDeclaratorLayer.FUNCTION }
+            // Declarator layers are ordered from the declared identifier
+            // outward. For `widget_t *(*factory)(void)`, the layers are
+            // [POINTER, FUNCTION, POINTER]: the first pointer belongs to the
+            // variable, while the layers after FUNCTION describe the value
+            // returned by invoking it. Do not infer this from a raw `*` count;
+            // that loses the binding structure of nested declarators.
+            val callableReturn = if (functionLayer >= 0 && typeNode != null) {
+                canonicalType(type, layers.drop(functionLayer + 1))
             } else null
             val resolved = canonicalType(type, layers)?.copy(callableReturn = callableReturn)
             variables[variable] = resolved
