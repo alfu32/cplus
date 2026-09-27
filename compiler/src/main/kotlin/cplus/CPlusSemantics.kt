@@ -257,7 +257,7 @@ class CPlusSemanticAnalyzer {
                                 declarationText = node.text(ast.source.text),
                                 pointerDepth = pointerDepth,
                                 declaratorLayers = layers,
-                                declaratorQualifiers = declarator.declaratorQualifiers(ast.source.text)
+                                declaratorQualifiers = node.declarationQualifiers(ast.source.text)
                             )
                         }
                     }
@@ -286,7 +286,7 @@ class CPlusSemanticAnalyzer {
                                     emptySet(), emptyList(), member.span,
                                     pointerDepth = layers.count { it == CPlusDeclaratorLayer.POINTER },
                                     declaratorLayers = layers,
-                                    declaratorQualifiers = declarator?.declaratorQualifiers(ast.source.text).orEmpty()
+                                    declaratorQualifiers = member.declarationQualifiers(ast.source.text)
                                 )
                             }
                             "cplus_method_definition", "cplus_throws_annotated_method" -> {
@@ -321,7 +321,7 @@ class CPlusSemanticAnalyzer {
                                             .filter { it.syntaxKind == "cplus_parameter_annotation" }
                                             .map { it.text(ast.source.text) }
                                             .toSet(),
-                                        receiver = index == 0 && nameNode?.text(ast.source.text) == "self",
+                                    receiver = index == 0 && nameNode?.text(ast.source.text) == "self",
                                         span = parameter.span,
                                         declarationText = parameter.text(ast.source.text),
                                         functionType = declarator?.let {
@@ -333,7 +333,7 @@ class CPlusSemanticAnalyzer {
                                             )
                                         },
                                         declaratorLayers = declarator?.declaratorLayers().orEmpty(),
-                                        declaratorQualifiers = declarator?.declaratorQualifiers(ast.source.text).orEmpty()
+                                        declaratorQualifiers = parameter.declarationQualifiers(ast.source.text)
                                     )
                                 }
                                 val throwsAnnotation = member.descendants()
@@ -355,10 +355,8 @@ class CPlusSemanticAnalyzer {
                                     throwsAnnotation?.toThrowsMetadata(throwsParameterName),
                                     declaratorLayers = methodNode.children
                                         .firstOrNull { it.fieldName == "declarator" }
-                                        ?.declaratorLayers().orEmpty(),
-                                    declaratorQualifiers = methodNode.children
-                                        .firstOrNull { it.fieldName == "declarator" }
-                                        ?.declaratorQualifiers(ast.source.text).orEmpty()
+                                        ?.cplusMethodDeclaratorLayers(ast.source.text).orEmpty(),
+                                    declaratorQualifiers = methodNode.declarationQualifiers(ast.source.text)
                                 )
                                 symbols += symbol
                                 methodsByType.getOrPut(typeName, ::mutableListOf) += symbol
@@ -405,7 +403,7 @@ class CPlusSemanticAnalyzer {
                             )
                         },
                         declaratorLayers = declarator?.declaratorLayers().orEmpty(),
-                        declaratorQualifiers = declarator?.declaratorQualifiers(ast.source.text).orEmpty()
+                        declaratorQualifiers = parameter.declarationQualifiers(ast.source.text)
                     )
                 }
                 val throwsAnnotation = node.descendants().firstOrNull { it.syntaxKind == "cplus_throws_annotation" }
@@ -423,9 +421,7 @@ class CPlusSemanticAnalyzer {
                         declaratorLayers = node.children
                             .firstOrNull { it.fieldName == "declarator" }
                             ?.declaratorLayers().orEmpty(),
-                        declaratorQualifiers = node.children
-                            .firstOrNull { it.fieldName == "declarator" }
-                            ?.declaratorQualifiers(ast.source.text).orEmpty()
+                        declaratorQualifiers = node.declarationQualifiers(ast.source.text)
                     )
                     declaredReturn(node)?.let { result ->
                         functionReturns.getOrPut(name, ::linkedSetOf) += result
@@ -859,7 +855,7 @@ class CPlusSemanticAnalyzer {
                     declarationText = parameter.text(source),
                     functionType = nestedFunctionType,
                     declaratorLayers = parameterDeclarator?.declaratorLayers().orEmpty(),
-                    declaratorQualifiers = parameterDeclarator?.declaratorQualifiers(source).orEmpty()
+                    declaratorQualifiers = parameter.declarationQualifiers(source)
                 )
             }
             val returnedFunctionDeclarator = functionDeclarators
@@ -991,6 +987,29 @@ private fun CPlusAstNode.declarationBindingRoot(): CPlusAstNode? {
     return roots.firstOrNull { it.fieldName == "declarator" } ?: roots.firstOrNull()
 }
 
+/**
+ * Recover pointer layers from the compact C-plus method declarator branch.
+ *
+ * The grammar intentionally keeps a direct pointer-return method such as
+ * `int *read(...)` in `cplus_method_declarator` rather than creating a
+ * `pointer_declarator` node.  The return-type resolver already accounts for
+ * those source-level stars; symbols must retain the same binding shape for
+ * downstream receiver/declarator consumers.
+ */
+private fun CPlusAstNode.cplusMethodDeclaratorLayers(source: String): List<CPlusDeclaratorLayer> {
+    val layers = declaratorLayers()
+    if (syntaxKind != "cplus_method_declarator") return layers
+    val function = cplusNamedFunctionDeclarator() ?: return layers
+    val hasExplicitPointerNodeBeforeName = descendantsAndSelf().any {
+        it.syntaxKind == "pointer_declarator" && it.span.endOffset <= function.span.startOffset
+    }
+    if (hasExplicitPointerNodeBeforeName) return layers
+    val prefix = source.substring(span.startOffset, function.span.startOffset)
+    val pointerCount = prefix.count { it == '*' }
+    if (pointerCount == 0) return layers
+    return List(pointerCount) { CPlusDeclaratorLayer.POINTER } + layers
+}
+
 private fun CPlusAstNode.declaratorPrefixPointerLayers(root: CPlusAstNode): List<CPlusDeclaratorLayer> {
     if (syntaxKind != "init_declarator") return emptyList()
     return children
@@ -1025,7 +1044,15 @@ private val DECLARATOR_QUALIFIER_KINDS = setOf(
     "attribute_declaration",
     "alignas_qualifier",
     "ms_call_modifier",
-    "ms_declspec_modifier"
+    "ms_declspec_modifier",
+    // These modifiers belong to a pointer declarator rather than to the
+    // pointed-to type. Preserve them with the declarator metadata so later
+    // ABI/lowering passes do not have to recover them from source text.
+    "ms_pointer_modifier",
+    "ms_restrict_modifier",
+    "ms_signed_ptr_modifier",
+    "ms_unsigned_ptr_modifier",
+    "ms_unaligned_ptr_modifier"
 )
 
 /** Retain ABI and compiler qualifiers without interpreting platform-specific spellings. */
@@ -1037,6 +1064,23 @@ private fun CPlusAstNode.declaratorQualifiers(source: String): List<CPlusDeclara
         .sortedBy { it.span.startOffset }
         .map { CPlusDeclaratorQualifier(it.syntaxKind, source.substring(it.span.startOffset, it.span.endOffset), it.span) }
         .toList()
+}
+
+/**
+ * Collect qualifiers attached either to a declaration's specifiers or to its
+ * nested declarator.  C and Microsoft spellings may legally occur in both
+ * locations; dropping the specifier-side form makes ABI metadata disappear
+ * before lowering.
+ */
+private fun CPlusAstNode.declarationQualifiers(source: String): List<CPlusDeclaratorQualifier> {
+    val declarator = children.firstOrNull { it.fieldName == "declarator" }
+    return (
+        children.filter { it.syntaxKind in DECLARATOR_QUALIFIER_KINDS }
+            .map { CPlusDeclaratorQualifier(it.syntaxKind, source.substring(it.span.startOffset, it.span.endOffset), it.span) } +
+            declarator?.declaratorQualifiers(source).orEmpty()
+        )
+        .distinctBy { it.span.startOffset to it.span.endOffset }
+        .sortedBy { it.span.startOffset }
 }
 
 private val DECLARATOR_KINDS = setOf(

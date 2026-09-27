@@ -64,6 +64,7 @@ module.exports = grammar({
     [$.parameter_list, $._old_style_parameter_list],
     [$.cplus_type_argument, $.macro_type_specifier],
     [$.function_declarator, $._function_declaration_declarator],
+    [$.pointer_declarator],
     [$._block_item, $.statement],
     [$._top_level_item, $._top_level_statement],
     [$.type_specifier, $._top_level_expression_statement],
@@ -851,8 +852,12 @@ module.exports = grammar({
     )),
 
     cplus_method_declarator: $ => choice(
-      $.function_declarator,
-      prec.dynamic(2, seq(repeat1(seq('*', repeat($.type_qualifier))), $.function_declarator)),
+      seq(optional($.ms_call_modifier), $.function_declarator),
+      prec.dynamic(2, seq(
+        optional($.ms_call_modifier),
+        repeat1(seq('*', repeat(choice($.type_qualifier, $.ms_pointer_modifier)))),
+        $.function_declarator
+      )),
     ),
 
     cplus_access_modifier: _ => choice(token(prec(10, 'pub')), token(prec(10, 'priv'))),

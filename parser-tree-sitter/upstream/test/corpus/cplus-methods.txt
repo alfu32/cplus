@@ -114,3 +114,169 @@ unsigned char *allocator_cast(void *source) {
               (primitive_type))
             (abstract_pointer_declarator))
           (identifier))))))
+
+================================================================================
+Microsoft calling-convention modifier on a C-plus method
+================================================================================
+
+typedef struct windows_abi_t {
+  pub int __stdcall read(borrowed *self) { return 7; }
+} windows_abi_t;
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (type_definition
+    (struct_specifier
+      (type_identifier)
+      (field_declaration_list
+        (cplus_method_definition
+          (cplus_access_modifier)
+          (primitive_type)
+          (cplus_method_declarator
+            (ms_call_modifier)
+            (function_declarator
+              (identifier)
+              (parameter_list
+                (cplus_parameter_declaration
+                  (cplus_parameter_annotation)
+                  (pointer_declarator
+                    (identifier))))))
+          (compound_statement
+            (return_statement
+              (number_literal))))))
+    (type_identifier)))
+
+================================================================================
+Microsoft pointer-layer modifier on a C-plus method and callback parameter
+================================================================================
+
+typedef struct windows_pointer_qualifier_t {
+  pub int * __restrict read(borrowed *self) { return 0; }
+  pub int invoke(borrowed *self, int (* __restrict callback)(int value)) { return callback(7); }
+} windows_pointer_qualifier_t;
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (type_definition
+    (struct_specifier
+      (type_identifier)
+      (field_declaration_list
+        (cplus_method_definition
+          (cplus_access_modifier)
+          (primitive_type)
+          (cplus_method_declarator
+            (ms_pointer_modifier
+              (ms_restrict_modifier))
+            (function_declarator
+              (identifier)
+              (parameter_list
+                (cplus_parameter_declaration
+                  (cplus_parameter_annotation)
+                  (pointer_declarator
+                    (identifier))))))
+          (compound_statement
+            (return_statement
+              (number_literal))))
+        (cplus_method_definition
+          (cplus_access_modifier)
+          (primitive_type)
+          (cplus_method_declarator
+            (function_declarator
+              (identifier)
+              (parameter_list
+                (cplus_parameter_declaration
+                  (cplus_parameter_annotation)
+                  (pointer_declarator
+                    (identifier)))
+                (parameter_declaration
+                  (primitive_type)
+                  (function_declarator
+                    (parenthesized_declarator
+                      (pointer_declarator
+                        (ms_pointer_modifier
+                          (ms_restrict_modifier))
+                        (identifier)))
+                    (parameter_list
+                      (parameter_declaration
+                        (primitive_type)
+                        (identifier))))))))
+          (compound_statement
+            (return_statement
+              (call_expression
+                (identifier)
+                (argument_list
+                  (number_literal))))))))
+    (type_identifier)))
+
+================================================================================
+Microsoft declaration specifier on a C-plus method
+================================================================================
+
+typedef struct windows_declspec_t {
+  pub __declspec(noinline) int read(borrowed *self) { return 9; }
+} windows_declspec_t;
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (type_definition
+    (struct_specifier
+      (type_identifier)
+      (field_declaration_list
+        (cplus_method_definition
+          (cplus_access_modifier)
+          (ms_declspec_modifier
+            (identifier))
+          (primitive_type)
+          (cplus_method_declarator
+            (function_declarator
+              (identifier)
+              (parameter_list
+                (cplus_parameter_declaration
+                  (cplus_parameter_annotation)
+                  (pointer_declarator
+                    (identifier))))))
+          (compound_statement
+            (return_statement
+              (number_literal))))))
+    (type_identifier)))
+
+================================================================================
+Microsoft calling-convention modifier on a callable C-plus method declarator
+================================================================================
+
+typedef struct windows_callable_t {
+  pub int (__stdcall *select(borrowed *self))(int) { return 0; }
+} windows_callable_t;
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (type_definition
+    (struct_specifier
+      (type_identifier)
+      (field_declaration_list
+        (cplus_method_definition
+          (cplus_access_modifier)
+          (primitive_type)
+          (cplus_method_declarator
+            (function_declarator
+              (parenthesized_declarator
+                (ms_call_modifier)
+                (pointer_declarator
+                  (function_declarator
+                    (identifier)
+                    (parameter_list
+                      (cplus_parameter_declaration
+                        (cplus_parameter_annotation)
+                        (pointer_declarator
+                          (identifier)))))))
+              (parameter_list
+                (parameter_declaration
+                  (primitive_type)))))
+          (compound_statement
+            (return_statement
+              (number_literal))))))
+    (type_identifier)))

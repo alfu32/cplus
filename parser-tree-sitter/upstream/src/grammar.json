@@ -6009,8 +6009,25 @@
       "type": "CHOICE",
       "members": [
         {
-          "type": "SYMBOL",
-          "name": "function_declarator"
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "ms_call_modifier"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "function_declarator"
+            }
+          ]
         },
         {
           "type": "PREC_DYNAMIC",
@@ -6018,6 +6035,18 @@
           "content": {
             "type": "SEQ",
             "members": [
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "ms_call_modifier"
+                  },
+                  {
+                    "type": "BLANK"
+                  }
+                ]
+              },
               {
                 "type": "REPEAT1",
                 "content": {
@@ -6030,8 +6059,17 @@
                     {
                       "type": "REPEAT",
                       "content": {
-                        "type": "SYMBOL",
-                        "name": "type_qualifier"
+                        "type": "CHOICE",
+                        "members": [
+                          {
+                            "type": "SYMBOL",
+                            "name": "type_qualifier"
+                          },
+                          {
+                            "type": "SYMBOL",
+                            "name": "ms_pointer_modifier"
+                          }
+                        ]
                       }
                     }
                   ]
@@ -12221,6 +12259,9 @@
     [
       "function_declarator",
       "_function_declaration_declarator"
+    ],
+    [
+      "pointer_declarator"
     ],
     [
       "_block_item",

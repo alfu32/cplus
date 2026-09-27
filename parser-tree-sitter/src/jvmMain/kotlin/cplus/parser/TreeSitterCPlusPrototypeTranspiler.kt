@@ -140,7 +140,7 @@ class TreeSitterCPlusPrototypeTranspiler(
 
         // Expand imports first so reflected metadata can refer to declarations from imported modules.
         val comptimeBlockPass = TreeSitterComptimeBlockLowering()
-        val reflectedFieldPass = TreeSitterComptimeFieldLoopLowering()
+        val reflectedFieldPass = TreeSitterComptimeFieldLoopLowering(targetOs, targetArch)
         var comptimeBlockPassCount = 0
         while (comptimeBlockPassCount < MAX_COMPTIME_CONDITIONAL_PASSES) {
             val reflectedFields = reflectedFieldPass.lower(parsed, mapped)

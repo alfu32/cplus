@@ -380,7 +380,7 @@ class TreeSitterComptimeScalarLowering(
         private val targetOs: String,
         private val targetArch: String,
         private val primitiveAliases: Map<String, String>,
-        private val aggregateLayouts: Map<String, AbiAggregateLayout>
+        private val aggregateLayouts: Map<String, TreeSitterAbiAggregateLayout>
     ) {
         val diagnostics = mutableListOf<CPlusLoweringDiagnostic>()
         private val byName = linkedMapOf<String, ValueDeclaration>()
@@ -858,29 +858,6 @@ class TreeSitterComptimeScalarLowering(
 
     private data class AbiLayout(val size: Long, val alignment: Long)
 
-    private data class AbiFieldLayout(
-        val name: String,
-        val offset: Long,
-        val size: Long,
-        val alignment: Long
-    )
-
-    private data class AbiAggregateLayout(
-        val size: Long,
-        val alignment: Long,
-        val fields: List<AbiFieldLayout>
-    )
-
-    private data class AbiAggregateFieldSpec(
-        val name: String,
-        val type: String
-    )
-
-    private data class AbiAggregateSpec(
-        val fields: List<AbiAggregateFieldSpec>,
-        val invalid: Boolean
-    )
-
     private sealed interface Scalar {
         fun render(): kotlin.String
         fun asInteger(): Long? = (this as? Integer)?.value
@@ -939,182 +916,13 @@ class TreeSitterComptimeScalarLowering(
             }
             .toMap()
 
-    /**
-     * Computes the C struct layout subset that the prototype can prove without
-     * invoking a target compiler. This deliberately rejects unions, bitfields,
-     * flexible arrays, packed/aligned attributes, and incomplete field types.
-     */
     private fun aggregateLayouts(
         root: CPlusSyntaxNode,
         text: String,
         targetOs: String,
         targetArch: String
-    ): Map<String, AbiAggregateLayout> {
-        if (targetArch !in SUPPORTED_LAYOUT_ARCHITECTURES || targetOs !in SUPPORTED_LAYOUT_OPERATING_SYSTEMS) {
-            return emptyMap()
-        }
-        val primitiveAliases = primitiveTypedefAliases(root, text)
-        val aggregateAliases = descendants(root).asSequence()
-            .filter { it.kind == "type_definition" }
-            .mapNotNull { typedef ->
-                val type = typedef.children.firstOrNull { it.fieldName == "type" } ?: return@mapNotNull null
-                val composite = descendants(type).firstOrNull { it.kind == "struct_specifier" }
-                    ?: return@mapNotNull null
-                val tag = composite.children.firstOrNull { it.fieldName == "name" }
-                    ?.let { text.substring(it.span.startOffset, it.span.endOffset) }
-                    ?: return@mapNotNull null
-                val declarator = typedef.children.firstOrNull { it.fieldName == "declarator" }
-                    ?: return@mapNotNull null
-                val alias = descendants(declarator)
-                    .firstOrNull { it.kind in setOf("identifier", "type_identifier") }
-                    ?.let { text.substring(it.span.startOffset, it.span.endOffset) }
-                    ?: return@mapNotNull null
-                alias to tag
-            }
-            .toMap()
-
-        val specs = linkedMapOf<String, AbiAggregateSpec>()
-        descendants(root).filter { it.kind == "struct_specifier" }.forEach { structure ->
-            val tag = structure.children.firstOrNull { it.fieldName == "name" }
-                ?.let { text.substring(it.span.startOffset, it.span.endOffset) }
-                ?: return@forEach
-            val body = structure.children.firstOrNull { it.kind == "field_declaration_list" }
-            val declarations = body?.children?.filter { it.kind == "field_declaration" }.orEmpty()
-            var invalid = body == null || structure.children.any { child ->
-                child.kind == "attribute_specifier" && text.substring(child.span.startOffset, child.span.endOffset)
-                    .contains(Regex("packed|aligned"))
-            }
-            val fields = mutableListOf<AbiAggregateFieldSpec>()
-            declarations.forEach { declaration ->
-                val declarators = declaration.children.filter { it.fieldName == "declarator" }
-                val typeNode = declaration.children.firstOrNull { it.fieldName == "type" }
-                if (declarators.isEmpty() || typeNode == null || descendants(declaration).any { it.kind == "bitfield_clause" }) {
-                    invalid = true
-                    return@forEach
-                }
-                val baseType = text.substring(typeNode.span.startOffset, typeNode.span.endOffset)
-                declarators.forEach { declarator ->
-                    val nameNode = descendants(declarator).firstOrNull {
-                        it.kind in setOf("field_identifier", "identifier", "type_identifier")
-                    }
-                    if (nameNode == null) {
-                        invalid = true
-                        return@forEach
-                    }
-                    val abstractDeclarator = buildString {
-                        append(text, declarator.span.startOffset, nameNode.span.startOffset)
-                        append(text, nameNode.span.endOffset, declarator.span.endOffset)
-                    }
-                    fields += AbiAggregateFieldSpec(
-                        name = text.substring(nameNode.span.startOffset, nameNode.span.endOffset),
-                        type = normalizeLayoutType("$baseType $abstractDeclarator")
-                    )
-                }
-            }
-            specs[tag] = AbiAggregateSpec(fields, invalid)
-        }
-
-        val cache = linkedMapOf<String, AbiAggregateLayout>()
-        val active = mutableSetOf<String>()
-        lateinit var layoutFor: (String, Set<String>) -> AbiAggregateLayout?
-
-        fun primitiveLayout(type: String): AbiLayout? {
-            val normalized = type.replace(Regex("\\s+"), " ").trim()
-            val canonical = when (normalized) {
-                "char", "signed char", "unsigned char" -> "char"
-                "_Bool", "bool" -> "bool"
-                "short", "short int", "signed short", "signed short int", "unsigned short", "unsigned short int" -> "short"
-                "int", "signed", "signed int", "unsigned", "unsigned int" -> "int"
-                "long", "long int", "signed long", "signed long int", "unsigned long", "unsigned long int" -> "long"
-                "long long", "long long int", "signed long long", "signed long long int", "unsigned long long", "unsigned long long int" -> "long long"
-                "float" -> "float"
-                "double" -> "double"
-                else -> return null
-            }
-            val size = when (canonical) {
-                "char", "bool" -> 1L
-                "short" -> 2L
-                "int", "float" -> 4L
-                "long" -> if (targetOs == "windows") 4L else 8L
-                "long long", "double" -> 8L
-                else -> return null
-            }
-            return AbiLayout(size, size)
-        }
-
-        fun fieldLayout(rawType: String, stack: Set<String>): AbiLayout? {
-            var type = normalizeLayoutType(rawType)
-            val arrayLengths = Regex("\\[\\s*([0-9]+)\\s*\\]")
-                .findAll(type)
-                .map { it.groupValues[1].toLongOrNull() }
-                .toList()
-            if (type.contains("[]") || arrayLengths.any { it == null || it <= 0L }) return null
-            type = type.replace(Regex("\\[[^]]*\\]"), "").trim()
-            var resolved = type
-            val visited = mutableSetOf<String>()
-            while (visited.add(resolved)) {
-                resolved = aggregateAliases[resolved] ?: primitiveAliases[resolved] ?: break
-            }
-            val element = if ('*' in resolved) {
-                AbiLayout(8L, 8L).takeIf { targetArch in setOf("x86_64", "arm64") }
-            } else {
-                primitiveLayout(resolved) ?: layoutFor(resolved, stack)?.let { AbiLayout(it.size, it.alignment) }
-            } ?: return null
-            val multiplier = arrayLengths.fold(1L) { result, length -> Math.multiplyExact(result, length ?: return null) }
-            return try {
-                AbiLayout(Math.multiplyExact(element.size, multiplier), element.alignment)
-            } catch (_: ArithmeticException) {
-                null
-            }
-        }
-
-        layoutFor = { rawName, stack ->
-            val name = aggregateAliases[rawName] ?: rawName
-            cache[name] ?: run {
-                val spec = specs[name] ?: return@run null
-                if (spec.invalid || name in stack || !active.add(name)) return@run null
-                try {
-                    var offset = 0L
-                    var alignment = 1L
-                    val fields = mutableListOf<AbiFieldLayout>()
-                    spec.fields.forEach { field ->
-                        val fieldLayout = fieldLayout(field.type, stack + name) ?: return@run null
-                        offset = alignLayout(offset, fieldLayout.alignment)
-                        fields += AbiFieldLayout(field.name, offset, fieldLayout.size, fieldLayout.alignment)
-                        offset = Math.addExact(offset, fieldLayout.size)
-                        alignment = maxOf(alignment, fieldLayout.alignment)
-                    }
-                    val result = AbiAggregateLayout(alignLayout(offset, alignment), alignment, fields)
-                    cache[name] = result
-                    result
-                } catch (_: ArithmeticException) {
-                    null
-                } finally {
-                    active.remove(name)
-                }
-            }
-        }
-
-        specs.keys.forEach { name -> layoutFor(name, emptySet()) }
-        return buildMap {
-            cache.forEach { (name, layout) ->
-                put(name, layout)
-                aggregateAliases.filterValues { it == name }.keys.forEach { alias -> put(alias, layout) }
-            }
-        }
-    }
-
-    private fun normalizeLayoutType(rawType: String): String = rawType
-        .replace(Regex("\\b(const|volatile|restrict|static|extern|register|auto|inline)\\b"), " ")
-        .replace(Regex("\\bstruct\\s+"), "")
-        .replace(Regex("\\s+"), " ")
-        .trim()
-
-    private fun alignLayout(value: Long, alignment: Long): Long {
-        if (alignment <= 1L) return value
-        val remainder = value % alignment
-        return if (remainder == 0L) value else Math.addExact(value, alignment - remainder)
-    }
+    ): Map<String, TreeSitterAbiAggregateLayout> =
+        computeTreeSitterAbiAggregateLayouts(root, text, targetOs, targetArch)
 
     private companion object {
         val DORMANT_REGIONS = setOf(

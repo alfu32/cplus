@@ -3345,6 +3345,232 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun retainsMicrosoftCallingConventionModifiersOnMethods() {
+        val text = """
+            typedef struct windows_abi_t {
+                pub int __stdcall read(borrowed *self) { return 7; }
+            } windows_abi_t;
+        """.trimIndent()
+        val source = sources.open(SourceId.named("microsoft-calling-convention-method.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "read"
+        }
+        assertEquals(listOf("ms_call_modifier"), method.declaratorQualifiers.map { it.syntaxKind })
+        assertEquals(listOf("__stdcall"), method.declaratorQualifiers.map { it.spelling })
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("calling-convention method output is missing")
+        assertTrue("__stdcall" in generated, generated)
+        assertTrue("windows_abi__read" in generated, generated)
+    }
+
+    @Test
+    fun retainsMicrosoftCallingConventionModifiersOnCallableMethodDeclarators() {
+        val text = """
+            typedef struct windows_callable_t {
+                pub int (__stdcall *select(borrowed *self))(int) { return 0; }
+            } windows_callable_t;
+        """.trimIndent()
+        val source = sources.open(SourceId.named("microsoft-callable-method.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "select"
+        }
+        assertEquals(listOf("ms_call_modifier"), method.declaratorQualifiers.map { it.syntaxKind })
+        assertEquals(listOf("__stdcall"), method.declaratorQualifiers.map { it.spelling })
+        assertEquals(2, method.declaratorLayers.count { it == CPlusDeclaratorLayer.FUNCTION })
+        assertEquals(1, method.declaratorLayers.count { it == CPlusDeclaratorLayer.POINTER })
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("callable method output is missing")
+        assertTrue("__stdcall" in generated, generated)
+        assertTrue("windows_callable__select" in generated, generated)
+        compileCOnlyIfAvailable("x86_64-w64-mingw32-gcc", generated)
+    }
+
+    @Test
+    fun retainsMicrosoftDeclarationSpecifiersOnMethods() {
+        val text = """
+            typedef struct windows_declspec_t {
+                pub __declspec(noinline) int read(borrowed *self) { return 9; }
+            } windows_declspec_t;
+        """.trimIndent()
+        val source = sources.open(SourceId.named("microsoft-declspec-method.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "read"
+        }
+        assertEquals(listOf("ms_declspec_modifier"), method.declaratorQualifiers.map { it.syntaxKind })
+        assertEquals(listOf("__declspec(noinline)"), method.declaratorQualifiers.map { it.spelling })
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("declspec method output is missing")
+        assertTrue("__declspec(noinline)" in generated, generated)
+        assertTrue("windows_declspec__read" in generated, generated)
+        compileCOnlyIfAvailable("x86_64-w64-mingw32-gcc", generated)
+    }
+
+    @Test
+    fun retainsAllMicrosoftCallingConventionSpellingsOnCPlusMethods() {
+        val modifiers = listOf("__cdecl", "__clrcall", "__stdcall", "__fastcall", "__thiscall", "__vectorcall", "WINAPI")
+        val methods = modifiers.mapIndexed { index, modifier ->
+            "pub int $modifier method$index(borrowed *self) { return $index; }"
+        }.joinToString("\n                ")
+        val text = """
+            typedef struct windows_calling_conventions_t {
+                $methods
+            } windows_calling_conventions_t;
+        """.trimIndent()
+        val source = sources.open(SourceId.named("microsoft-calling-convention-spellings.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val methodsByName = semantic.symbols
+            .filter { it.kind == CPlusSymbolKind.INSTANCE_METHOD }
+            .associateBy { it.name }
+        modifiers.forEachIndexed { index, modifier ->
+            val method = methodsByName["method$index"] ?: error("missing method$index: ${methodsByName.keys}")
+            assertEquals(listOf("ms_call_modifier"), method.declaratorQualifiers.map { it.syntaxKind })
+            assertEquals(listOf(modifier), method.declaratorQualifiers.map { it.spelling })
+        }
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("calling-convention spelling output is missing")
+        modifiers.forEach { modifier -> assertTrue(modifier in generated, generated) }
+    }
+
+    @Test
+    fun retainsMicrosoftCallingConventionOnNestedCallbackParameters() {
+        val text = """
+            typedef struct callback_abi_t {
+                pub int invoke(borrowed *self, int (__stdcall *callback)(int value)) {
+                    return callback(7);
+                }
+            } callback_abi_t;
+        """.trimIndent()
+        val source = sources.open(SourceId.named("microsoft-callback-parameter.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "invoke"
+        }
+        val callback = method.parameters.single { it.name == "callback" }
+        assertEquals(listOf("ms_call_modifier"), callback.declaratorQualifiers.map { it.syntaxKind })
+        assertEquals(listOf("__stdcall"), callback.declaratorQualifiers.map { it.spelling })
+        assertEquals("int", callback.functionType?.returnType)
+        assertEquals(listOf("value"), callback.functionType?.parameters?.map { it.name })
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("callback parameter output is missing")
+        assertTrue("__stdcall" in generated, generated)
+        assertTrue("callback_abi__invoke" in generated, generated)
+        compileCOnlyIfAvailable("x86_64-w64-mingw32-gcc", generated)
+    }
+
+    @Test
+    fun retainsMicrosoftPointerModifiersOnMethodAndNestedCallbackDeclarators() {
+        val text = """
+            typedef struct pointer_qualifier_abi_t {
+                pub int read(borrowed *self, int * __restrict input) {
+                    return *input;
+                }
+                pub int invoke(borrowed *self, int (** __restrict callback)(int value)) {
+                    return (*callback)(7);
+                }
+            } pointer_qualifier_abi_t;
+            static int increment(int value) { return value + 1; }
+            int main(void) {
+                pointer_qualifier_abi_t value;
+                int input = 7;
+                int (*callback)(int) = increment;
+                return value.read(&input) == 7 && value.invoke(&callback) == 8 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("microsoft-pointer-modifiers.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val read = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "read"
+        }
+        val input = read.parameters.single { it.name == "input" }
+        assertEquals(listOf("ms_pointer_modifier"), input.declaratorQualifiers.map { it.syntaxKind })
+        assertEquals(listOf("__restrict"), input.declaratorQualifiers.map { it.spelling })
+        val invoke = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "invoke"
+        }
+        val callback = invoke.parameters.single { it.name == "callback" }
+        assertEquals(listOf("ms_pointer_modifier"), callback.declaratorQualifiers.map { it.syntaxKind })
+        assertEquals(listOf("__restrict"), callback.declaratorQualifiers.map { it.spelling })
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("pointer modifier output is missing")
+        assertTrue("__restrict" in generated, generated)
+        assertTrue("pointer_qualifier_abi__read" in generated, generated)
+        assertTrue("pointer_qualifier_abi__invoke" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun retainsDirectPointerReturnLayersOnCPlusMethodSymbols() {
+        val text = """
+            typedef struct pointer_return_t {
+                pub int *read(borrowed *self) {
+                    static int value = 11;
+                    return &value;
+                }
+            } pointer_return_t;
+            int main(void) {
+                pointer_return_t value;
+                return *value.read() == 11 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("pointer-return-method.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "read"
+        }
+        assertEquals(
+            listOf(CPlusDeclaratorLayer.POINTER, CPlusDeclaratorLayer.FUNCTION),
+            method.declaratorLayers
+        )
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        compileAndRunC(transpiled.cSource?.text ?: error("pointer-return method output is missing"))
+    }
+
+    @Test
     fun resolvesMethodReceiversFromSameTypedConditionalAndCommaExpressions() {
         val text = """
             typedef struct widget_t {
@@ -5174,6 +5400,22 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         }
     }
 
+    private fun compileCOnlyIfAvailable(compiler: String, code: String) {
+        if (runCatching { ProcessBuilder(compiler, "--version").start().waitFor() != 0 }.getOrDefault(true)) return
+        val temporaryDirectory = Files.createTempDirectory("cplus-tree-sitter-cross-c")
+        try {
+            val objectFile = temporaryDirectory.resolve("compat.o")
+            val compile = ProcessBuilder(
+                compiler, "-std=c11", "-x", "c", "-c", "-", "-o", objectFile.toString()
+            ).redirectErrorStream(true).start()
+            compile.outputStream.bufferedWriter().use { it.write(code) }
+            val output = compile.inputStream.bufferedReader().use { it.readText() }
+            assertEquals(0, compile.waitFor(), "$compiler rejected cross-target C11 fixture:\n$output\n$code")
+        } finally {
+            Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
     private fun validateCCompiles(
         code: String,
         includeDirectories: List<Path>,
@@ -6851,6 +7093,104 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun prototypeReflectsAggregateLayoutAcrossSupportedTargetAbis() {
+        val text = """
+            typedef struct target_layout_t { char tag; long value; int *pointer; } target_layout_t;
+            comptime int @type_size(type T) { return T.size; }
+            comptime int @type_alignment(type T) { return T.align; }
+            int reflected_size = comptime type_size(target_layout_t);
+            int reflected_alignment = comptime type_alignment(target_layout_t);
+            int main(void) {
+                return reflected_size != sizeof(target_layout_t) ||
+                    reflected_alignment != _Alignof(target_layout_t);
+            }
+        """.trimIndent()
+
+        fun materialize(targetOs: String, targetArch: String): String {
+            val source = sources.open(
+                SourceId.named("ast-comptime-target-aggregate-$targetOs-$targetArch.cp"),
+                text
+            )
+            val result = TreeSitterCPlusPrototypeTranspiler(
+                backend = backend,
+                sourceManager = sources,
+                targetOs = targetOs,
+                targetArch = targetArch
+            ).transpile(source)
+            assertTrue(
+                result.successful,
+                "$targetOs/$targetArch parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}"
+            )
+            return result.transcodedSource?.code ?: error("aggregate layout output is missing for $targetOs/$targetArch")
+        }
+
+        val linuxX64 = materialize("linux", "x86_64")
+        assertTrue("reflected_size = 24" in linuxX64, linuxX64)
+        assertTrue("reflected_alignment = 8" in linuxX64, linuxX64)
+        compileAndRunC(linuxX64)
+
+        val linuxArm64 = materialize("linux", "arm64")
+        assertTrue("reflected_size = 24" in linuxArm64, linuxArm64)
+        assertTrue("reflected_alignment = 8" in linuxArm64, linuxArm64)
+
+        val macosArm64 = materialize("macos", "arm64")
+        assertTrue("reflected_size = 24" in macosArm64, macosArm64)
+        assertTrue("reflected_alignment = 8" in macosArm64, macosArm64)
+
+        val windowsX64 = materialize("windows", "x86_64")
+        assertTrue("reflected_size = 16" in windowsX64, windowsX64)
+        assertTrue("reflected_alignment = 8" in windowsX64, windowsX64)
+    }
+
+    @Test
+    fun prototypeReflectsFieldOffsetsSizesAndAlignmentInFieldLoops() {
+        val text = """
+            typedef struct aggregate_t {
+                char prefix;
+                int value;
+                int *pointer;
+                short suffix;
+                char bytes[3];
+            } aggregate_t;
+            comptime code @check_layout(string @name, int offset, int size, int align) {
+                return @code {
+                    _Static_assert(@offset >= 0, @name);
+                    _Static_assert(@size > 0, @name);
+                    _Static_assert(@align > 0, @name);
+                };
+            }
+            comptime {
+                @for field in aggregate_t.fields {
+                    comptime check_layout(field.name, field.offset, field.size, field.align);
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-field-layout.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("field layout reflection should materialize")
+        assertTrue("_Static_assert(0 >= 0, \"prefix\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(4 >= 0, \"value\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(8 >= 0, \"pointer\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(16 >= 0, \"suffix\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(18 >= 0, \"bytes\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(1 > 0, \"prefix\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(4 > 0, \"value\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(8 > 0, \"pointer\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(2 > 0, \"suffix\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(3 > 0, \"bytes\")" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
     fun prototypeRejectsPackedAggregateLayoutWithoutGuessing() {
         val text = """
             typedef struct __attribute__((packed)) packed_t { char tag; int value; } packed_t;
@@ -6871,6 +7211,49 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals("CPLUS_COMPTIME_REFLECTION_LAYOUT", diagnostic.code)
         assertEquals(text.indexOf("size", text.indexOf("T.size")), diagnostic.span.startOffset)
         assertTrue(result.transcodedSource == null, "unsupported packed layout must stop C emission")
+    }
+
+    @Test
+    fun prototypeRejectsUnsupportedAggregateLayoutShapesWithMappedDiagnostics() {
+        val cases = listOf(
+            """
+                typedef union union_layout_t { char tag; int value; } union_layout_t;
+                comptime int @type_size(type T) { return T.size; }
+                int reflected_size = comptime type_size(union_layout_t);
+            """.trimIndent(),
+            """
+                typedef struct bitfield_layout_t { unsigned value : 3; } bitfield_layout_t;
+                comptime int @type_size(type T) { return T.size; }
+                int reflected_size = comptime type_size(bitfield_layout_t);
+            """.trimIndent(),
+            """
+                typedef struct flexible_layout_t { int length; int values[]; } flexible_layout_t;
+                comptime int @type_size(type T) { return T.size; }
+                int reflected_size = comptime type_size(flexible_layout_t);
+            """.trimIndent(),
+            """
+                typedef struct incomplete_layout_t { missing_layout_t value; } incomplete_layout_t;
+                comptime int @type_size(type T) { return T.size; }
+                int reflected_size = comptime type_size(incomplete_layout_t);
+            """.trimIndent()
+        )
+
+        cases.forEachIndexed { index, text ->
+            val source = sources.open(SourceId.named("ast-comptime-unsupported-layout-$index.cp"), text)
+            val result = TreeSitterCPlusPrototypeTranspiler(
+                backend = backend,
+                sourceManager = sources,
+                targetOs = "linux",
+                targetArch = "x86_64"
+            ).transpile(source)
+
+            assertFalse(result.successful, "unsupported aggregate layout $index must fail closed")
+            val diagnostic = result.loweringDiagnostics.singleOrNull { it.code == "CPLUS_COMPTIME_REFLECTION_LAYOUT" }
+                ?: error("unsupported aggregate layout $index produced ${result.loweringDiagnostics}")
+            assertEquals(source.id.value, diagnostic.span.file)
+            assertEquals(text.indexOf("T.size") + 2, diagnostic.span.startOffset)
+            assertTrue(result.transcodedSource == null, "unsupported aggregate layout $index must not emit C")
+        }
     }
 
     @Test

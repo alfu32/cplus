@@ -302,6 +302,9 @@ class TreeSitterComptimeFieldLoopLowering(
             (field.bitWidthSpan?.startOffset ?: field.typeSpan.startOffset)
         "width" -> (field.bitWidth ?: "0") to
             (field.bitWidthSpan?.startOffset ?: field.typeSpan.startOffset)
+        "offset" -> field.layout!!.offset.toString() to field.nameSpan.startOffset
+        "size" -> field.layout!!.size.toString() to field.nameSpan.startOffset
+        "align" -> field.layout!!.alignment.toString() to field.nameSpan.startOffset
         else -> error("unsupported reflected property $property")
     }
 
