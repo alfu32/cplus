@@ -24,16 +24,31 @@ data class CPlusComptimeResolution(
  * Resolves active comptime invocation nodes against active generator declarations.
  * This is name/arity binding only; argument evaluation and overload type checking remain
  * responsibilities of the comptime evaluator and are deliberately not approximated here.
+ *
+ * Comptime declarations and invocations are module-scope constructs in the current
+ * materialization model. Runtime-scope invocations must not accidentally bind to a visible
+ * module generator: doing so would move generated declarations into a runtime function body.
  */
 class CPlusComptimeResolver {
     fun resolve(index: CPlusComptimeIndex): CPlusComptimeResolution {
         val declarations = index.constructs.filter {
             it.activeThisPass && it.moduleScope && it.syntaxKind in GENERATOR_KINDS && !it.symbol.isNullOrBlank()
         }
+        val scopedInvocations = index.constructs.filter {
+            it.activeThisPass && !it.moduleScope && it.syntaxKind in INVOCATION_KINDS && !it.symbol.isNullOrBlank()
+        }
         val invocations = index.constructs.filter {
             it.activeThisPass && it.syntaxKind in INVOCATION_KINDS && !it.symbol.isNullOrBlank()
         }
         val diagnostics = mutableListOf<CPlusComptimeResolutionDiagnostic>()
+
+        scopedInvocations.forEach { invocation ->
+            diagnostics += CPlusComptimeResolutionDiagnostic(
+                "CPLUS_COMPTIME_INVOCATION_SCOPE",
+                "comptime invocations are only supported at module scope in this prototype",
+                invocation.span
+            )
+        }
 
         val declarationsBySignature = declarations.groupBy { Signature(it.symbol!!, it.parameters.size) }
         declarationsBySignature.values.filter { it.size > 1 }.forEach { duplicates ->
@@ -50,7 +65,7 @@ class CPlusComptimeResolver {
 
         val declarationsByName = declarations.groupBy { it.symbol!! }
         val bindings = mutableListOf<CPlusComptimeBinding>()
-        invocations.forEach { invocation ->
+        invocations.filter { it.moduleScope }.forEach { invocation ->
             val name = invocation.symbol!!
             val named = declarationsByName[name].orEmpty()
             if (named.isEmpty()) {

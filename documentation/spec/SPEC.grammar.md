@@ -1,10 +1,10 @@
 # C-plus Grammar and Frontend Proof
 
-Status: phase-1 grammar contract. This document records the syntax accepted by the
-Tree-sitter C-plus grammar and the syntax that is present in the repository's live
-`.cp`/`.c+` sources. Phase 2 reconciles this contract with generated-C behavior and
-the user-facing language specifications; the young legacy transcoder is evidence,
-not the grammar authority.
+Status: phase-1 grammar contract with a phase-2 repository proof. This document
+records the syntax accepted by the Tree-sitter C-plus grammar and the syntax that
+is present in the repository's live `.cp`/`.c+` sources. Phase 2 validates the
+contract against generated-C behavior and the user-facing language specifications;
+the young legacy transcoder is evidence, not the grammar authority.
 
 ## Authority and scope
 
@@ -66,8 +66,10 @@ comptime-declaration = comptime-function
 
 The same C-plus declaration forms allowed in a translation unit are available in
 comptime bodies where the grammar explicitly admits a block item. A comptime
-declaration inside an ordinary runtime function is a semantic error in the current
-frontend even if a recovery tree can be formed.
+declaration or invocation inside an ordinary runtime function is a semantic error in
+the current frontend even if a recovery tree can be formed. A runtime-scope invocation
+must not bind to a module-scope generator; it receives a mapped
+`CPLUS_COMPTIME_INVOCATION_SCOPE` diagnostic.
 
 ## Struct methods and annotations
 
@@ -195,7 +197,7 @@ source below `stdlib/` and `examples/`, rejects diagnostics and recovery nodes,
 and freezes the observed inventory. Current evidence is:
 
 - 62 live `.cp`/`.c+` files parse without recovery.
-- 36 named `cplus_*` node kinds occur in that live source corpus; the test records
+- 37 named `cplus_*` node kinds occur in that live source corpus; the test records
   the exact set so additions/removals are visible.
 - The generated Tree-sitter corpus contains 104 focused syntax cases, including
   complex C declarator binding and C-plus method forms.
@@ -207,6 +209,22 @@ The remaining grammar productions (`@code`, `@for`, `@throws`, `@try`/`@catch`,
 and some legacy forms) are exercised by focused parser/compiler fixtures outside
 the live stdlib/example inventory. Their support is tracked separately from the
 62-file proof and must not be inferred merely from a successful recovery parse.
+
+## Phase-2 generated-C proof
+
+The repository proof is deliberately behavioral rather than textual: generated C
+is the acceptance artifact, and the legacy transcoder is not treated as a golden
+output. `prototypeTranscodesEveryRepositoryCPlusSourceWithoutActiveComptimeSyntax`
+transcodes every `.cp`/`.c+` source below `stdlib/` and `examples/`, rejects parser,
+lowering, and unsupported-node failures, verifies that active comptime generators
+did not leak into the output, and syntax-checks the result as C11 with each locally
+available `cc`, `gcc`, or `clang` driver. The focused standard-library/example
+fixture gate additionally executes the generated test harnesses.
+
+The current phase-2 audit found no mismatch in that finite repository corpus. This
+does not close the broader C compatibility or cross-host gates: a new mismatch must
+be classified as documentation, grammar, AST adaptation, lowering, or intentional
+unsupported behavior, then receive a minimal fixture and source-mapped evidence.
 
 ## Phase-2 mismatch policy
 

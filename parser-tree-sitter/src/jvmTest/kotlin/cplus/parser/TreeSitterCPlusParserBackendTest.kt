@@ -5984,13 +5984,38 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
 
         val resolution = CPlusComptimeResolver().resolve(index)
 
-        assertEquals(listOf("module_generator"), resolution.bindings.map { it.symbol })
+        assertTrue(resolution.bindings.isEmpty(), resolution.bindings.toString())
         val localDeclaration = index.constructs.single {
             it.syntaxKind == "cplus_comptime_function_definition" && it.symbol == "local_generator"
         }
         assertFalse(localDeclaration.moduleScope)
-        assertEquals(listOf("CPLUS_COMPTIME_UNRESOLVED_GENERATOR"), resolution.diagnostics.map { it.code })
-        assertTrue(resolution.diagnostics.single().message.contains("local_generator"))
+        assertEquals(
+            listOf("CPLUS_COMPTIME_INVOCATION_SCOPE", "CPLUS_COMPTIME_INVOCATION_SCOPE"),
+            resolution.diagnostics.map { it.code }
+        )
+        assertTrue(resolution.diagnostics.all { it.message.contains("module scope") })
+    }
+
+    @Test
+    fun prototypeRejectsEntityComptimeInvocationInsideRuntimeFunctionAtItsSourceSpan() {
+        val text = """
+            comptime function @make(type T) {
+                return int generated(void) { return 42; }
+            }
+            int runtime(void) {
+                comptime make(int);
+                return 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("runtime-comptime-entity-scope.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "runtime-scope comptime invocations must fail closed")
+        assertEquals("CPLUS_COMPTIME_INVOCATION_SCOPE", result.loweringDiagnostics.single().code)
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("comptime make(int)"), diagnostic.span.startOffset)
     }
 
     @Test

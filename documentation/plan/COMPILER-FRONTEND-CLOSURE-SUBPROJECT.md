@@ -45,7 +45,7 @@ Points are relative sizing units, not engineer-days. A task closes only with its
 | CF-21 | promotion | Run stdlib/examples compile and test acceptance | CF-10, CF-19, CF-20 | OPEN | 4 | All supported sources compile; tests pass; known excluded fixtures are listed |
 | CF-22 | promotion | Decide promotion, rollback, and legacy removal | CF-21 | OPEN | 2 | Recorded decision, performance/package evidence, removal or retained fallback rationale |
 
-Total: **22 tasks / 86 points**. `CF-01` through `CF-03`, `CF-05`, and `CF-06` are complete; **70 points remain**, of which 6 are external-host evidence. Points are intentionally not converted to hours until three completed batches provide an observed rate.
+Total: **22 tasks / 86 points**. `CF-01` through `CF-06` are complete; **66 points remain**, of which 6 are external-host evidence. Points are intentionally not converted to hours until three completed batches provide an observed rate.
 
 ## Execution phases
 
@@ -94,6 +94,8 @@ Each entry records the task ID, exact evidence, result, and next dependency. Imp
 | 2026-09-28 | CF-05 | `prototypeMaterializesComptimeStringsAsTargetStableUtf8Bytes` compiles/runs a direct Unicode string emitted as exact UTF-8 octal bytes; ordinary escape/concatenation tests and mapped `L`/`u8`/`u`/`U` rejection pass | The comptime string encoding contract is closed: ordinary strings are UTF-8; wide and UTF-16/32 prefixed literals are unsupported without implicit coercion |
 | 2026-09-28 | CF-06 | Existing signed-width, cast, function-conversion, overflow, unsupported-escape, and prefixed-string tests assert exact original spans; the new UTF-8 positive fixture compiles/runs | Scalar diagnostic/source-map coverage is closed for the bounded scalar contract; external compiler/ABI evidence remains assigned to CF-10 |
 | 2026-09-28 | CF-04 | `prototypeMaterializesTheFullUnsignedLongLongDomain` compiles/runs maximum, wraparound, high-bit, cast, comparison, and scalar-function values above `Long.MAX_VALUE`; `prototypeRejectsIntegerLiteralsBeyondUnsignedLongLongAtTheirSourceSpan` preserves the literal origin | The scalar conversion boundary now covers the complete supported 64-bit unsigned domain; external compiler/ABI evidence remains assigned to CF-10 |
+| 2026-09-28 | CF-01 / CF-07 | `prototypeTranscodesEveryRepositoryCPlusSourceWithoutActiveComptimeSyntax` passes for the complete repository `.cp`/`.c+` corpus; all generated output is C11 syntax-checked by each locally available `cc`, `gcc`, or `clang` driver, with no active comptime syntax retained | Phase-1 grammar and phase-2 generated-C proof agree for the finite repository corpus; broader target/compiler evidence and unsupported-boundary inventory remain open |
+| 2026-09-28 | CF-09 | Runtime-scope comptime invocations are now rejected before entity materialization; `comptimeGeneratorBindingsRespectModuleAndRuntimeFunctionScopes` and `prototypeRejectsEntityComptimeInvocationInsideRuntimeFunctionAtItsSourceSpan` verify no accidental module-generator binding and mapped `CPLUS_COMPTIME_INVOCATION_SCOPE` | The runtime invocation scope boundary is closed; lexical shadowing, generated-name scopes, and broader collision rules remain under P5-10-D/CF-09 |
 
 ## Update protocol
 

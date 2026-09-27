@@ -33,10 +33,29 @@ class TreeSitterComptimeEntityLowering(
             it.activeThisPass && it.moduleScope && (
                 it.syntaxKind in setOf("cplus_legacy_type_generator", "cplus_legacy_function_generator") ||
                     it.syntaxKind == "cplus_comptime_function_definition" && it.resultKind in ENTITY_RESULT_KINDS + setOf("type", "code")
-                )
+            )
+        }
+        val scopedInvocations = index.constructs.filter {
+            it.activeThisPass && !it.moduleScope && it.syntaxKind in setOf(
+                "cplus_comptime_invocation", "cplus_comptime_type_definition", "cplus_legacy_comptime_invocation"
+            )
+        }
+        if (scopedInvocations.isNotEmpty()) {
+            return TreeSitterComptimeEntityResult(
+                source,
+                scopedInvocations.map {
+                    diagnostic(
+                        "CPLUS_COMPTIME_INVOCATION_SCOPE",
+                        "comptime invocations are only supported at module scope in this prototype",
+                        it.span
+                    )
+                }
+            )
         }
         val invocations = index.constructs.filter {
-            it.activeThisPass && it.syntaxKind in setOf("cplus_comptime_invocation", "cplus_comptime_type_definition", "cplus_legacy_comptime_invocation")
+            it.activeThisPass && it.moduleScope && it.syntaxKind in setOf(
+                "cplus_comptime_invocation", "cplus_comptime_type_definition", "cplus_legacy_comptime_invocation"
+            )
         }
         val ordinaryTopLevelNodes = parsed.root.children.filter {
             it.kind in setOf(
