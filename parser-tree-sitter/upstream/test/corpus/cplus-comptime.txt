@@ -46,6 +46,7 @@ comptime outer();
 (translation_unit
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
+      (cplus_comptime_result_type)
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
@@ -56,6 +57,7 @@ comptime outer();
             (field_identifier))))))
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
+      (cplus_comptime_result_type)
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
@@ -64,6 +66,7 @@ comptime outer();
           (number_literal)))))
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
+      (cplus_comptime_result_type)
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
@@ -124,7 +127,8 @@ comptime outer();
       (number_literal)))
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
-      (primitive_type)
+      (cplus_comptime_result_type
+        (primitive_type))
       (identifier)
       (parameter_declaration
         (primitive_type)
@@ -136,6 +140,7 @@ comptime outer();
             (number_literal))))))
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
+      (cplus_comptime_result_type)
       (identifier)
       (cplus_comptime_parameter
         (primitive_type)
@@ -154,6 +159,7 @@ comptime outer();
       (number_literal)))
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
+      (cplus_comptime_result_type)
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
@@ -186,6 +192,7 @@ comptime outer();
           (abstract_pointer_declarator)))))
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
+      (cplus_comptime_result_type)
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
@@ -287,6 +294,7 @@ comptime outer();
                     (identifier))))))))))
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
+      (cplus_comptime_result_type)
       (identifier)
       (cplus_comptime_body
         (return_statement
@@ -294,6 +302,7 @@ comptime outer();
             (compound_statement
               (cplus_comptime_declaration
                 (cplus_comptime_function_definition
+                  (cplus_comptime_result_type)
                   (identifier)
                   (cplus_comptime_body
                     (return_statement

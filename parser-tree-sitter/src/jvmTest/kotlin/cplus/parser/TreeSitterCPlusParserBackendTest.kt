@@ -175,6 +175,7 @@ class TreeSitterCPlusParserBackendTest {
             "cplus_comptime_import",
             "cplus_comptime_invocation",
             "cplus_comptime_return_declaration",
+            "cplus_comptime_result_type",
             "cplus_comptime_type_definition",
             "cplus_comptime_value",
             "cplus_defer_statement",
@@ -8926,7 +8927,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             comptime unsigned long long @high_bit = 1ULL << 63;
             comptime unsigned long long @casted = (unsigned long long)-1;
             comptime bool @ordered = maximum > 9223372036854775807LL;
-            comptime unsigned long long @identity(unsigned long long @value) { return value; }
+            comptime unsigned long long @identity(unsigned long long value) { return value; }
             unsigned long long runtime_maximum = comptime identity(maximum);
             unsigned long long runtime_wrapped = comptime wrapped;
             unsigned long long runtime_high_bit = comptime high_bit;

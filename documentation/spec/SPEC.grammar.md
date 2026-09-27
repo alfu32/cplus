@@ -109,7 +109,18 @@ The keyword-led forms are:
 comptime-function      = "comptime" result-kind "@" identifier
                           "(" comptime-parameter* ")" comptime-body ;
 result-kind             = "type" | "function" | "variable" | "string" | "code"
-                        | primitive-type | identifier ;
+                        | primitive-type | integer-result-type | identifier ;
+integer-result-type     = "signed" [ "int" ]
+                        | "unsigned" [ "int" ]
+                        | "short" [ "int" ]
+                        | "signed" "short" [ "int" ]
+                        | "unsigned" "short" [ "int" ]
+                        | "long" [ "int" ]
+                        | "signed" "long" [ "int" ]
+                        | "unsigned" "long" [ "int" ]
+                        | "long" "long" [ "int" ]
+                        | "signed" "long" "long" [ "int" ]
+                        | "unsigned" "long" "long" [ "int" ] ;
 comptime-parameter      = "type" identifier
                         | declaration-specifiers "@" identifier
                         | ordinary-C-parameter ;

@@ -38,6 +38,8 @@ module.exports = grammar({
   conflicts: $ => [
     [$.cplus_comptime_function_definition, $.cplus_comptime_value],
     [$.type_specifier, $.cplus_comptime_function_definition],
+    [$.type_specifier, $.cplus_comptime_result_type],
+    [$.sized_type_specifier, $.cplus_comptime_result_type],
     [$.type_specifier, $._declarator],
     [$.type_specifier, $._declarator, $.macro_type_specifier],
     [$.type_specifier, $.expression],
@@ -939,15 +941,53 @@ module.exports = grammar({
       $.cplus_comptime_value,
     ),
 
-    cplus_comptime_function_definition: $ => prec.dynamic(2, seq(
+  cplus_comptime_function_definition: $ => prec.dynamic(2, seq(
       'comptime',
-      field('result_kind', choice('type', 'function', 'variable', 'string', 'code', $.identifier, $.primitive_type)),
+      field('result_kind', $.cplus_comptime_result_type),
       field('name', alias($.cplus_comptime_marked_identifier, $.identifier)),
       '(',
       commaSep(choice($.cplus_generic_type_parameter, $.cplus_comptime_parameter, $.parameter_declaration)),
       ')',
       field('body', $.cplus_comptime_body),
     )),
+
+    // Keep the comptime kind words while accepting the same multi-token
+    // integer spellings that ordinary C declarations accept.  This is
+    // intentionally limited to the scalar type combinations supported by
+    // the comptime evaluator; aliases continue through `identifier`.
+    cplus_comptime_result_type: $ => choice(
+      'type',
+      'function',
+      'variable',
+      'string',
+      'code',
+      choice(
+        'signed',
+        'unsigned',
+        seq('signed', 'int'),
+        seq('unsigned', 'int'),
+        'short',
+        seq('short', 'int'),
+        seq('signed', 'short'),
+        seq('signed', 'short', 'int'),
+        seq('unsigned', 'short'),
+        seq('unsigned', 'short', 'int'),
+        'long',
+        seq('long', 'int'),
+        seq('signed', 'long'),
+        seq('signed', 'long', 'int'),
+        seq('unsigned', 'long'),
+        seq('unsigned', 'long', 'int'),
+        seq('long', 'long'),
+        seq('long', 'long', 'int'),
+        seq('signed', 'long', 'long'),
+        seq('signed', 'long', 'long', 'int'),
+        seq('unsigned', 'long', 'long'),
+        seq('unsigned', 'long', 'long', 'int'),
+      ),
+      $.primitive_type,
+      $.identifier,
+    ),
 
     // Legacy scalar parameters mark their comptime binding at the name (`int @value`).
     cplus_comptime_parameter: $ => prec(2, seq(

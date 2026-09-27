@@ -6753,37 +6753,8 @@
             "type": "FIELD",
             "name": "result_kind",
             "content": {
-              "type": "CHOICE",
-              "members": [
-                {
-                  "type": "STRING",
-                  "value": "type"
-                },
-                {
-                  "type": "STRING",
-                  "value": "function"
-                },
-                {
-                  "type": "STRING",
-                  "value": "variable"
-                },
-                {
-                  "type": "STRING",
-                  "value": "string"
-                },
-                {
-                  "type": "STRING",
-                  "value": "code"
-                },
-                {
-                  "type": "SYMBOL",
-                  "name": "identifier"
-                },
-                {
-                  "type": "SYMBOL",
-                  "name": "primitive_type"
-                }
-              ]
+              "type": "SYMBOL",
+              "name": "cplus_comptime_result_type"
             }
           },
           {
@@ -6876,6 +6847,338 @@
           }
         ]
       }
+    },
+    "cplus_comptime_result_type": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "type"
+        },
+        {
+          "type": "STRING",
+          "value": "function"
+        },
+        {
+          "type": "STRING",
+          "value": "variable"
+        },
+        {
+          "type": "STRING",
+          "value": "string"
+        },
+        {
+          "type": "STRING",
+          "value": "code"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "signed"
+            },
+            {
+              "type": "STRING",
+              "value": "unsigned"
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "signed"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "unsigned"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            },
+            {
+              "type": "STRING",
+              "value": "short"
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "short"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "signed"
+                },
+                {
+                  "type": "STRING",
+                  "value": "short"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "signed"
+                },
+                {
+                  "type": "STRING",
+                  "value": "short"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "unsigned"
+                },
+                {
+                  "type": "STRING",
+                  "value": "short"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "unsigned"
+                },
+                {
+                  "type": "STRING",
+                  "value": "short"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            },
+            {
+              "type": "STRING",
+              "value": "long"
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "signed"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "signed"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "unsigned"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "unsigned"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "signed"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "signed"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "unsigned"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "unsigned"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "long"
+                },
+                {
+                  "type": "STRING",
+                  "value": "int"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "primitive_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        }
+      ]
     },
     "cplus_comptime_parameter": {
       "type": "PREC",
@@ -12174,6 +12477,14 @@
     [
       "type_specifier",
       "cplus_comptime_function_definition"
+    ],
+    [
+      "type_specifier",
+      "cplus_comptime_result_type"
+    ],
+    [
+      "sized_type_specifier",
+      "cplus_comptime_result_type"
     ],
     [
       "type_specifier",

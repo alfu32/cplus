@@ -170,9 +170,9 @@ The declaration and its parameters are comptime-only. `comptime expression` eval
 
 An inline `comptime` marker consumes the surrounding C expression up to its enclosing delimiter. It may begin with a scalar literal, a comptime name/function call, a unary operator, or a parenthesized expression. Both the production scanner and the experimental AST path accept literal-leading and parenthesized-leading forms; evaluator support remains limited to the documented scalar subset below. The shared regression compiles and runs both frontends' output for these forms.
 
-The opt-in Tree-sitter scalar prototype uses a signed 64-bit materialization domain. It accepts integer literals whose value fits that domain and validates C integer suffix spelling. Unsuffixed decimal literals choose the first fitting type from `int`, `long`, and `long long`; unsuffixed non-decimal literals choose from `int`, `unsigned int`, `long`, `unsigned long`, `long long`, and `unsigned long long`. `u`, `l`, `ul`/`lu`, and `ll`/`ull`/`llu` suffixes select the corresponding C candidate sequence. The target model supplies the width of `long`; values that would require an unsigned representation above the signed-64 materialization boundary fail closed. A leading sign is evaluated as the unary operator applied to the literal, including modulo behavior for unsigned operands.
+The opt-in Tree-sitter scalar prototype uses arbitrary-precision evaluation internally, then materializes only values representable by the selected C integer type. The supported upper bound is the target's `unsigned long long` maximum (`18446744073709551615` for the supported 64-bit `long long` model), not the JVM/Kotlin signed-64 range. Unsuffixed decimal literals choose the first fitting type from `int`, `long`, and `long long`; unsuffixed non-decimal literals choose from `int`, `unsigned int`, `long`, `unsigned long`, `long long`, and `unsigned long long`. `u`, `l`, `ul`/`lu`, and `ll`/`ull`/`llu` suffixes select the corresponding C candidate sequence. The target model supplies the width of `long`; values beyond every supported unsigned candidate fail closed. A leading sign is evaluated as the unary operator applied to the literal, including modulo behavior for unsigned operands.
 
-Unary integer operators apply the modeled integer promotions before evaluating `+`, `-`, and `~`. Addition, subtraction, multiplication, division, remainder, and bitwise binary operators use the common C integer type; signed results are range-checked and unsigned results wrap modulo their width. Shift operands are promoted independently, the left operand determines the result type, and the count must be in `0..width-1`. Unsigned shifts wrap naturally at the target width; negative signed shift operands and signed right shifts whose result would depend on implementation-defined behavior are rejected. Division and remainder reject zero divisors and the signed `LONG_MIN / -1` overflow case. Logical `&&` and `||` short-circuit, and the conditional operator (`condition ? consequence : alternative`) evaluates only the selected branch. Conditional/logical operands must evaluate to supported integer or boolean scalar values; unsupported operands produce a source-mapped diagnostic instead of being coerced to false. Unsupported operations fail with a source-mapped diagnostic. This remains a bounded subset rather than full C constant-expression conformance: non-integer/pointer casts, plain `char` signedness, and unsigned values outside signed-64 materialization remain open; scalar-function argument/result conversion is defined below.
+Unary integer operators apply the modeled integer promotions before evaluating `+`, `-`, and `~`. Addition, subtraction, multiplication, division, remainder, and bitwise binary operators use the common C integer type; signed results are range-checked and unsigned results wrap modulo their width. Shift operands are promoted independently, the left operand determines the result type, and the count must be in `0..width-1`. Unsigned shifts wrap naturally at the target width; negative signed shift operands and signed right shifts whose result would depend on implementation-defined behavior are rejected. Division and remainder reject zero divisors and the signed `LONG_MIN / -1` overflow case. Logical `&&` and `||` short-circuit, and the conditional operator (`condition ? consequence : alternative`) evaluates only the selected branch. Conditional/logical operands must evaluate to supported integer or boolean scalar values; unsupported operands produce a source-mapped diagnostic instead of being coerced to false. Unsupported operations fail with a source-mapped diagnostic. This remains a bounded subset rather than full C constant-expression conformance: non-integer/pointer casts and unsupported target ABIs remain open; scalar-function argument/result conversion is defined below.
 
 ### Comptime blocks
 
@@ -474,7 +474,7 @@ The complete generated file also contains the annotation macro preamble and sour
 
 ### Typed integer declarations (prototype boundary)
 
-The Tree-sitter prototype keeps the current signed-64 evaluation domain, then applies the declared integer type when a module-scope comptime value is resolved. Fixed-width signed types (`signed char`, `short`, `int`, `long`, and `long long`, including their standard spelling variants) reject values outside their target range with a mapped `CPLUS_COMPTIME_SCALAR_WIDTH` diagnostic. Unsigned types use C-style modulo conversion within their target width; for example, `-1` declared as `unsigned char` materializes as `255`. `_Bool` and `bool` normalize any integer or boolean initializer to `0` or `1`.
+The Tree-sitter prototype evaluates with arbitrary precision, then applies the declared integer type when a module-scope comptime value is resolved. Fixed-width signed types (`signed char`, `short`, `int`, `long`, and `long long`, including their standard spelling variants) reject values outside their target range with a mapped `CPLUS_COMPTIME_SCALAR_WIDTH` diagnostic. Unsigned types use C-style modulo conversion within their target width; for example, `-1` declared as `unsigned char` materializes as `255`, and a full-width `unsigned long long` value remains representable above `LONG_MAX`. `_Bool` and `bool` normalize any integer or boolean initializer to `0` or `1`.
 
 `long` is target-dependent in this prototype: it is 64-bit on Linux and macOS targets and 32-bit on Windows targets. The target is selected by the compiler configuration, not by the host running the JVM. Plain `char` uses the supported target model: signed on Linux x86_64, macOS x86_64/arm64, and Windows x86_64/arm64; unsigned on Linux arm64. An unsupported OS/architecture combination fails closed with `CPLUS_COMPTIME_SCALAR_TYPE` instead of guessing the selected compiler's ABI.
 
@@ -502,6 +502,20 @@ For a Windows x86_64 target, the `long` declaration above is rejected because `4
 
 Suffix selection also follows the target's `long` width. On Linux/macOS, `0xffffffffUL + 1` uses a 64-bit `unsigned long` and materializes `4294967296`; on Windows, it uses a 32-bit `unsigned long` and materializes `0`. `0xffffffffLL + 1` and `0xffffffffULL + 1` remain `4294967296` on all three supported target families because both `long long` forms are 64-bit. The prototype verifies the `L`, `UL`/`LU`, `LL`, `ULL`/`LLU` spellings across x86_64/arm64 Unix models and the x86_64 Windows model.
 
+The full-width unsigned-long-long boundary is also materializable. Internal arbitrary-precision evaluation preserves the value until the declared C type is applied, so values above `9223372036854775807` do not become negative or fail merely because the evaluator runs on the JVM:
+
+```c
+comptime unsigned long long @maximum = 18446744073709551615ULL;
+comptime unsigned long long @wrapped = maximum + 1ULL;
+comptime unsigned long long @high_bit = 1ULL << 63;
+
+unsigned long long maximum_value = comptime maximum; // 18446744073709551615ULL
+unsigned long long wrapped_value = comptime wrapped; // 0ULL
+unsigned long long high_bit_value = comptime high_bit; // 9223372036854775808ULL
+```
+
+An integer literal beyond `ULLONG_MAX`, or a signed declaration that cannot represent the result, remains a mapped compile-time error.
+
 ```c
 comptime unsigned int @bits = 0xffffffff;
 
@@ -527,7 +541,7 @@ int main(void) {
 }
 ```
 
-An out-of-range signed parameter or result is rejected with a source-mapped diagnostic; unsigned parameter/result conversions modulo-convert within the bounded signed-64 materialization domain. This boundary must not be read as full C integer-promotion conformance.
+An out-of-range signed parameter or result is rejected with a source-mapped diagnostic; unsigned parameter/result conversions modulo-convert within the declared target width, including the full supported `unsigned long long` domain. This boundary must not be read as full C integer-promotion conformance.
 
 ### Imported value
 

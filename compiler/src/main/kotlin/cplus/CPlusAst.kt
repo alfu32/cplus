@@ -179,7 +179,7 @@ class CPlusAstAdapter {
             "gnu_asm_output_operand", "gnu_asm_output_operand_list", "gnu_asm_qualifier" -> CPlusAstKind.EXPRESSION
             "identifier", "field_identifier", "type_identifier", "statement_identifier" -> CPlusAstKind.IDENTIFIER
             "comment" -> CPlusAstKind.COMMENT
-            "primitive_type", "sized_type_specifier", "type_qualifier", "storage_class_specifier",
+            "primitive_type", "sized_type_specifier", "cplus_comptime_result_type", "type_qualifier", "storage_class_specifier",
             "type_specifier", "type_qualifier_list", "type_descriptor", "macro_type_specifier", "ms_pointer_modifier",
             "ms_restrict_modifier", "ms_signed_ptr_modifier", "ms_unsigned_ptr_modifier",
             "ms_unaligned_ptr_modifier" -> CPlusAstKind.TYPE

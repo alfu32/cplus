@@ -1692,32 +1692,8 @@
         "required": true,
         "types": [
           {
-            "type": "code",
-            "named": false
-          },
-          {
-            "type": "function",
-            "named": false
-          },
-          {
-            "type": "identifier",
+            "type": "cplus_comptime_result_type",
             "named": true
-          },
-          {
-            "type": "primitive_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": false
-          },
-          {
-            "type": "type",
-            "named": false
-          },
-          {
-            "type": "variable",
-            "named": false
           }
         ]
       }
@@ -1848,6 +1824,25 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "cplus_comptime_result_type",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "primitive_type",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -6185,6 +6180,10 @@
   },
   {
     "type": "inline",
+    "named": false
+  },
+  {
+    "type": "int",
     "named": false
   },
   {

@@ -19,6 +19,7 @@ comptime function @mapper(type T, type R) {
 (translation_unit
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
+      (cplus_comptime_result_type)
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
@@ -29,6 +30,7 @@ comptime function @mapper(type T, type R) {
             (field_identifier))))))
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
+      (cplus_comptime_result_type)
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
@@ -50,6 +52,7 @@ comptime function @mapper(type T, type R) {
                       (field_identifier)))))))))))
   (cplus_comptime_declaration
     (cplus_comptime_function_definition
+      (cplus_comptime_result_type)
       (identifier)
       (cplus_generic_type_parameter
         (identifier))
