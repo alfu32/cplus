@@ -23,12 +23,47 @@ class TreeSitterComptimeConditionalLowering {
         require(parsed.source.text == source.text) { "AST and mapped source must contain the same snapshot text" }
 
         val conditionals = mutableListOf<CPlusSyntaxNode>()
-        fun collect(node: CPlusSyntaxNode, insideConditional: Boolean = false) {
+        val scopedConditionals = mutableListOf<CPlusSyntaxNode>()
+        fun collect(
+            node: CPlusSyntaxNode,
+            moduleScope: Boolean,
+            insideConditional: Boolean = false,
+            insideComptimeBlock: Boolean = false
+        ) {
             val isConditional = node.kind == CONDITIONAL_KIND
-            if (isConditional && !insideConditional) conditionals += node
-            node.children.forEach { collect(it, insideConditional || isConditional) }
+            if (isConditional && !insideConditional) {
+                if (moduleScope) conditionals += node else scopedConditionals += node
+            }
+            val startsComptimeBlock = node.kind == COMPTIME_BLOCK_KIND
+            val childModuleScope = when {
+                !moduleScope -> false
+                node.kind == "compound_statement" && insideComptimeBlock -> true
+                node.kind in NON_MODULE_SCOPE_NODES -> false
+                node.kind == COMPTIME_BLOCK_KIND -> true
+                else -> true
+            }
+            node.children.forEach {
+                collect(
+                    it,
+                    childModuleScope,
+                    insideConditional || isConditional,
+                    insideComptimeBlock || startsComptimeBlock
+                )
+            }
         }
-        collect(parsed.root)
+        collect(parsed.root, moduleScope = true)
+        if (scopedConditionals.isNotEmpty()) {
+            return TreeSitterConditionalLoweringResult(
+                source,
+                scopedConditionals.map {
+                    CPlusLoweringDiagnostic(
+                        "CPLUS_COMPTIME_CONDITIONAL_SCOPE",
+                        "comptime conditionals are only supported at module scope in this prototype",
+                        it.span
+                    )
+                }
+            )
+        }
         if (conditionals.isEmpty()) return TreeSitterConditionalLoweringResult(source, emptyList())
 
         val diagnostics = mutableListOf<CPlusLoweringDiagnostic>()
@@ -119,5 +154,15 @@ class TreeSitterComptimeConditionalLowering {
 
     private companion object {
         const val CONDITIONAL_KIND = "cplus_comptime_conditional"
+        const val COMPTIME_BLOCK_KIND = "cplus_comptime_block"
+        val NON_MODULE_SCOPE_NODES = setOf(
+            "function_definition",
+            "cplus_method_definition",
+            "struct_specifier",
+            "union_specifier",
+            "enum_specifier",
+            "field_declaration_list",
+            "compound_statement"
+        )
     }
 }

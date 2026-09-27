@@ -17,9 +17,11 @@ class TreeSitterComptimeBlockLowering {
         require(parsed.source.text == source.text) { "AST and mapped source must contain the same snapshot text" }
 
         val blocks = mutableListOf<CPlusSyntaxNode>()
+        val scopedBlocks = mutableListOf<CPlusSyntaxNode>()
         fun collect(node: CPlusSyntaxNode, moduleScope: Boolean) {
             if (node.kind == BLOCK_KIND) {
                 if (moduleScope) blocks += node
+                else scopedBlocks += node
                 return
             }
             val childrenAreModuleScope = moduleScope &&
@@ -27,6 +29,18 @@ class TreeSitterComptimeBlockLowering {
             node.children.forEach { child -> collect(child, childrenAreModuleScope) }
         }
         collect(parsed.root, true)
+        if (scopedBlocks.isNotEmpty()) {
+            return TreeSitterComptimeBlockLoweringResult(
+                source,
+                scopedBlocks.map {
+                    CPlusLoweringDiagnostic(
+                        "CPLUS_COMPTIME_BLOCK_SCOPE",
+                        "comptime blocks are only supported at module scope in this prototype",
+                        it.span
+                    )
+                }
+            )
+        }
         if (blocks.isEmpty()) return TreeSitterComptimeBlockLoweringResult(source, emptyList())
 
         val diagnostics = mutableListOf<CPlusLoweringDiagnostic>()

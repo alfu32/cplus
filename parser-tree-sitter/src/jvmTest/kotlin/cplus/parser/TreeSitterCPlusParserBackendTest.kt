@@ -5990,7 +5990,11 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         }
         assertFalse(localDeclaration.moduleScope)
         assertEquals(
-            listOf("CPLUS_COMPTIME_INVOCATION_SCOPE", "CPLUS_COMPTIME_INVOCATION_SCOPE"),
+            listOf(
+                "CPLUS_COMPTIME_DECLARATION_SCOPE",
+                "CPLUS_COMPTIME_INVOCATION_SCOPE",
+                "CPLUS_COMPTIME_INVOCATION_SCOPE"
+            ),
             resolution.diagnostics.map { it.code }
         )
         assertTrue(resolution.diagnostics.all { it.message.contains("module scope") })
@@ -6016,6 +6020,44 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         val diagnostic = result.loweringDiagnostics.single()
         assertEquals(source.id.value, diagnostic.span.file)
         assertEquals(text.indexOf("comptime make(int)"), diagnostic.span.startOffset)
+    }
+
+    @Test
+    fun prototypeRejectsComptimeGeneratorDeclarationInsideRuntimeFunctionAtItsSourceSpan() {
+        val text = """
+            int runtime(void) {
+                comptime function @local(type T) { return T; }
+                return 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("runtime-comptime-generator-scope.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "runtime-scope comptime declarations must fail closed")
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_DECLARATION_SCOPE", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("comptime function"), diagnostic.span.startOffset)
+    }
+
+    @Test
+    fun prototypeRejectsComptimeConditionalInsideRuntimeFunctionAtItsSourceSpan() {
+        val text = """
+            int runtime(void) {
+                @if (os == "linux") { return 1; }
+                @else { return 2; }
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("runtime-comptime-conditional-scope.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "runtime-scope comptime conditionals must fail closed")
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_CONDITIONAL_SCOPE", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("@if"), diagnostic.span.startOffset)
     }
 
     @Test
@@ -6120,6 +6162,25 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals("CPLUS_COMPTIME_BLOCK_UNSUPPORTED", diagnostic.code)
         assertEquals(source.id.value, diagnostic.span.file)
         assertEquals(text.indexOf("int runtime_value"), diagnostic.span.startOffset)
+    }
+
+    @Test
+    fun prototypeRejectsComptimeBlockInsideRuntimeFunctionAtItsSourceSpan() {
+        val text = """
+            int runtime(void) {
+                comptime { 1 + 2; }
+                return 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("runtime-comptime-block-scope.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "runtime-scope comptime blocks must fail closed")
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_BLOCK_SCOPE", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("comptime {"), diagnostic.span.startOffset)
     }
 
     @Test

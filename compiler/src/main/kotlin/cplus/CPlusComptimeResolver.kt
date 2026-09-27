@@ -34,6 +34,9 @@ class CPlusComptimeResolver {
         val declarations = index.constructs.filter {
             it.activeThisPass && it.moduleScope && it.syntaxKind in GENERATOR_KINDS && !it.symbol.isNullOrBlank()
         }
+        val scopedDeclarations = index.constructs.filter {
+            it.activeThisPass && !it.moduleScope && it.syntaxKind in GENERATOR_KINDS && !it.symbol.isNullOrBlank()
+        }
         val scopedInvocations = index.constructs.filter {
             it.activeThisPass && !it.moduleScope && it.syntaxKind in INVOCATION_KINDS && !it.symbol.isNullOrBlank()
         }
@@ -41,6 +44,14 @@ class CPlusComptimeResolver {
             it.activeThisPass && it.syntaxKind in INVOCATION_KINDS && !it.symbol.isNullOrBlank()
         }
         val diagnostics = mutableListOf<CPlusComptimeResolutionDiagnostic>()
+
+        scopedDeclarations.forEach { declaration ->
+            diagnostics += CPlusComptimeResolutionDiagnostic(
+                "CPLUS_COMPTIME_DECLARATION_SCOPE",
+                "comptime generator declarations are only supported at module scope in this prototype",
+                declaration.span
+            )
+        }
 
         scopedInvocations.forEach { invocation ->
             diagnostics += CPlusComptimeResolutionDiagnostic(

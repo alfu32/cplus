@@ -69,7 +69,10 @@ comptime bodies where the grammar explicitly admits a block item. A comptime
 declaration or invocation inside an ordinary runtime function is a semantic error in
 the current frontend even if a recovery tree can be formed. A runtime-scope invocation
 must not bind to a module-scope generator; it receives a mapped
-`CPLUS_COMPTIME_INVOCATION_SCOPE` diagnostic.
+`CPLUS_COMPTIME_INVOCATION_SCOPE` diagnostic. Runtime-scope generators, blocks, and
+conditionals receive `CPLUS_COMPTIME_DECLARATION_SCOPE`, `CPLUS_COMPTIME_BLOCK_SCOPE`, or
+`CPLUS_COMPTIME_CONDITIONAL_SCOPE` respectively; diagnostics are emitted before binding or
+materialization.
 
 ## Struct methods and annotations
 
