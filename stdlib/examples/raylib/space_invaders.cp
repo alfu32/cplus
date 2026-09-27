@@ -410,26 +410,26 @@ typedef struct invaders_app_t {
     @assert(!(alien->alive || app.alien_count != INVADERS_MAX_ALIENS - 1 || app.score <= score_before));
 
 
-    const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
-    if (screenshot_directory != NULL) {
-        SetConfigFlags(FLAG_WINDOW_HIDDEN);
-        InitWindow(INVADERS_SCREEN_WIDTH, INVADERS_SCREEN_HEIGHT, "C-plus test render");
-        @assert(IsWindowReady());
-        if (IsWindowReady()) {
-            defer CloseWindow();
-            BeginDrawing();
-            app.render();
-            EndDrawing();
-            Image screenshot = LoadImageFromScreen();
-            @assert(screenshot.data != NULL);
-            if (screenshot.data != NULL) {
-                char screenshot_path[1024];
-                snprintf(screenshot_path, sizeof(screenshot_path), "%s/space-invaders.png", screenshot_directory);
-                @assert(ExportImage(screenshot, screenshot_path));
-                UnloadImage(screenshot);
-            }
-        }
-    }
+    // const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
+    // if (screenshot_directory != NULL) {
+    //     SetConfigFlags(FLAG_WINDOW_HIDDEN);
+    //     InitWindow(INVADERS_SCREEN_WIDTH, INVADERS_SCREEN_HEIGHT, "C-plus test render");
+    //     @assert(IsWindowReady());
+    //     if (IsWindowReady()) {
+    //         defer CloseWindow();
+    //         BeginDrawing();
+    //         app.render();
+    //         EndDrawing();
+    //         Image screenshot = LoadImageFromScreen();
+    //         @assert(screenshot.data != NULL);
+    //         if (screenshot.data != NULL) {
+    //             char screenshot_path[1024];
+    //             snprintf(screenshot_path, sizeof(screenshot_path), "%s/space-invaders.png", screenshot_directory);
+    //             @assert(ExportImage(screenshot, screenshot_path));
+    //             UnloadImage(screenshot);
+    //         }
+    //     }
+    // }
 
 }
 

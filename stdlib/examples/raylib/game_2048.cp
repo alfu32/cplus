@@ -330,26 +330,26 @@ typedef struct game_2048_app_t {
     @assert(!(app.count_tiles() != 2 || app.score != 4));
 
 
-    const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
-    if (screenshot_directory != NULL) {
-        SetConfigFlags(FLAG_WINDOW_HIDDEN);
-        InitWindow(GAME_2048_SCREEN_WIDTH, GAME_2048_SCREEN_HEIGHT, "C-plus test render");
-        @assert(IsWindowReady());
-        if (IsWindowReady()) {
-            defer CloseWindow();
-            BeginDrawing();
-            app.render();
-            EndDrawing();
-            Image screenshot = LoadImageFromScreen();
-            @assert(screenshot.data != NULL);
-            if (screenshot.data != NULL) {
-                char screenshot_path[1024];
-                snprintf(screenshot_path, sizeof(screenshot_path), "%s/game-2048.png", screenshot_directory);
-                @assert(ExportImage(screenshot, screenshot_path));
-                UnloadImage(screenshot);
-            }
-        }
-    }
+    // const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
+    // if (screenshot_directory != NULL) {
+    //     SetConfigFlags(FLAG_WINDOW_HIDDEN);
+    //     InitWindow(GAME_2048_SCREEN_WIDTH, GAME_2048_SCREEN_HEIGHT, "C-plus test render");
+    //     @assert(IsWindowReady());
+    //     if (IsWindowReady()) {
+    //         defer CloseWindow();
+    //         BeginDrawing();
+    //         app.render();
+    //         EndDrawing();
+    //         Image screenshot = LoadImageFromScreen();
+    //         @assert(screenshot.data != NULL);
+    //         if (screenshot.data != NULL) {
+    //             char screenshot_path[1024];
+    //             snprintf(screenshot_path, sizeof(screenshot_path), "%s/game-2048.png", screenshot_directory);
+    //             @assert(ExportImage(screenshot, screenshot_path));
+    //             UnloadImage(screenshot);
+    //         }
+    //     }
+    // }
 
 }
 

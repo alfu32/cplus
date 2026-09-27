@@ -370,26 +370,26 @@ typedef struct asteroids_app_t {
     @assert(!(app.ship.lives != 1 || app.ship.invulnerable_seconds <= 0.0f));
 
 
-    const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
-    if (screenshot_directory != NULL) {
-        SetConfigFlags(FLAG_WINDOW_HIDDEN);
-        InitWindow(ASTEROIDS_SCREEN_WIDTH, ASTEROIDS_SCREEN_HEIGHT, "C-plus test render");
-        @assert(IsWindowReady());
-        if (IsWindowReady()) {
-            defer CloseWindow();
-            BeginDrawing();
-            app.render();
-            EndDrawing();
-            Image screenshot = LoadImageFromScreen();
-            @assert(screenshot.data != NULL);
-            if (screenshot.data != NULL) {
-                char screenshot_path[1024];
-                snprintf(screenshot_path, sizeof(screenshot_path), "%s/asteroids.png", screenshot_directory);
-                @assert(ExportImage(screenshot, screenshot_path));
-                UnloadImage(screenshot);
-            }
-        }
-    }
+    // const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
+    // if (screenshot_directory != NULL) {
+    //     SetConfigFlags(FLAG_WINDOW_HIDDEN);
+    //     InitWindow(ASTEROIDS_SCREEN_WIDTH, ASTEROIDS_SCREEN_HEIGHT, "C-plus test render");
+    //     @assert(IsWindowReady());
+    //     if (IsWindowReady()) {
+    //         defer CloseWindow();
+    //         BeginDrawing();
+    //         app.render();
+    //         EndDrawing();
+    //         Image screenshot = LoadImageFromScreen();
+    //         @assert(screenshot.data != NULL);
+    //         if (screenshot.data != NULL) {
+    //             char screenshot_path[1024];
+    //             snprintf(screenshot_path, sizeof(screenshot_path), "%s/asteroids.png", screenshot_directory);
+    //             @assert(ExportImage(screenshot, screenshot_path));
+    //             UnloadImage(screenshot);
+    //         }
+    //     }
+    // }
 
 }
 

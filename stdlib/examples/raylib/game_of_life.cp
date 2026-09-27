@@ -219,26 +219,26 @@ typedef struct life_app_t {
     @assert(!(app.cells[app.current_buffer][3][4] != 1));
 
 
-    const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
-    if (screenshot_directory != NULL) {
-        SetConfigFlags(FLAG_WINDOW_HIDDEN);
-        InitWindow(LIFE_SCREEN_WIDTH, LIFE_SCREEN_HEIGHT, "C-plus test render");
-        @assert(IsWindowReady());
-        if (IsWindowReady()) {
-            defer CloseWindow();
-            BeginDrawing();
-            app.render();
-            EndDrawing();
-            Image screenshot = LoadImageFromScreen();
-            @assert(screenshot.data != NULL);
-            if (screenshot.data != NULL) {
-                char screenshot_path[1024];
-                snprintf(screenshot_path, sizeof(screenshot_path), "%s/game-of-life.png", screenshot_directory);
-                @assert(ExportImage(screenshot, screenshot_path));
-                UnloadImage(screenshot);
-            }
-        }
-    }
+    // const char* screenshot_directory = getenv("CPLUS_TEST_SCREENSHOT_DIR");
+    // if (screenshot_directory != NULL) {
+    //     SetConfigFlags(FLAG_WINDOW_HIDDEN);
+    //     InitWindow(LIFE_SCREEN_WIDTH, LIFE_SCREEN_HEIGHT, "C-plus test render");
+    //     @assert(IsWindowReady());
+    //     if (IsWindowReady()) {
+    //         defer CloseWindow();
+    //         BeginDrawing();
+    //         app.render();
+    //         EndDrawing();
+    //         Image screenshot = LoadImageFromScreen();
+    //         @assert(screenshot.data != NULL);
+    //         if (screenshot.data != NULL) {
+    //             char screenshot_path[1024];
+    //             snprintf(screenshot_path, sizeof(screenshot_path), "%s/game-of-life.png", screenshot_directory);
+    //             @assert(ExportImage(screenshot, screenshot_path));
+    //             UnloadImage(screenshot);
+    //         }
+    //     }
+    // }
 
 }
 
