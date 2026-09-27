@@ -6336,6 +6336,36 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun prototypeMaterializesComptimeStringsAsTargetStableUtf8Bytes() {
+        val text = """
+            comptime string @utf8_value() {
+                return "hé" + "🌍";
+            }
+            int main(void) {
+                const unsigned char* actual = (const unsigned char*)comptime utf8_value();
+                const unsigned char expected[] = { 'h', 0xc3, 0xa9, 0xf0, 0x9f, 0x8c, 0x8d, 0 };
+                for (int index = 0; index < 8; index++) {
+                    if (actual[index] != expected[index]) return index + 1;
+                }
+                return 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-string-utf8.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("UTF-8 comptime string should materialize")
+        assertTrue("\"h\\303\\251\\360\\237\\214\\215\"" in generated.code, generated.code)
+        assertFalse("é" in generated.code, "non-ASCII source characters must be emitted as stable UTF-8 bytes")
+        assertFalse("🌍" in generated.code, "supplementary source characters must be emitted as stable UTF-8 bytes")
+        compileAndRunC(generated.code)
+    }
+
+    @Test
     fun prototypeRejectsUnsupportedComptimeStringEscapesAtTheirSourceSpan() {
         val text = """
             comptime string @bad_name() { return "bad\x41"; }
@@ -7971,7 +8001,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             }
             comptime {
                 @for field in ownership_t.fields {
-                    comptime emit_annotation(field.type, field.annotations);
+                    comptime emit_annotation(field.type, field.annotationsText);
                 }
             }
             int main(void) { return 0; }
@@ -8176,7 +8206,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             comptime {
                 @for field in ownership_t.fields {
                     @for annotation in field.annotations {
-                        comptime check_annotation(annotation);
+                        comptime check_annotation(annotation.name);
                     }
                 }
             }
@@ -8202,6 +8232,59 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             "comptime check_annotation(\"".length
         assertEquals(text.indexOf("mut char"), loopResult.source.originAt(loweredAnnotation)?.offset)
         compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeRejectsUnknownStructuredAnnotationMembersAtTheirSourceSpan() {
+        val text = """
+            typedef struct ownership_t { borrowed char* input; } ownership_t;
+            comptime {
+                @for field in ownership_t.fields {
+                    @for annotation in field.annotations {
+                        comptime missing(annotation.value);
+                    }
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-annotation-property-invalid.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful)
+        val diagnostic = result.loweringDiagnostics.single {
+            it.code == "CPLUS_COMPTIME_ANNOTATION_PROPERTY"
+        }
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("value"), diagnostic.span.startOffset)
+        assertEquals(text.indexOf("value") + "value".length, diagnostic.span.endOffset)
+        assertTrue(result.transcodedSource == null, "invalid annotation reflection must not emit C")
+    }
+
+    @Test
+    fun prototypeRejectsScalarAnnotationProjectionAsAnIterable() {
+        val text = """
+            typedef struct ownership_t { borrowed char* input; } ownership_t;
+            comptime {
+                @for field in ownership_t.fields {
+                    @for annotation in field.annotationsText {
+                        comptime missing(annotation);
+                    }
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-annotation-text-iterable-invalid.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful)
+        val diagnostic = result.loweringDiagnostics.single {
+            it.code == "CPLUS_COMPTIME_FIELD_LOOP_NESTED_ITERABLE"
+        }
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("field.annotationsText"), diagnostic.span.startOffset)
+        assertTrue(result.transcodedSource == null, "unsupported iterable must not emit C")
     }
 
     @Test
@@ -8820,7 +8903,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             "comptime long long @bad = -1LL << 1;" to "CPLUS_COMPTIME_SCALAR_ARITHMETIC",
             "comptime long long @bad = -1LL >> 1;" to "CPLUS_COMPTIME_SCALAR_ARITHMETIC",
             "comptime long long @bad = 1LL << 63;" to "CPLUS_COMPTIME_SCALAR_ARITHMETIC",
-            "comptime long long @bad = 0x8000000000000000ULL;" to "CPLUS_COMPTIME_SCALAR_LITERAL"
+            "comptime long long @bad = 0x8000000000000000ULL;" to "CPLUS_COMPTIME_SCALAR_WIDTH"
         )
 
         cases.forEachIndexed { index, (text, expectedCode) ->
@@ -8833,6 +8916,63 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             assertEquals(source.id.value, diagnostic.span.file)
             assertTrue(diagnostic.span.startOffset in text.indices)
         }
+    }
+
+    @Test
+    fun prototypeMaterializesTheFullUnsignedLongLongDomain() {
+        val text = """
+            comptime unsigned long long @maximum = 18446744073709551615ULL;
+            comptime unsigned long long @wrapped = maximum + 1ULL;
+            comptime unsigned long long @high_bit = 1ULL << 63;
+            comptime unsigned long long @casted = (unsigned long long)-1;
+            comptime bool @ordered = maximum > 9223372036854775807LL;
+            comptime unsigned long long @identity(unsigned long long @value) { return value; }
+            unsigned long long runtime_maximum = comptime identity(maximum);
+            unsigned long long runtime_wrapped = comptime wrapped;
+            unsigned long long runtime_high_bit = comptime high_bit;
+            unsigned long long runtime_casted = comptime casted;
+            int runtime_ordered = comptime ordered;
+            int main(void) {
+                return runtime_maximum != 18446744073709551615ULL ||
+                    runtime_wrapped != 0ULL ||
+                    runtime_high_bit != 9223372036854775808ULL ||
+                    runtime_casted != 18446744073709551615ULL ||
+                    runtime_ordered != 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-unsigned-long-long-domain.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("unsigned 64-bit values should materialize")
+        assertTrue("18446744073709551615ULL" in generated.code, generated.code)
+        assertTrue("9223372036854775808ULL" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeRejectsIntegerLiteralsBeyondUnsignedLongLongAtTheirSourceSpan() {
+        val literal = "18446744073709551616ULL"
+        val text = "comptime unsigned long long @bad = $literal;"
+        val source = sources.open(SourceId.named("scalar-comptime-beyond-unsigned-long-long.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful)
+        val diagnostic = result.loweringDiagnostics.single { it.code == "CPLUS_COMPTIME_SCALAR_LITERAL" }
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf(literal), diagnostic.span.startOffset)
+        assertEquals(text.indexOf(literal) + literal.length, diagnostic.span.endOffset)
+        assertTrue(result.transcodedSource == null)
     }
 
     @Test

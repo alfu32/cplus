@@ -226,27 +226,53 @@ class TreeSitterComptimeFieldLoopLowering(
             }
             .forEach { reference ->
                 val argument = reference.children.first { it.fieldName == "argument" }
-                val field = bindings[textOf(argument, text)]?.field
+                val binding = bindings[textOf(argument, text)]
                 val propertyNode = reference.children.firstOrNull { it.fieldName == "field" }
                 val property = propertyNode?.let { textOf(it, text) }
-                if (field == null || property == null || property !in REFLECTED_FIELD_PROPERTIES) {
-                    diagnostics += diagnostic(
+                when {
+                    binding?.field != null && property != null -> {
+                        val field = binding.field
+                        if (property !in REFLECTED_FIELD_PROPERTIES) {
+                            diagnostics += diagnostic(
+                                "CPLUS_COMPTIME_REFLECTION_PROPERTY",
+                                "field reflection supports `.name`, `.type`, `.annotations`, `.annotationsText`, `.flag`, `.width`, `.offset`, `.size`, and `.align`",
+                                propertyNode?.span ?: reference.span
+                            )
+                        } else if (property in LAYOUT_FIELD_PROPERTIES && field.layout == null) {
+                            diagnostics += diagnostic(
+                                "CPLUS_COMPTIME_REFLECTION_LAYOUT",
+                                "${field.name.ifBlank { "<anonymous>" }}.$property is unavailable for target ABI $targetArch-$targetOs",
+                                propertyNode?.span ?: reference.span
+                            )
+                        } else {
+                            val (value, originOffset) = fieldProperty(field, property)
+                            replacements += Replacement(
+                                reference.span.startOffset,
+                                reference.span.endOffset,
+                                generated(value, source, originOffset)
+                            )
+                        }
+                    }
+                    binding?.annotation != null && property != null -> {
+                        val annotation = binding.annotation
+                        if (property !in REFLECTED_ANNOTATION_PROPERTIES) {
+                            diagnostics += diagnostic(
+                                "CPLUS_COMPTIME_ANNOTATION_PROPERTY",
+                                "annotation reflection supports only `.name`",
+                                propertyNode?.span ?: reference.span
+                            )
+                        } else {
+                            replacements += Replacement(
+                                reference.span.startOffset,
+                                reference.span.endOffset,
+                                generated(quote(annotation.name), source, annotation.span.startOffset)
+                            )
+                        }
+                    }
+                    else -> diagnostics += diagnostic(
                         "CPLUS_COMPTIME_REFLECTION_PROPERTY",
-                        "field reflection supports `.name`, `.type`, `.annotations`, `.flag`, `.width`, `.offset`, `.size`, and `.align` in this prototype",
+                        "reflection member access requires a bound field or annotation value",
                         propertyNode?.span ?: reference.span
-                    )
-                } else if (property in LAYOUT_FIELD_PROPERTIES && field.layout == null) {
-                    diagnostics += diagnostic(
-                        "CPLUS_COMPTIME_REFLECTION_LAYOUT",
-                        "${field.name.ifBlank { "<anonymous>" }}.$property is unavailable for target ABI $targetArch-$targetOs",
-                        propertyNode?.span ?: reference.span
-                    )
-                } else {
-                    val (value, originOffset) = fieldProperty(field, property)
-                    replacements += Replacement(
-                        reference.span.startOffset,
-                        reference.span.endOffset,
-                        generated(value, source, originOffset)
                     )
                 }
             }
@@ -296,7 +322,7 @@ class TreeSitterComptimeFieldLoopLowering(
     private fun fieldProperty(field: ReflectedField, property: String): Pair<String, Int> = when (property) {
         "name" -> quote(field.name) to field.nameSpan.startOffset
         "type" -> field.type to field.typeSpan.startOffset
-        "annotations" -> quote(field.annotations.joinToString(" ") { it.name }) to
+        "annotations", "annotationsText" -> quote(field.annotations.joinToString(" ") { it.name }) to
             (field.annotationSpan?.startOffset ?: field.typeSpan.startOffset)
         "flag" -> (if (field.bitWidth == null) "0" else "1") to
             (field.bitWidthSpan?.startOffset ?: field.typeSpan.startOffset)
@@ -526,7 +552,10 @@ class TreeSitterComptimeFieldLoopLowering(
         )
         val TYPE_NAME_NODES = setOf("identifier", "type_identifier", "primitive_type")
         val FIELD_NAME_NODES = setOf("identifier", "field_identifier", "type_identifier")
-        val REFLECTED_FIELD_PROPERTIES = setOf("name", "type", "annotations", "flag", "width", "offset", "size", "align")
+        val REFLECTED_FIELD_PROPERTIES = setOf(
+            "name", "type", "annotations", "annotationsText", "flag", "width", "offset", "size", "align"
+        )
+        val REFLECTED_ANNOTATION_PROPERTIES = setOf("name")
         val LAYOUT_FIELD_PROPERTIES = setOf("offset", "size", "align")
         val PREPROCESSOR_CONTAINERS = setOf(
             "preproc_if", "preproc_else", "preproc_elif", "preproc_ifdef", "preproc_ifndef",

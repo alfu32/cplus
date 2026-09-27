@@ -23,11 +23,11 @@ Points are relative sizing units, not engineer-days. A task closes only with its
 | ID | Work package | Task | Depends on | Status | Points | Acceptance evidence |
 |---|---|---|---|---:|---:|---|
 | CF-01 | boundary | Freeze the supported comptime value/AST boundary | none | DONE | 2 | `SPEC.grammar.md`, spec inventory, fail-closed diagnostics, 62/62 live-source parse gate, 36-node live syntax inventory, and 104/104 grammar corpus gate |
-| CF-02 | boundary | Define structured annotation values and member access | CF-01 | OPEN | 4 | Positive, malformed, nested, and mapped diagnostic fixtures |
-| CF-03 | boundary | Define the bounded iterable protocol | CF-01 | OPEN | 4 | Field/annotation iterables, arbitrary-expression rejection, expansion limits |
+| CF-02 | boundary | Define structured annotation values and member access | CF-01 | DONE | 4 | `annotation.name`, explicit `field.annotationsText`, nested materialization, and mapped unknown-member fixtures |
+| CF-03 | boundary | Define the bounded iterable protocol | CF-01 | DONE | 4 | Type `.fields` and field `.annotations` collections, arbitrary-expression rejection, and 1,024/65,536 expansion limits |
 | CF-04 | scalar | Close target-aware integer conversions beyond the current subset | CF-01 | IN PROGRESS | 4 | `char`, unsigned-width boundaries, casts/conversions, target fixtures |
-| CF-05 | scalar | Close string, UTF-8, wide, and UTF-16/32 boundaries | CF-01 | IN PROGRESS | 4 | Ordinary and prefixed literal materialization or mapped unsupported diagnostics |
-| CF-06 | scalar | Verify scalar diagnostics and source-map spans | CF-04, CF-05 | IN PROGRESS | 2 | Exact origin assertions for width, conversion, and encoding failures |
+| CF-05 | scalar | Close string, UTF-8, wide, and UTF-16/32 boundaries | CF-01 | DONE | 4 | Ordinary strings materialize target-stable UTF-8 bytes; prefixed wide/UTF forms fail mapped |
+| CF-06 | scalar | Verify scalar diagnostics and source-map spans | CF-04, CF-05 | DONE | 2 | Exact origin assertions cover width, conversion, overflow, escape, and encoding failures |
 | CF-07 | declarators | Finish complex pointer/array/function binding shapes | none | IN PROGRESS | 4 | Semantic layer matrix, emitted C, host compile/run, optional MinGW checks |
 | CF-08 | declarators | Finish calling-convention and attribute target evidence | CF-07 | OPEN | 4 | Supported/unsupported ABI table and target compiler fixtures |
 | CF-09 | scope | Resolve comptime lexical scope, shadowing, generated names, and collisions | CF-01, CF-07 | OPEN | 4 | Nested scope/materialization fixtures and mapped ambiguity/cycle errors |
@@ -45,7 +45,7 @@ Points are relative sizing units, not engineer-days. A task closes only with its
 | CF-21 | promotion | Run stdlib/examples compile and test acceptance | CF-10, CF-19, CF-20 | OPEN | 4 | All supported sources compile; tests pass; known excluded fixtures are listed |
 | CF-22 | promotion | Decide promotion, rollback, and legacy removal | CF-21 | OPEN | 2 | Recorded decision, performance/package evidence, removal or retained fallback rationale |
 
-Total: **22 tasks / 86 points**. `CF-01` is baseline evidence, not remaining effort; **84 points remain**, of which 6 are external-host evidence. Points are intentionally not converted to hours until three completed batches provide an observed rate.
+Total: **22 tasks / 86 points**. `CF-01` through `CF-03`, `CF-05`, and `CF-06` are complete; **70 points remain**, of which 6 are external-host evidence. Points are intentionally not converted to hours until three completed batches provide an observed rate.
 
 ## Execution phases
 
@@ -60,7 +60,7 @@ Total: **22 tasks / 86 points**. `CF-01` is baseline evidence, not remaining eff
 | C6 — retirement | CF-19..CF-20 | Each textual lowerer has its own parity and rollback decision | none |
 | C7 — promotion | CF-21..CF-22 | Repository acceptance and promotion decision are recorded | none |
 
-The next local batch is **C1/C2**: `CF-07` complex declarators, then `CF-04`–`CF-06` scalar/encoding boundaries. `CF-10` is submitted to CI when its local fixtures and manifests are ready; it does not block local implementation.
+The next local batch is **C1/C2**: finish `CF-04` wider unsigned/ABI evidence and `CF-07`–`CF-09` declarator/scope boundaries. `CF-10` is submitted to CI when its local fixtures and manifests are ready; it does not block local implementation.
 
 ## Definition of done
 
@@ -89,6 +89,10 @@ Each entry records the task ID, exact evidence, result, and next dependency. Imp
 | 2026-09-27 | CF-04 | `CPlusTargetTest.uses the supported target model for plain char signedness`, `prototypeUsesTargetAwarePlainCharSignedness`, and `prototypeRejectsPlainCharWhenTargetSignednessIsUnknown` pass; supported Linux/macOS/Windows target pairs materialize the expected signedness and unknown targets fail at the declaration type | Plain-`char` signedness is now a bounded target-model case; external compiler ABI confirmation and unsigned values beyond signed-64 remain open |
 | 2026-09-27 | baseline | `git diff --check` | Documentation and implementation changes are whitespace-clean; no parent migration gate was advanced by documentation alone |
 | 2026-09-27 | CF-01 | `./gradlew :parser-tree-sitter:jvmTest --tests cplus.parser.TreeSitterCPlusParserBackendTest.provesLiveCPlusSyntaxNodeInventoryForGrammarProof --no-daemon --max-workers=1`; 62/62 live sources parse without recovery and the exact 36-node inventory matches | Phase-1 grammar proof is frozen in `documentation/spec/SPEC.grammar.md`; phase 2 now classifies grammar/spec/generated-C mismatches without treating the legacy transcoder as authoritative |
+| 2026-09-28 | CF-02 | Structured field annotations materialize through `annotation.name`; `prototypeIteratesReflectedFieldAnnotationsAsMappedNestedComptimeLoop` compiles/runs generated C and retains the annotation-token origin; `prototypeRejectsUnknownStructuredAnnotationMembersAtTheirSourceSpan` reports `CPLUS_COMPTIME_ANNOTATION_PROPERTY` at the member | Structured annotation values and deterministic member access are closed for the current annotation vocabulary |
+| 2026-09-28 | CF-03 | `SPEC.comptime.md` defines only type `.fields` and field `.annotations` as iterable; `prototypeRejectsScalarAnnotationProjectionAsAnIterable`, the existing arbitrary nested-iterable fixture, and the 65,536-item limit fixture enforce mapped rejection and bounds | The bounded iterable protocol is closed; arbitrary C/comptime expressions are explicitly unsupported rather than an unbounded future promise |
+| 2026-09-28 | CF-05 | `prototypeMaterializesComptimeStringsAsTargetStableUtf8Bytes` compiles/runs a direct Unicode string emitted as exact UTF-8 octal bytes; ordinary escape/concatenation tests and mapped `L`/`u8`/`u`/`U` rejection pass | The comptime string encoding contract is closed: ordinary strings are UTF-8; wide and UTF-16/32 prefixed literals are unsupported without implicit coercion |
+| 2026-09-28 | CF-06 | Existing signed-width, cast, function-conversion, overflow, unsupported-escape, and prefixed-string tests assert exact original spans; the new UTF-8 positive fixture compiles/runs | Scalar diagnostic/source-map coverage is closed for the bounded scalar contract; CF-04 remains open only for wider unsigned representation and external ABI evidence |
 
 ## Update protocol
 

@@ -54,8 +54,8 @@ These are the subproject-level tasks used for progress reporting. The detailed a
 |---|---|---|---:|---|
 | FE-SUB-01 | Freeze the parser contract and local baseline | none | DONE | Versioned grammar, normalized AST contract, 104/104 focused grammar gate, 62/62 live-source gate with an exact 36-node inventory, and reproducible generated artifacts |
 | FE-SUB-02 | Close packaged parser evidence | FE-SUB-01 | EXTERNAL | Six-host JNI/resource smoke tests, manifests, checksums, and size report pass in CI |
-| FE-SUB-03 | Finish bounded comptime reflection | FE-SUB-01 | IN PROGRESS | Structured annotations and iterable rules are specified, materialized, bounded, and mapped; unsupported forms fail closed |
-| FE-SUB-04 | Define typed scalar/ABI semantics | FE-SUB-03 | OPEN | Integer widths, promotions, conversions, suffixes, and encoding boundaries have one target-aware contract and tests |
+| FE-SUB-03 | Finish bounded comptime reflection | FE-SUB-01 | DONE | Structured annotations and iterable rules are specified, materialized, bounded, and mapped; unsupported forms fail closed |
+| FE-SUB-04 | Define typed scalar/ABI semantics | FE-SUB-03 | IN PROGRESS | Integer widths, promotions, conversions, suffixes, and encoding boundaries have one target-aware contract and tests |
 | FE-SUB-05 | Finish declarator and scope resolution | FE-SUB-01 | IN PROGRESS | Complex declarators, calling conventions, lexical comptime scope, and mapped ambiguity/cycle diagnostics are covered |
 | FE-SUB-06 | Establish the supported compiler/ABI matrix | FE-SUB-05 | OPEN | Declared host/target combinations compile, link, run, or are explicitly unsupported with diagnostics |
 | FE-SUB-07 | Build the finite differential corpus | FE-SUB-03, FE-SUB-05 | OPEN | Accepted overlap compares output, options, runtime, maps, and diagnostics; AST-only forms have normative fixtures |
@@ -67,7 +67,7 @@ Work on one queue item at a time unless it is marked external. Update this queue
 
 1. `P6-12-E`: finish the remaining complex declarator cases and target-specific evidence.
 2. `P4-15-B` / `P4-15-C`: continue the typed integer model with casts, parameter conversions, and the remaining literal/ABI boundaries after the completed declaration, promotion, and shift slices.
-3. `P4-14-D` / `P4-14-E`: implement structured annotation values and the bounded iterable protocol.
+3. `P5-10-D` / `P5-10-E`: close comptime lexical scope and mapped ambiguity/cycle diagnostics.
 4. `P4-16-A` through `P4-16-D`: freeze the normative and legacy-overlap corpus.
 5. `P6-09`, `P6-10`, and `P6-11`: establish sequencing parity, differential reports, and independent lowerer retirement.
 
@@ -82,7 +82,7 @@ Every update records: date, task/subcase ID, source fixture or implementation ar
 | Subproject | Parent rows | Status | Next task | Exit evidence |
 |---|---|---:|---|---|
 | SP-2 packaged parser matrix | P2-07, P2-08 | EXTERNAL | Run the six-host JNI/resource jobs | Six host logs, manifests, checksums, and size report |
-| SP-4.1 aggregate comptime reflection | P4-14 | IN PROGRESS | Define structured annotations and iterable boundaries | Shared ABI layout model, materialization, mapped failures, and host C compile/run |
+| SP-4.1 aggregate comptime reflection | P4-14 | DONE | Maintain the frozen bounded reflection contract | Shared ABI layout model, structured annotation materialization, bounded collections, mapped failures, and host C compile/run |
 | SP-4.2 scalar ABI and encodings | P4-15 | OPEN | Specify width/promotion rules | Target-width fixtures and encoding boundary diagnostics |
 | SP-4.3 normative and differential corpus | P4-16 | OPEN | Inventory versioned specification examples | Frozen expected-output/diagnostic corpus and comparison report |
 | SP-4.4 AST comptime migration | P4-17 | OPEN | Inventory scanner entry points | AST/legacy selection report and fixed-point parity |
@@ -128,15 +128,15 @@ All six hosts load the packaged parser, parse the smoke fixture without recovery
 |---|---|---:|---|
 | SP41-01 | Specify aggregate field order, alignment, padding, and offset semantics for the supported standard-layout subset | DONE | `SPEC.comptime.md`; nested/padded layout fixture |
 | SP41-02 | Expose aggregate `size`, `align`, and field offsets through one shared target ABI model | DONE | `TreeSitterAbiLayout.kt`; scalar and field-loop materialization tests |
-| SP41-03 | Materialize structured annotation values with deterministic member access | OPEN | Positive and malformed annotation fixtures |
-| SP41-04 | Define the iterable protocol for reflected collections and arbitrary expressions | OPEN | Evaluator tests and explicit unsupported diagnostics |
+| SP41-03 | Materialize structured annotation values with deterministic member access | DONE | `annotation.name`, annotation-token source origins, and mapped unknown-member diagnostics |
+| SP41-04 | Define the iterable protocol for reflected collections and arbitrary expressions | DONE | Only type `.fields` and field `.annotations` are iterable; scalar/arbitrary forms fail mapped and all expansion limits apply |
 | SP41-05 | Apply total-expansion and nested-iteration limits to all new collections | DONE | Existing nested reflected-loop limit/source-map fixtures |
 | SP41-06 | Compile and run generated aggregates with padding-sensitive assertions | DONE | Aggregate size/alignment and field layout C11 compile/run fixtures |
 | SP41-07 | Reject unsupported aggregate layouts and reflected iterable shapes with original spans | DONE | `prototypeRejectsUnsupportedAggregateLayoutShapesWithMappedDiagnostics`, packed/unknown-target, unsupported-iterable, and expansion-limit fixtures |
 
 ### Existing bounded evidence
 
-Primitive/pointer/fixed-array reflection, field/annotation iteration, bitfields, widths, mapped field origins, and the standard-layout aggregate subset are covered. The shared ABI model handles scalar, pointer, nested-struct, and fixed-array fields on x86_64/arm64 Linux, Windows, and macOS targets. Packed/aligned layouts, unions, bitfields, flexible arrays, incomplete fields, structured annotations, and arbitrary iterable expressions remain outside this subproject's completed boundary.
+Primitive/pointer/fixed-array reflection, field/annotation iteration, bitfields, widths, mapped field origins, structured annotation names, and the standard-layout aggregate subset are covered. The shared ABI model handles scalar, pointer, nested-struct, and fixed-array fields on x86_64/arm64 Linux, Windows, and macOS targets. Packed/aligned layouts, unions, bitfields, flexible arrays, and incomplete fields remain unsupported. Arbitrary iterable expressions are outside the language-version contract and fail at their iterable span; they are not unfinished implicit behavior.
 
 ### Definition of done
 
@@ -160,12 +160,12 @@ The specification defines the layout contract; every supported aggregate value h
 | SP42-03-A | Select long-family literal suffixes using each target ABI's `long` width | DONE | `prototypeSelectsLongIntegerLiteralSuffixesPerTargetAbi` covers `L`, `UL`/`LU`, `LL`, and `ULL`/`LLU` on Linux/macOS x86_64/arm64 models and Windows x86_64 |
 | SP42-03 | Verify width/suffix behavior across target ABIs | OPEN | Linux, macOS, and Windows target fixtures |
 | SP42-04-A | Reject prefixed wide/UTF string literals with mapped encoding-boundary diagnostics | DONE | `prototypeRejectsUnsupportedPrefixedComptimeStringLiteralsAtTheirSourceSpans` covers `L`, `u8`, `u`, and `U` prefixes |
-| SP42-04 | Define ordinary, UTF-8, wide, and UTF-16/32 literal boundaries | OPEN | Encoding/rune materialization fixtures |
-| SP42-05 | Preserve source maps for width, encoding, and conversion errors | OPEN | Mapped diagnostic assertions |
+| SP42-04 | Define ordinary, UTF-8, wide, and UTF-16/32 literal boundaries | DONE | Ordinary text emits exact UTF-8 bytes; wide/UTF-prefixed forms are mapped-unsupported |
+| SP42-05 | Preserve source maps for width, encoding, and conversion errors | DONE | Width, cast/conversion, overflow, escape, and prefixed-literal tests assert exact original spans |
 
 ### Existing bounded evidence
 
-Checked signed-64 literals/operators, short-circuiting, division boundaries, shifts, and selected string interpolation are implemented. They intentionally do not define the complete C ABI or encoding model.
+Checked signed-64 literals/operators, short-circuiting, division boundaries, shifts, and string interpolation are implemented. Ordinary comptime strings have a target-independent UTF-8 byte materialization; wide and UTF-16/32 values are explicitly unsupported. Wider unsigned integer representation and external ABI evidence remain open.
 
 ### Definition of done
 
@@ -377,6 +377,9 @@ All supported receiver expressions have a resolved type and exact C lowering; or
 | 2026-09-27 | Revalidated the complete repository after the declarator batch | `./gradlew test --no-daemon --max-workers=1` passes in 2m13s; compiler, CLI, parser JVM, grammar, and highlighting gates are green with 104/104 grammar parses | The declarator batch is regression-safe; P6-12-E/SP64-05 remains open and the next local queue item is the target-aware scalar boundary |
 | 2026-09-27 | Established the phase-1 grammar proof from live sources | `SPEC.grammar.md` records the C-plus extension grammar; `provesLiveCPlusSyntaxNodeInventoryForGrammarProof` parses all 62 `stdlib/` and `examples/` sources without recovery and asserts the exact 36 live `cplus_*` node kinds; the focused grammar corpus remains 104/104 | Phase 1 is now a versioned syntax contract. Phase 2 will classify each mismatch as documentation, grammar, AST, lowering, or intentional unsupported behavior and require generated-C evidence before changing semantics |
 | 2026-09-27 | Closed the supported plain-`char` scalar-model slice | `./gradlew :compiler:test --tests cplus.CPlusTargetTest` and the two focused Tree-sitter scalar tests pass; Linux arm64 is modeled unsigned, supported Linux x86_64/macOS/Windows pairs signed, and unknown targets fail with a mapped diagnostic | SP-4.2 gains a bounded target-model case; the parent remains open for external ABI confirmation, wider unsigned materialization, and encoding semantics |
+| 2026-09-28 | Materialized structured annotation reflection | `prototypeIteratesReflectedFieldAnnotationsAsMappedNestedComptimeLoop` uses `annotation.name`, compiles/runs generated C, and preserves token origins; `prototypeRejectsUnknownStructuredAnnotationMembersAtTheirSourceSpan` verifies the mapped member diagnostic | SP41-03, P4-14-D, and CF-02 are DONE |
+| 2026-09-28 | Froze the bounded iterable protocol | `SPEC.comptime.md` limits iteration to type `.fields` and field `.annotations`; `prototypeRejectsScalarAnnotationProjectionAsAnIterable`, the arbitrary nested-iterable fixture, and expansion-limit fixtures pass | SP41-04, P4-14-E, CF-03, FE-SUB-03, SP-4.1, and P4-14 are DONE; arbitrary expressions are explicitly unsupported |
+| 2026-09-28 | Closed comptime string encoding and mapped scalar diagnostics | `prototypeMaterializesComptimeStringsAsTargetStableUtf8Bytes` emits `hé🌍` as exact UTF-8 octal bytes and compiles/runs; ordinary escape/concatenation and mapped prefixed-literal tests pass; existing width/conversion failures assert exact spans | SP42-04, SP42-05, CF-05, and CF-06 are DONE; SP-4.2 remains active only for wider unsigned integer representation and external ABI evidence |
 
 ### Next update protocol
 
