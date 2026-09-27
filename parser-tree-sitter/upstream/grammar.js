@@ -43,6 +43,13 @@ module.exports = grammar({
     [$.type_specifier, $.expression],
     [$.type_specifier, $.expression, $.macro_type_specifier],
     [$.type_specifier, $.macro_type_specifier],
+    [$.cplus_block_type_declaration, $.statement],
+    [$.cplus_block_type_declaration, $.expression],
+    [$.cplus_block_type_declaration, $.type_specifier, $.expression, $.macro_type_specifier],
+    [$.cplus_block_type_declaration, $.type_specifier, $.expression],
+    [$.cplus_block_type_declaration, $.type_specifier],
+    [$.cplus_block_type_declaration, $.type_specifier, $.cplus_interpolated_identifier],
+    [$.cplus_block_type_declaration, $.type_specifier, $.macro_type_specifier],
     [$.cplus_comptime_invocation, $.expression, $.macro_type_specifier],
     [$.cplus_comptime_invocation, $.expression],
     [$.cplus_comptime_invocation, $.type_specifier],
@@ -110,6 +117,7 @@ module.exports = grammar({
       $.function_definition,
       alias($._old_style_function_definition, $.function_definition),
       $.linkage_specification,
+      alias($.cplus_block_type_declaration, $.declaration),
       $.declaration,
       $._top_level_statement,
       $.attributed_statement,
@@ -135,6 +143,7 @@ module.exports = grammar({
       $.function_definition,
       alias($._old_style_function_definition, $.function_definition),
       $.linkage_specification,
+      alias($.cplus_block_type_declaration, $.declaration),
       $.declaration,
       $.statement,
       $.attributed_statement,
@@ -301,6 +310,20 @@ module.exports = grammar({
       ))),
       ';',
     ),
+
+    // A block-scope typedef-name declaration can otherwise be accepted as a
+    // multiplication expression because Tree-sitter does not perform C's
+    // typedef-name symbol-table disambiguation during parsing.
+    cplus_block_type_declaration: $ => prec.dynamic(1000, seq(
+      repeat($._declaration_modifiers),
+      field('type', $._type_identifier),
+      repeat($._declaration_modifiers),
+      commaSep1(field('declarator', choice(
+        $._declaration_declarator,
+        $.init_declarator,
+      ))),
+      ';',
+    )),
 
     type_definition: $ => seq(
       optional('__extension__'),

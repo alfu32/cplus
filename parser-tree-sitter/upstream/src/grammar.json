@@ -31,6 +31,15 @@
           "name": "linkage_specification"
         },
         {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "cplus_block_type_declaration"
+          },
+          "named": true,
+          "value": "declaration"
+        },
+        {
           "type": "SYMBOL",
           "name": "declaration"
         },
@@ -127,6 +136,15 @@
         {
           "type": "SYMBOL",
           "name": "linkage_specification"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "cplus_block_type_declaration"
+          },
+          "named": true,
+          "value": "declaration"
         },
         {
           "type": "SYMBOL",
@@ -3055,6 +3073,92 @@
           "value": ";"
         }
       ]
+    },
+    "cplus_block_type_declaration": {
+      "type": "PREC_DYNAMIC",
+      "value": 1000,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "REPEAT",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_declaration_modifiers"
+            }
+          },
+          {
+            "type": "FIELD",
+            "name": "type",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_type_identifier"
+            }
+          },
+          {
+            "type": "REPEAT",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_declaration_modifiers"
+            }
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "declarator",
+                "content": {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "_declaration_declarator"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "init_declarator"
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "REPEAT",
+                "content": {
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "STRING",
+                      "value": ","
+                    },
+                    {
+                      "type": "FIELD",
+                      "name": "declarator",
+                      "content": {
+                        "type": "CHOICE",
+                        "members": [
+                          {
+                            "type": "SYMBOL",
+                            "name": "_declaration_declarator"
+                          },
+                          {
+                            "type": "SYMBOL",
+                            "name": "init_declarator"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "type": "STRING",
+            "value": ";"
+          }
+        ]
+      }
     },
     "type_definition": {
       "type": "SEQ",
@@ -11752,6 +11856,39 @@
       "macro_type_specifier"
     ],
     [
+      "type_specifier",
+      "macro_type_specifier"
+    ],
+    [
+      "cplus_block_type_declaration",
+      "statement"
+    ],
+    [
+      "cplus_block_type_declaration",
+      "expression"
+    ],
+    [
+      "cplus_block_type_declaration",
+      "type_specifier",
+      "expression",
+      "macro_type_specifier"
+    ],
+    [
+      "cplus_block_type_declaration",
+      "type_specifier",
+      "expression"
+    ],
+    [
+      "cplus_block_type_declaration",
+      "type_specifier"
+    ],
+    [
+      "cplus_block_type_declaration",
+      "type_specifier",
+      "cplus_interpolated_identifier"
+    ],
+    [
+      "cplus_block_type_declaration",
       "type_specifier",
       "macro_type_specifier"
     ],
