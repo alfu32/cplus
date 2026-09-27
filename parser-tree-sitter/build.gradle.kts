@@ -5,7 +5,13 @@ plugins {
 
 val grammarDirectory = layout.projectDirectory.dir("upstream")
 val generatedDirectory = layout.buildDirectory.dir("tree-sitter-generated")
+val isWindows = System.getProperty("os.name")
+    .lowercase()
+    .contains("windows")
 
+val treeSitterExecutable =
+    if (isWindows) "tree-sitter.cmd"
+    else "tree-sitter"
 grammar {
     baseDir = grammarDirectory.asFile
     grammarName = "c"
@@ -137,8 +143,20 @@ val generateTreeSitterParser = tasks.register<Exec>("generateTreeSitterParser") 
     group = "build"
     description = "Regenerates the pinned C-plus Tree-sitter parser into build output."
     workingDir(grammarDirectory)
-    commandLine("tree-sitter", "generate", "--abi", "15", "-o", generatedDirectory.get().asFile.absolutePath)
-    inputs.files(grammarDirectory.file("grammar.js"), grammarDirectory.file("tree-sitter.json"))
+
+    commandLine(
+        treeSitterExecutable,
+        "generate",
+        "--abi",
+        "15",
+        "-o",
+        generatedDirectory.get().asFile.absolutePath
+    )
+
+    inputs.files(
+        grammarDirectory.file("grammar.js"),
+        grammarDirectory.file("tree-sitter.json")
+    )
     outputs.dir(generatedDirectory)
 }
 
@@ -163,7 +181,9 @@ val testTreeSitterGrammar = tasks.register<Exec>("testTreeSitterGrammar") {
     group = "verification"
     description = "Runs the complete C and C-plus Tree-sitter corpus."
     workingDir(grammarDirectory)
-    commandLine("tree-sitter", "test")
+
+    commandLine(treeSitterExecutable, "test")
+
     dependsOn(verifyTreeSitterParser)
 }
 
