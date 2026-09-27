@@ -127,6 +127,33 @@ class CPlusStructMethodLoweringPass {
             it.syntaxKind in setOf("parameter_declaration", "cplus_parameter_declaration", "variadic_parameter")
         }
         val replacements = mutableListOf<RangeReplacement>()
+        val declaratorAttributes = declarator.descendantsAndSelf()
+            .filter { it.syntaxKind == "attribute_specifier" }
+            .sortedBy { it.span.startOffset }
+            .toList()
+        if (declaratorAttributes.isNotEmpty()) {
+            // C-plus permits a GNU attribute after a complete declarator. For a
+            // function definition, GCC requires the attribute before the
+            // declarator (for example, `int __attribute__((noinline)) (*f())(int)`).
+            // Keep the annotation and its source mapping, but move only attributes
+            // owned by this declarator; declaration-level attributes remain where
+            // the author placed them.
+            val attributeText = declaratorAttributes.joinToString(" ") { attribute ->
+                source.text.substring(attribute.span.startOffset, attribute.span.endOffset)
+            }
+            replacements += RangeReplacement(
+                declarator.span.startOffset,
+                declarator.span.startOffset,
+                MappedText.generated("$attributeText ", source.originAt(declarator.span.startOffset))
+            )
+            declaratorAttributes.forEach { attribute ->
+                replacements += RangeReplacement(
+                    attribute.span.startOffset,
+                    attribute.span.endOffset,
+                    MappedText.generated("", source.originAt(attribute.span.startOffset))
+                )
+            }
+        }
         replacements += RangeReplacement(
             name.span.startOffset,
             name.span.endOffset,

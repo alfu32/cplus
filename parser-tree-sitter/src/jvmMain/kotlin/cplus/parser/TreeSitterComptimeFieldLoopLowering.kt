@@ -12,11 +12,21 @@ data class TreeSitterComptimeFieldLoopResult(
 )
 
 /** Expands the bounded `@for field in Struct.fields` reflection form using syntax-tree metadata. */
-class TreeSitterComptimeFieldLoopLowering {
+class TreeSitterComptimeFieldLoopLowering(
+    targetOs: String = cplus.CPlusTarget.hostOs(),
+    targetArch: String = cplus.CPlusTarget.hostArch()
+) {
+    private val targetOs = cplus.CPlusTarget.normalizeOs(targetOs)
+    private val targetArch = cplus.CPlusTarget.normalizeArch(targetArch)
+
     fun lower(parsed: CPlusParseResult, source: MappedText): TreeSitterComptimeFieldLoopResult {
         require(parsed.source.text == source.text) { "AST and mapped source must contain the same snapshot text" }
 
-        val structures = reflectedStructs(parsed.root, parsed.source.text)
+        val structures = reflectedStructs(
+            parsed.root,
+            parsed.source.text,
+            computeTreeSitterAbiAggregateLayouts(parsed.root, parsed.source.text, targetOs, targetArch)
+        )
         val loops = mutableListOf<Pair<CPlusSyntaxNode, Boolean>>()
         fun collect(
             node: CPlusSyntaxNode,
@@ -222,7 +232,13 @@ class TreeSitterComptimeFieldLoopLowering {
                 if (field == null || property == null || property !in REFLECTED_FIELD_PROPERTIES) {
                     diagnostics += diagnostic(
                         "CPLUS_COMPTIME_REFLECTION_PROPERTY",
-                        "field reflection supports `.name`, `.type`, `.annotations`, `.flag`, and `.width` in this prototype",
+                        "field reflection supports `.name`, `.type`, `.annotations`, `.flag`, `.width`, `.offset`, `.size`, and `.align` in this prototype",
+                        propertyNode?.span ?: reference.span
+                    )
+                } else if (property in LAYOUT_FIELD_PROPERTIES && field.layout == null) {
+                    diagnostics += diagnostic(
+                        "CPLUS_COMPTIME_REFLECTION_LAYOUT",
+                        "${field.name.ifBlank { "<anonymous>" }}.$property is unavailable for target ABI $targetArch-$targetOs",
                         propertyNode?.span ?: reference.span
                     )
                 } else {
@@ -289,7 +305,11 @@ class TreeSitterComptimeFieldLoopLowering {
         else -> error("unsupported reflected property $property")
     }
 
-    private fun reflectedStructs(root: CPlusSyntaxNode, text: String): Map<String, ReflectedStructure> {
+    private fun reflectedStructs(
+        root: CPlusSyntaxNode,
+        text: String,
+        layouts: Map<String, TreeSitterAbiAggregateLayout>
+    ): Map<String, ReflectedStructure> {
         val result = linkedMapOf<String, ReflectedStructure>()
         val activeNodes = activeDescendants(root).toList()
         val typeDefinitions = activeNodes.filter { it.kind == "type_definition" }
@@ -305,11 +325,8 @@ class TreeSitterComptimeFieldLoopLowering {
                 if (parsedFields == null) invalidFieldSpan = invalidFieldSpan ?: fieldDeclaration.span
                 else fields += parsedFields
             }
-            val metadata = ReflectedStructure(fields, invalidFieldSpan)
             val tag = structure.children.firstOrNull { it.fieldName == "name" }
                 ?.let { textOf(it, text) }
-            if (tag != null) result[tag] = metadata
-
             val typedef = typeDefinitions.firstOrNull {
                 it.kind == "type_definition" &&
                     it.span.startOffset <= structure.span.startOffset && it.span.endOffset >= structure.span.endOffset
@@ -317,6 +334,12 @@ class TreeSitterComptimeFieldLoopLowering {
             val alias = typedef?.children?.firstOrNull { it.fieldName == "declarator" }
                 ?.let { descendants(it).firstOrNull { child -> child.kind in TYPE_NAME_NODES } }
                 ?.let { textOf(it, text) }
+            val layout = (tag?.let { layouts[it] } ?: alias?.let { layouts[it] })
+            val fieldsWithLayout = fields.map { field ->
+                field.copy(layout = layout?.fields?.firstOrNull { it.name == field.name })
+            }
+            val metadata = ReflectedStructure(fieldsWithLayout, invalidFieldSpan)
+            if (tag != null) result[tag] = metadata
             if (alias != null) result[alias] = metadata
         }
         return result
@@ -465,7 +488,8 @@ class TreeSitterComptimeFieldLoopLowering {
         val typeSpan: cplus.SourceSpan,
         val annotationSpan: cplus.SourceSpan?,
         val bitWidth: String? = null,
-        val bitWidthSpan: cplus.SourceSpan? = null
+        val bitWidthSpan: cplus.SourceSpan? = null,
+        val layout: TreeSitterAbiFieldLayout? = null
     )
 
     private data class ReflectedAnnotation(val name: String, val span: cplus.SourceSpan)
@@ -499,7 +523,8 @@ class TreeSitterComptimeFieldLoopLowering {
         )
         val TYPE_NAME_NODES = setOf("identifier", "type_identifier", "primitive_type")
         val FIELD_NAME_NODES = setOf("identifier", "field_identifier", "type_identifier")
-        val REFLECTED_FIELD_PROPERTIES = setOf("name", "type", "annotations", "flag", "width")
+        val REFLECTED_FIELD_PROPERTIES = setOf("name", "type", "annotations", "flag", "width", "offset", "size", "align")
+        val LAYOUT_FIELD_PROPERTIES = setOf("offset", "size", "align")
         val PREPROCESSOR_CONTAINERS = setOf(
             "preproc_if", "preproc_else", "preproc_elif", "preproc_ifdef", "preproc_ifndef",
             "preproc_elifdef", "preproc_elifndef"

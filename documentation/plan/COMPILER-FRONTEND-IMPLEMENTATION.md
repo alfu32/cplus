@@ -18,6 +18,193 @@ Specification changes are not an automatic response to a failing test. First cla
 
 Phase work is reported against its gate ID and evidence class. Do not start unrelated IDE polish while a compiler gate is active; Phase 8 editor migration has its own bounded acceptance checks. The legacy compiler remains production-authoritative throughout Phases 1–8.
 
+## Finite implementation case ledger
+
+The phase descriptions are gates; this ledger is the measurable work breakdown behind them. A **case** is one independently observable language/compiler invariant with a fixture, an expected result or diagnostic, and a repeatable acceptance command. It is not every possible Cartesian combination of syntax, types, targets, and pass order. A newly discovered defect is added under an existing case unless it introduces a new invariant or evidence class. This prevents the target from moving every time a spelling variant is found.
+
+Status meanings:
+
+- `DONE`: the bounded case has passing repository evidence.
+- `IN PROGRESS`: implementation or acceptance evidence is incomplete.
+- `OPEN`: planned work remains locally.
+- `OPEN-EXTERNAL`: local configuration is present, but only CI or another host can close it.
+
+Effort is deliberately coarse and relative: `S`, `M`, `L`, and `XL` carry 1, 2, 4, and 8 planning points. They are not promises of calendar time; related cases can share implementation and CI work. Track velocity as weighted points per week, not by raw checklist count. Convert points to hours only after recording actual time for several completed rows.
+
+### Phase 2 — grammar and runtime cases
+
+| ID | Case / acceptance evidence | Status | Size |
+|---|---|---:|---:|
+| P2-01 | Pin Tree-sitter grammar/license and regenerate artifacts reproducibly | DONE | S |
+| P2-02 | Parse the repository corpus without recovery (`96/96` local corpus parses) | DONE | M |
+| P2-03 | Parse C-plus methods, comptime, defer, tests, annotations, and recovery nodes | DONE | M |
+| P2-04 | Compile generated parser artifacts and pass the stable named-node audit | DONE | M |
+| P2-05 | Load the selected parser backend through JVM integration on Linux x86_64 | DONE | S |
+| P2-06 | Assemble native parser/JNI resources for the six supported host combinations | DONE | M |
+| P2-07 | Load packaged JNI resources on all six hosts in CI | OPEN-EXTERNAL | L |
+| P2-08 | Verify six-host package reproducibility and size/resource reports in CI | OPEN-EXTERNAL | M |
+| P2-09 | Cover malformed/recovery nodes and parser-failure diagnostics | DONE | S |
+| P2-10 | Preserve UTF-16, supplementary-Unicode, and CRLF source coordinates | DONE | S |
+| P2-11 | Parse and adapt block-scope function-pointer typedef declarations | DONE | M |
+| P2-12 | Keep parser selection, shadow mode, and legacy fallback non-invasive | DONE | M |
+
+**Phase 2 count: 10 done, 0 in progress, 2 externally open, 12 planned.**
+
+### Phase 4 — imports and comptime cases
+
+| ID | Case / acceptance evidence | Status | Size |
+|---|---|---:|---:|
+| P4-01 | Resolve project, module, stdlib, relative, and extensionless import roots | DONE | M |
+| P4-02 | Order dependencies and diagnose missing imports, cycles, and mapped failures | DONE | M |
+| P4-03 | Re-resolve generated imports to a fixed point with no-progress/output limits | DONE | L |
+| P4-04 | Select supported OS branches before resolving imports and flags | DONE | M |
+| P4-05 | Collect, group, deduplicate, and remove compile flags in source order | DONE | S |
+| P4-06 | Evaluate bounded integer/bool expressions, operators, short-circuiting, and overflow | DONE | L |
+| P4-07 | Evaluate pure scalar comptime functions, arity, recursion, and scope rules | DONE | M |
+| P4-08 | Materialize supported strings, concatenation, interpolation, and escape boundaries | DONE | M |
+| P4-09 | Materialize type, function, variable, and code entities, then reparse them | DONE | L |
+| P4-10 | Reflect fields, annotations, bitfields, widths, and nested lexical loops | DONE | L |
+| P4-11 | Reflect bounded type size/alignment and abstract pointer/array/function types | DONE | M |
+| P4-12 | Materialize scalars before extracting root and imported test fixtures | DONE | M |
+| P4-13 | Preserve origins and diagnostics across repeated materialization passes | DONE | L |
+| P4-14 | Define aggregate layout, structured annotation values, and arbitrary iterables | OPEN | L |
+| P4-15 | Define C integer widths, promotions, conversions, and complete encoding behavior | OPEN | L |
+| P4-16 | Finish the normative-example/boundary inventory and finite legacy overlap corpus | OPEN | L |
+| P4-17 | Retire scanner-based comptime parsing after P4-14 through P4-16 close | OPEN | XL |
+
+**Phase 4 count: 13 done, 0 in progress, 4 open, 17 planned.** The 13 completed rows are bounded prototype slices; they do not claim that the entire comptime language is complete.
+
+### Phase 5 — resolution and semantic cases
+
+| ID | Case / acceptance evidence | Status | Size |
+|---|---|---:|---:|
+| P5-01 | Index types, fields, functions, methods, access, ownership, and mutation metadata | DONE | M |
+| P5-02 | Resolve value, pointer, explicit, static, parenthesized, and chained receivers | DONE | L |
+| P5-03 | Resolve globals, block scope, `for` scope, and shadowing without leakage | DONE | M |
+| P5-04 | Preserve typedef chains, qualifiers, pointer aliases, and anonymous composites | DONE | M |
+| P5-05 | Preserve array/pointer/function declarator order, indexing, and array decay | DONE | L |
+| P5-06 | Index function-pointer typedefs, nested callbacks, and callable return composition | DONE | L |
+| P5-07 | Propagate callable returns through variables, arrays, fields, and typedef fields | DONE | M |
+| P5-08 | Diagnose invalid receiver operators, shapes, static/instance mismatches, and spans | DONE | M |
+| P5-09 | Resolve comptime generator symbol, arity, scope, and collision rules | DONE | L |
+| P5-10 | Complete deeper qualified declarators and comptime name/scope resolution | OPEN | L |
+| P5-11 | Verify C compatibility across supported target compilers and dialects | OPEN | XL |
+| P5-12 | Delegate unsupported C semantic checks to the selected compiler | DONE | M |
+
+**Phase 5 count: 10 done, 0 in progress, 2 open, 12 planned.** “Done” here means the supported semantic slice is indexed and tested; it does not mean C-plus replaces the C compiler’s type system.
+
+### Phase 6 — runtime lowering and migration cases
+
+| ID | Case / acceptance evidence | Status | Size |
+|---|---|---:|---:|
+| P6-01 | Apply mapped edits through an ordered runner with reparse and revision checks | DONE | L |
+| P6-02 | Lower nested `defer` blocks with function-wide reverse ordering | DONE | M |
+| P6-03 | Extract struct methods and lower value, pointer, static, and nested receivers | DONE | L |
+| P6-04 | Lower `throws`, checked calls, nested `try`/`catch`, and explicit error pointers | DONE | L |
+| P6-05 | Extract AST tests/assertions and compile/run their generated harness | DONE | L |
+| P6-06 | Verify pass interactions across imports, comptime, tests, receivers, `try`, and `defer` | DONE | L |
+| P6-07 | Emit terminal C tokens, preserve origins, and fail closed on recovered C-plus nodes | DONE | L |
+| P6-08 | Run conservative allocation/side-effect flow through branches, loops, and calls | DONE | XL |
+| P6-09 | Model broader C expression sequencing and unsequenced operand side effects | OPEN | XL |
+| P6-10 | Compare each migrated pass with legacy behavior, output, maps, and failures | OPEN | XL |
+| P6-11 | Retire textual lowerers independently after their own corpus gates | OPEN | XL |
+| P6-12 | Complete broad receiver inference and complex/qualified method declarators | IN PROGRESS | L |
+
+**Phase 6 count: 8 done, 1 in progress, 3 open, 12 planned.** The current receiver work is P6-12, not a new unbounded phase; new declarator shapes belong under that row unless they reveal a different invariant.
+
+### Current measurable position
+
+Across Phases 2 and 4–6 there are **53 planned cases: 41 done, 1 in progress, and 11 open**. The remaining work is **66 weighted case points** before counting Phase 7 promotion and Phase 8 editor acceptance. Of the 11 open cases, two are external six-host CI evidence, four are migration/legacy-differential gates, and five are defined language or semantic boundaries.
+
+The previous absolute estimate of 53–115 engineer-days was not evidence-based and is withdrawn. The 66 parent-row points are useful for phase-level status only; they are not a time estimate. After decomposition, the execution backlog is tracked by the 59 subcases below, using a separate subcase-point scale. No absolute hour forecast is currently claimed. Record elapsed work for the next three completed subcases, then publish a rolling observed rate and a range that excludes CI queue/calendar latency.
+
+Progress is now recorded by changing one row only when its named acceptance evidence passes. The next execution order is: P6-12 qualified-declarator coverage, P4-14/P4-15 semantic boundaries, P4-16 overlap inventory, P6-09/P6-10 differentials, then P4-17/P6-11 retirement decisions. Phase 2’s P2-07/P2-08 remain CI-owned and can close independently.
+
+## Open work-package decomposition
+
+The rows above are phase gates, not sufficiently small implementation tasks. The following subcases are the execution backlog for every non-done row. A parent row closes only when all of its subcases have evidence. Subcase points use the same relative scale as the parent rows and will be calibrated against actual elapsed work after each completed batch; they are not engineer-day estimates.
+
+### Phase 2 external packages
+
+| ID | Acceptance unit | Status | Points |
+|---|---|---:|---:|
+| P2-07-A | Linux x86_64 packaged JNI load and parser smoke test | OPEN-EXTERNAL | 2 |
+| P2-07-B | Linux arm64 packaged JNI load and parser smoke test | OPEN-EXTERNAL | 2 |
+| P2-07-C | macOS x86_64 packaged JNI load and parser smoke test | OPEN-EXTERNAL | 2 |
+| P2-07-D | macOS arm64 packaged JNI load and parser smoke test | OPEN-EXTERNAL | 2 |
+| P2-07-E | Windows x86_64 packaged JNI load and parser smoke test | OPEN-EXTERNAL | 2 |
+| P2-07-F | Windows arm64 packaged JNI load and parser smoke test | OPEN-EXTERNAL | 2 |
+| P2-08-A | Compare packaged native resource manifests and detect duplicate payloads | OPEN-EXTERNAL | 2 |
+| P2-08-B | Record reproducible package sizes and generated-parser checksums | OPEN-EXTERNAL | 2 |
+
+### Phase 4 comptime boundaries and retirement
+
+| ID | Acceptance unit | Status | Points |
+|---|---|---:|---:|
+| P4-14-A | Primitive, pointer, fixed-array, and named-field reflection | DONE | 2 |
+| P4-14-B | Nested field/annotation iteration, bitfields, widths, and mapped origins | DONE | 4 |
+| P4-14-C | C-compatible aggregate size, alignment, offsets, and padding | OPEN | 4 |
+| P4-14-D | Structured annotation values with deterministic field access | OPEN | 4 |
+| P4-14-E | Arbitrary iterable expressions with bounded expansion | OPEN | 4 |
+| P4-14-F | Unsupported iterable/layout diagnostics and expansion-budget tests | OPEN | 2 |
+| P4-15-A | Checked signed-64 scalar literals/operators and overflow boundaries | DONE | 4 |
+| P4-15-B | C integer widths, promotions, and comparison result rules | OPEN | 4 |
+| P4-15-C | Implicit conversions, casts, suffixes, and target ABI differences | OPEN | 4 |
+| P4-15-D | Complete string/encoding and wide/UTF literal boundary behavior | OPEN | 4 |
+| P4-15-E | Mapped diagnostics for scalar type, width, and conversion failures | OPEN | 2 |
+| P4-16-A | Inventory every normative comptime example and expected materialization | OPEN | 2 |
+| P4-16-B | Add malformed, unsupported, limit, and source-map boundary fixtures | OPEN | 4 |
+| P4-16-C | Freeze the finite legacy-overlap corpus and compare output/options/runtime | OPEN | 4 |
+| P4-16-D | Verify differential failure locations and document intentional AST-only cases | OPEN | 2 |
+| P4-17-A | Inventory remaining scanner/evaluator entry points by comptime feature | OPEN | 2 |
+| P4-17-B | Move imports, conditions, flags, and scalar forms behind AST inputs | OPEN | 4 |
+| P4-17-C | Move entity materialization and fixed-point expansion behind AST inputs | OPEN | 4 |
+| P4-17-D | Keep legacy fallback selectable while comparing migrated fixtures | OPEN | 4 |
+| P4-17-E | Remove the scanner only after the Phase 4 gate and rollback evidence close | OPEN | 4 |
+
+### Phase 5 semantic model
+
+| ID | Acceptance unit | Status | Points |
+|---|---|---:|---:|
+| P5-10-A | Qualified aliases, `restrict` pointers, and ordinary nested callback metadata | DONE | 2 |
+| P5-10-B | Calling conventions and less-common qualified declarators after the bounded GNU-attribute slice | OPEN | 4 |
+| P5-10-C | Nested pointer/array/function declarators with exact binding order | OPEN | 4 |
+| P5-10-D | Comptime name lookup, lexical scope, shadowing, and generated symbols | OPEN | 4 |
+| P5-10-E | Ambiguity, cycle, unsupported-shape, and mapped semantic diagnostics | OPEN | 2 |
+| P5-11-A | Local `cc`/`gcc`/`clang` compatibility matrix for the accepted C subset | DONE | 2 |
+| P5-11-B | Supported host/target compiler and ABI matrix | OPEN | 4 |
+| P5-11-C | Dialect, attribute, calling-convention, and platform-header coverage | OPEN | 4 |
+| P5-11-D | Cross-compiler diagnostic normalization and source-map verification | OPEN | 4 |
+
+### Phase 6 lowering and migration retirement
+
+| ID | Acceptance unit | Status | Points |
+|---|---|---:|---:|
+| P6-09-A | Classify sequencing guarantees for comma, conditional, and short-circuit operators | OPEN | 2 |
+| P6-09-B | Preserve conservative side effects through nested ordered expressions | OPEN | 4 |
+| P6-09-C | Invalidate provenance for unsequenced binary operands without guessing order | OPEN | 4 |
+| P6-09-D | Cover calls, assignments, subscripts, initializer lists, and control-flow joins | OPEN | 4 |
+| P6-09-E | Compile/run the accepted expression-flow subset with host C compilers | OPEN | 2 |
+| P6-10-A | Compare each migrated pass's normalized output against the legacy overlap | OPEN | 4 |
+| P6-10-B | Compare compiler options and generated declarations | OPEN | 2 |
+| P6-10-C | Compare source-map origins, `#line`, and generated-to-source spans | OPEN | 4 |
+| P6-10-D | Compare diagnostics, failure ordering, and unsupported-node behavior | OPEN | 4 |
+| P6-10-E | Freeze and run the pass-order interaction corpus | OPEN | 2 |
+| P6-11-A | Retire textual method/receiver lowering after its own corpus gate | OPEN | 4 |
+| P6-11-B | Retire textual `defer` lowering after ordering/control-flow parity | OPEN | 4 |
+| P6-11-C | Retire textual `try`/`catch` and checked-call lowering | OPEN | 4 |
+| P6-11-D | Retire scanner-based test/assertion extraction | OPEN | 4 |
+| P6-11-E | Retire textual allocation analysis after semantic-flow parity | OPEN | 4 |
+| P6-11-F | Retire remaining textual lowering only after rollback/legacy selection tests | OPEN | 4 |
+| P6-12-A | Direct and typedef callback variables, including explicit dereference calls | DONE | 2 |
+| P6-12-B | Direct and typedef callback parameters | DONE | 2 |
+| P6-12-C | Inline and typedef callback fields used as method receivers | DONE | 2 |
+| P6-12-D | Nested callable returns through arrays, fields, and chained calls | DONE | 4 |
+| P6-12-E | Calling conventions and remaining complex method/function declarators | OPEN | 4 |
+| P6-12-F | Invalid receiver shapes and exact mapped diagnostics across all forms | DONE | 2 |
+
+This decomposition currently contains **60 executable subcases** below the 12 non-done parent rows. The next implementation batch is the remaining P6-12-E declarator slice, then P4-14-C and P4-15-B. Parent-row points are retained for phase reporting; subcase points are the units to time and use for the next velocity update. The detailed task breakdown and follow-up log are maintained in [`COMPILER-FRONTEND-SUBPROJECT-FOLLOWUP.md`](COMPILER-FRONTEND-SUBPROJECT-FOLLOWUP.md).
+
 ## Phase exit criteria
 
 These are the finite phase-level gates. Checklist items below are implementation work that contributes evidence to them; a checked implementation item alone does not close a phase.
@@ -46,7 +233,7 @@ This snapshot separates code work from evidence that only CI or elapsed releases
 | 5–7 | Semantic analysis, AST runtime lowering, and mapped emission have tested vertical slices. | Close their explicit open items after generated declarations feed the semantic model; retain fail-closed behavior and legacy authority meanwhile. |
 | 8 | All three editor adapters consume parts of the parser contract, with different capabilities and fallbacks. | Run a per-plugin capability inventory and focused tests after parser contracts stabilize; do not demand identical UI features across IDEs. |
 
-**Execution order:** record the six-host Phase 2 result when the configured workflow runs. G4.2 is complete for its documented bounded entity/type-binding subset. The G4.3 bounded vertical slice has nested-expansion, import-interaction, termination, source-map, and parser-failure-path fixtures, including a naturally malformed C-plus dependency imported by generated `@code`. `@code` fragments themselves are parsed as part of their containing template before expansion, so malformed fragment syntax is rejected at the original parse stage; structurally valid but invalid-at-file-scope fragments are checked by the C compiler with mapped diagnostics. G4.4 supports type names, ABI-backed primitive/pointer size and alignment, bounded module-scope field iteration using `.name`, `.type`, and a space-separated `.annotations` projection, and nested field/annotation loops with independent lexical bindings. Simple/pointer, fixed-size/multidimensional array, pointer-array, function-pointer, and named/unnamed bitfield fields are covered by materialization and C compile/run tests; unnamed entries expose an empty name and declared base type. Parsed abstract pointer, array, and function type arguments are covered. Bit-width reflection and passing bounded evaluator expressions (including reflected widths and calls over prior comptime values/functions) to scalar entity parameters now have focused materialization, origin, overflow-diagnostic, and C compile/run tests. Arbitrary iterable expressions and structured annotation values remain unverified and fail closed where unsupported. The repaired Snake fixture is included in the repository example acceptance run; its model assertions are valid, while headless-render/screenshot verification remains a distinct check. Then close Phase 5 binding, Phase 6 per-pass lowering parity, Phase 7 emitter/promotion evidence, and Phase 8 editor consumers. Phases may have concurrent external CI evidence, but implementation should not jump ahead of missing semantic prerequisites. Legacy retirement is Phase 9 and is outside the requested migration.
+**Execution order:** record the six-host Phase 2 result when the configured workflow runs. G4.2 is complete for its documented bounded entity/type-binding subset. The G4.3 bounded vertical slice has nested-expansion, import-interaction, termination, source-map, and parser-failure-path fixtures, including a naturally malformed C-plus dependency imported by generated `@code`. `@code` fragments themselves are parsed as part of their containing template before expansion, so malformed fragment syntax is rejected at the original parse stage; structurally valid but invalid-at-file-scope fragments are checked by the C compiler with mapped diagnostics. G4.4 supports type names, ABI-backed primitive/pointer size and alignment, bounded module-scope field iteration using `.name`, `.type`, and a space-separated `.annotations` projection, and nested field/annotation loops with independent lexical bindings. Simple/pointer, fixed-size/multidimensional array, pointer-array, function-pointer, and named/unnamed bitfield fields are covered by materialization and C compile/run tests; unnamed entries expose an empty name and declared base type. Parsed abstract pointer, array, and function type arguments are covered. Bit-width reflection and passing bounded evaluator expressions (including reflected widths and calls over prior comptime values/functions) to scalar entity parameters now have focused materialization, origin, overflow-diagnostic, and C compile/run tests. Arbitrary iterable expressions and structured annotation values remain unverified and fail closed where unsupported. The repaired Snake fixture is included in the repository example acceptance run; its model assertions are valid, while headless-render/screenshot verification remains a distinct check. The next local implementation gate is P6-12 broad receiver/declarator coverage, followed by P4-14/P4-15 semantic boundaries and the differential/retirement gates. Phase 2 host evidence may close independently. Legacy retirement is Phase 9 and is outside the requested migration.
 
 ### Phase 4 comptime inventory
 
@@ -218,7 +405,7 @@ This is the current capability boundary, based on the prototype pass sequence an
 - [x] Add an end-to-end C compatibility test for a function-pointer typedef, conditional preprocessing, MSVC/GNU API attributes, and host C compile/run.
 - [x] Run the C11 function-pointer/declarator compatibility fixture through each locally available `cc`, `gcc`, and `clang` driver and execute each output; drivers absent on a host are skipped.
 - [ ] Expand C compatibility verification across supported target compilers/dialects and additional declaration ambiguities; cross-host and cross-target compiler coverage remains open.
-- [ ] Keep unimplemented C semantic checks delegated to the selected C compiler; do not claim whole-language type checking prematurely.
+- [x] Keep unimplemented C semantic checks delegated to the selected C compiler for the supported frontend slice; `delegatesOrdinaryCTypeCheckingToTheSelectedCompiler` verifies that the frontend does not invent a conflicting type diagnostic, while the compiler rejects the invalid C with mapped compiler output. This does not claim whole-language type checking.
 
 ### Phase 6 — runtime IR and lowering
 
@@ -390,6 +577,17 @@ This is the current capability boundary, based on the prototype pass sequence an
 - Latest receiver-resolution safety increment: conditional receivers now also follow C's null-pointer-constant rule when exactly one arm has a known struct value/pointer type (`condition ? &value : NULL` or the reverse). The other arm must remain a syntactic null pointer constant; unknown or differently typed arms still fail closed. `resolvesMethodReceiversFromConditionalsWithNullPointerConstants` compiles and executes the AST-lowered output.
 - Latest declarator-resolution increment: `lowersMethodsReturningFunctionPointersWithoutFlatteningTheirDeclarator` verifies that `int (*select(borrowed *self))(int)` resolves to `selector__select`, keeps its callable return shape and complete `[FUNCTION, POINTER, FUNCTION]` metadata, compiles, and executes. The named inner function-declarator helper is reused by semantic symbols, `@throws`, and allocation-contract indexing; deeper declarator compatibility remains bounded and unsupported shapes still fail closed.
 - Latest receiver-resolution increment: callable declarations now retain a bounded return-type/declarator view for semantic receiver inference. `resolvesMethodReceiversFromKnownFunctionPointerResults` resolves `make_widget()->add()`, lowers it to `widget__add`, and compiles/runs the generated C. Conflicting or unsupported return declarations remain unresolved rather than guessed.
+- Latest Phase 2/5 callable-variable increment: the Tree-sitter grammar now has a narrow declaration entry point for typedef-name function-pointer objects at block scope, without changing the upstream call/declaration ambiguity policy. A corpus fixture raises the grammar gate to 96 passing parses. Semantic declarator analysis derives callable return layers from the binding position around the function layer, so `widget_pointer_t (*factory)(void)` preserves the pointer returned by `factory()` and resolves `factory()->add(22)` to `widget__add`. The focused regression parses, lowers, compiles, and executes; the legacy frontend remains authoritative.
+- Latest Phase 5 callable-expression increment: semantic declaration indexing now keeps direct pointer prefixes that Tree-sitter exposes beside a nested function/array declarator, preserving shapes such as `widget_t *(*factories[1])(void)` as `[ARRAY, POINTER, FUNCTION, POINTER]`. Receiver inference propagates a proven callable return through a subscripted function-pointer expression, so `factories[0]()->add(22)` resolves and lowers without guessing from source text. `resolvesMethodReceiversFromIndexedFunctionPointerVariables` parses, lowers, compiles, and executes; broader qualified declarator and cross-target coverage remain open.
+- Callable-return propagation also applies to inline function-pointer fields: `factory.make()->add(22)` remains an ordinary C field call for the inner expression while its proven `widget_t*` result is used for the outer C-plus receiver. `resolvesMethodReceiversFromFunctionPointerFields` covers the distinction and host C execution; unsupported callable field shapes still fail closed.
+- Function-pointer typedefs now participate in the same canonical callable-type map, so a field declared as `widget_factory_callback_t make` also propagates its proven return through `factory.make()->add(22)`. `resolvesMethodReceiversFromFunctionPointerTypedefFields` covers alias resolution and host C execution; callable typedefs with unsupported/cyclic shapes remain conservative.
+- Callable typedef variables now use the same result-layer derivation even when the variable declarator itself is only an identifier: `widget_factory_callback_t factory; factory()->add(22)` and `(*factory)()->add(0)` both resolve to the C-plus method while preserving the C callable expression. `resolvesMethodReceiversFromFunctionPointerTypedefVariables` compiles and executes both forms; this closes the direct typedef-variable slice without claiming arbitrary declarator normalization.
+- The callable typedef-variable fix is verified by the complete `:parser-tree-sitter:jvmTest` suite after the focused test passed; existing indexed-variable, inline-field, typedef-field, static-result, receiver-shape, and C-compiler-delegation regressions remain green. P6-12 therefore advances by one bounded subcase but remains open for broader qualified declarators.
+- Callable typedef parameters now derive the same callable result layers as variables and fields, so `use_factory(widget_factory_callback_t factory)` can lower `factory()->add(22)` without source-text guessing. `resolvesMethodReceiversFromFunctionPointerTypedefParameters` compiles and executes the generated C; P6-12 remains open for less-common qualified and nested declarators.
+- Function and method return metadata now retains callable result layers, allowing a callback returned from `get_factory()` to participate in `get_factory()()->add(22)` lowering. `resolvesMethodReceiversThroughNestedFunctionPointerReturns` compiles and executes the initial chained-return form; the array and field compositions are covered by the follow-up fixture below.
+- Callable result propagation now covers array fields and chained method returns: `box.callback()->add(22)`, `box.callbacks[0]()->add(0)`, and `box.get()()->add(0)` all resolve without guessing from text. `resolvesMethodReceiversThroughCallableFieldsArraysAndChainedReturns` also exposed and fixed duplicate semantic resolution of nested `box.get()`, so the lowering pass receives one edit per call.
+- Complex declarator attribute preservation now has a bounded emitted-C regression: a method returning a function pointer may place `__attribute__((noinline))` after its C-plus declarator, while the AST method lowerer relocates that declarator-owned attribute before the extracted C function declarator where GCC accepts it. `lowersMethodsReturningFunctionPointersWithoutFlatteningTheirDeclarator` preserves the attribute, compiles, and executes; calling conventions and broader qualified declarators remain open under SP-6.4-05.
+- Declarator ABI metadata now retains source-spanned GNU/MS attributes and calling-convention modifiers on symbols, parameters, and callable signatures. `retainsCallingConventionQualifiersOnComplexMethodDeclarators` covers `__attribute__((sysv_abi))` on a function-pointer-returning method and verifies semantic metadata plus emitted-C compilation/execution; target-specific ABI validation and less-common declarator shapes remain open.
 - Latest repository acceptance: `./gradlew :cli:run --args='test ...' --no-daemon --max-workers=1` with all 19 explicit `.cp` fixture paths reports 19 files, 98 fixtures, 723 assertions, and zero failures, including the repaired Snake fixture. Gradle's `--args` does not expand shell globs; the verification therefore passes explicit paths rather than treating a literal `*.cp` as a source.
 - Required commands for each compiler change: `./gradlew :compiler:test`, `./gradlew test`, and `./gradlew build` when public packaging or module wiring changes.
 - Each parser phase adds small targeted tests before broad fixtures. Record tested platform/JDK/binding versions in this file when native integration begins.

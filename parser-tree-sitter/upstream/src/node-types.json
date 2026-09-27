@@ -3534,11 +3534,53 @@
     "named": true,
     "fields": {
       "declarator": {
-        "multiple": false,
+        "multiple": true,
         "required": true,
         "types": [
           {
+            "type": "*",
+            "named": false
+          },
+          {
             "type": "_declarator",
+            "named": true
+          },
+          {
+            "type": "attribute_specifier",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "gnu_asm_expression",
+            "named": true
+          },
+          {
+            "type": "ms_based_modifier",
+            "named": true
+          },
+          {
+            "type": "ms_pointer_modifier",
+            "named": true
+          },
+          {
+            "type": "parameter_list",
+            "named": true
+          },
+          {
+            "type": "type_qualifier",
+            "named": true
+          }
+        ]
+      },
+      "parameters": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "parameter_list",
             "named": true
           }
         ]
@@ -3910,10 +3952,21 @@
   {
     "type": "parenthesized_declarator",
     "named": true,
-    "fields": {},
+    "fields": {
+      "declarator": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "pointer_declarator",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
       "multiple": true,
-      "required": true,
+      "required": false,
       "types": [
         {
           "type": "_declarator",

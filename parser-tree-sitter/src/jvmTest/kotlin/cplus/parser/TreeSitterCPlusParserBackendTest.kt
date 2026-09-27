@@ -2654,6 +2654,38 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun delegatesOrdinaryCTypeCheckingToTheSelectedCompiler() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            int main(void) {
+                int value = "not an integer";
+                return value;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ordinary-c-type-error.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val (status, output) = compileAndCaptureC(
+            compiler,
+            result.cSource?.text ?: error("ordinary C output is missing"),
+            compilerOptions = listOf("-Werror"),
+            expectCompileSuccess = false
+        )
+        assertTrue(status != 0, "$compiler unexpectedly accepted invalid ordinary C:\n$output")
+        assertTrue(
+            output.contains("not an integer") || output.contains("incompatible") || output.contains("conversion"),
+            "$compiler did not report the delegated type error:\n$output"
+        )
+    }
+
+    @Test
     fun legacyAndTreeSitterCompilerDiagnosticsAgreeAfterMethodLowering() {
         val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
@@ -3248,7 +3280,7 @@ class TreeSitterCPlusParserBackendTest {
             #include <stdio.h>
             static int increment(int value) { return value + 1; }
             typedef struct selector_t {
-                pub int (*select(borrowed *self))(int) { return increment; }
+                pub int (*select(borrowed *self))(int) __attribute__((noinline)) { return increment; }
             } selector_t;
             int main(void) {
                 selector_t selector;
@@ -3274,6 +3306,41 @@ class TreeSitterCPlusParserBackendTest {
         val generated = transpiled.cSource?.text ?: error("function-pointer return method output is missing")
         assertTrue("selector__select" in generated, generated)
         assertTrue("(*selector__select" in generated, generated)
+        assertTrue("__attribute__((noinline))" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun retainsCallingConventionQualifiersOnComplexMethodDeclarators() {
+        val text = """
+            typedef struct abi_selector_t {
+                pub int (*select(borrowed *self))(int) __attribute__((sysv_abi)) { return 0; }
+            } abi_selector_t;
+            int main(void) {
+                abi_selector_t selector;
+                return selector.select() == 0 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("calling-convention-method.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "select"
+        }
+        assertEquals(listOf("attribute_specifier"), method.declaratorQualifiers.map { it.syntaxKind })
+        assertEquals(
+            listOf("__attribute__((sysv_abi))"),
+            method.declaratorQualifiers.map { it.spelling }
+        )
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("calling-convention method output is missing")
+        assertTrue("__attribute__((sysv_abi))" in generated, generated)
+        assertTrue("abi_selector__select" in generated, generated)
         compileAndRunC(generated)
     }
 
@@ -3380,16 +3447,213 @@ class TreeSitterCPlusParserBackendTest {
                     return self->value;
                 }
             } widget_t;
+            typedef widget_t *widget_pointer_t;
             widget_t* make_widget(void) {
                 static widget_t value = { 20 };
                 return &value;
             }
             int main(void) {
-                widget_t* (*factory)(void) = make_widget;
+                widget_pointer_t (*factory)(void) = make_widget;
                 return factory()->add(22) == 42 ? 0 : 1;
             }
         """.trimIndent()
         val source = sources.open(SourceId.named("function-pointer-variable-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val semantic = CPlusSemanticAnalyzer().analyze(ast)
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("add"), semantic.resolvedCalls.map { it.methodName })
+        assertTrue(semantic.resolvedCalls.single().pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("function-pointer variable receiver output is missing")
+        assertTrue("widget__add" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromIndexedFunctionPointerVariables() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            widget_t* make_widget(void) {
+                static widget_t value = { 20 };
+                return &value;
+            }
+            int main(void) {
+                widget_t *(*factories[1])(void) = { make_widget };
+                return factories[0]()->add(22) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("indexed-function-pointer-variable-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val semantic = CPlusSemanticAnalyzer().analyze(ast)
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("add"), semantic.resolvedCalls.map { it.methodName })
+        assertTrue(semantic.resolvedCalls.single().pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("indexed function-pointer receiver output is missing")
+        assertTrue("widget__add" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromFunctionPointerFields() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            widget_t* make_widget(void) {
+                static widget_t value = { 20 };
+                return &value;
+            }
+            typedef struct factory_t {
+                widget_t *(*make)(void);
+            } factory_t;
+            int main(void) {
+                factory_t factory = { make_widget };
+                return factory.make()->add(22) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("function-pointer-field-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val semantic = CPlusSemanticAnalyzer().analyze(ast)
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("add"), semantic.resolvedCalls.map { it.methodName })
+        assertTrue(semantic.resolvedCalls.single().pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("function-pointer field receiver output is missing")
+        assertTrue("widget__add" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromFunctionPointerTypedefFields() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            widget_t* make_widget(void) {
+                static widget_t value = { 20 };
+                return &value;
+            }
+            typedef widget_t *(*widget_factory_callback_t)(void);
+            typedef struct factory_t {
+                widget_factory_callback_t make;
+            } factory_t;
+            int main(void) {
+                factory_t factory = { make_widget };
+                return factory.make()->add(22) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("function-pointer-typedef-field-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val semantic = CPlusSemanticAnalyzer().analyze(ast)
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("add"), semantic.resolvedCalls.map { it.methodName })
+        assertTrue(semantic.resolvedCalls.single().pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("function-pointer typedef field receiver output is missing")
+        assertTrue("widget__add" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromFunctionPointerTypedefVariables() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            widget_t* make_widget(void) {
+                static widget_t value = { 20 };
+                return &value;
+            }
+            typedef widget_t *(*widget_factory_callback_t)(void);
+            int main(void) {
+                widget_factory_callback_t factory = make_widget;
+                return factory()->add(22) == 42 && (*factory)()->add(0) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("function-pointer-typedef-variable-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val semantic = CPlusSemanticAnalyzer().analyze(ast)
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("add", "add"), semantic.resolvedCalls.map { it.methodName })
+        assertTrue(semantic.resolvedCalls.all { it.pointerAccess })
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("function-pointer typedef variable receiver output is missing")
+        assertEquals(3, "widget__add".toRegex().findAll(generated).count(), generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromFunctionPointerTypedefParameters() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            widget_t* make_widget(void) {
+                static widget_t value = { 20 };
+                return &value;
+            }
+            typedef widget_t *(*widget_factory_callback_t)(void);
+            int use_factory(widget_factory_callback_t factory) {
+                return factory()->add(22);
+            }
+            int main(void) {
+                return use_factory(make_widget) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("function-pointer-typedef-parameter-receiver.cp"), text)
 
         val parsed = backend.parse(source)
         assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
@@ -3401,8 +3665,133 @@ class TreeSitterCPlusParserBackendTest {
 
         val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
         assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
-        val generated = transpiled.cSource?.text ?: error("function-pointer variable receiver output is missing")
-        assertTrue("widget__add" in generated, generated)
+        val generated = transpiled.cSource?.text ?: error("function-pointer typedef parameter receiver output is missing")
+        assertTrue("widget__add(factory(), 22)" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromDirectFunctionPointerParameters() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            widget_t* make_widget(void) {
+                static widget_t value = { 20 };
+                return &value;
+            }
+            int use_factory(widget_t *(*factory)(void)) {
+                return factory()->add(22);
+            }
+            int main(void) {
+                return use_factory(make_widget) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("direct-function-pointer-parameter-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("add"), semantic.resolvedCalls.map { it.methodName })
+        assertTrue(semantic.resolvedCalls.single().pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("direct function-pointer parameter receiver output is missing")
+        assertTrue("widget__add(factory(), 22)" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversThroughNestedFunctionPointerReturns() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            widget_t* make_widget(void) {
+                static widget_t value = { 20 };
+                return &value;
+            }
+            typedef widget_t *(*widget_factory_t)(void);
+            widget_factory_t get_factory(void) {
+                return make_widget;
+            }
+            int main(void) {
+                return get_factory()()->add(22) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("nested-function-pointer-return-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("add"), semantic.resolvedCalls.map { it.methodName })
+        assertTrue(semantic.resolvedCalls.single().pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("nested function-pointer receiver output is missing")
+        assertTrue("widget__add(get_factory()(), 22)" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversThroughCallableFieldsArraysAndChainedReturns() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            widget_t* make_widget(void) {
+                static widget_t value = { 20 };
+                return &value;
+            }
+            typedef widget_t *(*widget_factory_t)(void);
+            typedef struct factory_box_t {
+                widget_factory_t callback;
+                widget_factory_t callbacks[1];
+                pub widget_factory_t get(borrowed *self) {
+                    return self->callback;
+                }
+            } factory_box_t;
+            int main(void) {
+                factory_box_t box = { make_widget, { make_widget } };
+                return box.callback()->add(22) == 42 &&
+                    box.callbacks[0]()->add(0) == 42 &&
+                    box.get()()->add(0) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("callable-field-array-chain-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(3, semantic.resolvedCalls.count { it.methodName == "add" }, semantic.resolvedCalls.toString())
+        assertEquals(1, semantic.resolvedCalls.count { it.methodName == "get" }, semantic.resolvedCalls.toString())
+        assertTrue(semantic.resolvedCalls.filter { it.methodName == "add" }.all { it.pointerAccess })
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("callable field/array chain output is missing")
+        assertTrue("factory_box__get(&box)()" in generated, generated)
+        assertEquals(4, "widget__add".toRegex().findAll(generated).count(), generated)
         compileAndRunC(generated)
     }
 
@@ -6427,13 +6816,25 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
-    fun prototypeRejectsAggregateLayoutReflectionInsteadOfGuessing() {
+    fun prototypeReflectsAggregateLayoutWithPaddingAndNestedFields() {
         val text = """
-            typedef struct point_t { int x; int y; } point_t;
+            typedef struct inner_t { char tag; int value; } inner_t;
+            typedef struct aggregate_t {
+                char prefix;
+                inner_t inner;
+                int *pointer;
+                short suffix;
+            } aggregate_t;
             comptime int @type_size(type T) { return T.size; }
-            int reflected_size = comptime type_size(point_t);
+            comptime int @type_alignment(type T) { return T.align; }
+            int reflected_size = comptime type_size(aggregate_t);
+            int reflected_alignment = comptime type_alignment(aggregate_t);
+            int main(void) {
+                return reflected_size != sizeof(aggregate_t) ||
+                    reflected_alignment != _Alignof(aggregate_t);
+            }
         """.trimIndent()
-        val source = sources.open(SourceId.named("ast-comptime-aggregate-layout-unsupported.cp"), text)
+        val source = sources.open(SourceId.named("ast-comptime-aggregate-layout.cp"), text)
 
         val result = TreeSitterCPlusPrototypeTranspiler(
             backend = backend,
@@ -6442,12 +6843,34 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             targetArch = "x86_64"
         ).transpile(source)
 
-        assertFalse(result.successful, "aggregate layout must not be guessed")
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("aggregate layout should materialize")
+        assertTrue("reflected_size = 32" in generated.code, generated.code)
+        assertTrue("reflected_alignment = 8" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeRejectsPackedAggregateLayoutWithoutGuessing() {
+        val text = """
+            typedef struct __attribute__((packed)) packed_t { char tag; int value; } packed_t;
+            comptime int @type_size(type T) { return T.size; }
+            int reflected_size = comptime type_size(packed_t);
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-packed-aggregate-layout.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertFalse(result.successful, "packed aggregate layout must remain fail-closed")
         val diagnostic = result.loweringDiagnostics.single()
         assertEquals("CPLUS_COMPTIME_REFLECTION_LAYOUT", diagnostic.code)
-        assertEquals(source.id.value, diagnostic.span.file)
         assertEquals(text.indexOf("size", text.indexOf("T.size")), diagnostic.span.startOffset)
-        assertTrue(result.transcodedSource == null, "unknown aggregate size must stop C emission")
+        assertTrue(result.transcodedSource == null, "unsupported packed layout must stop C emission")
     }
 
     @Test

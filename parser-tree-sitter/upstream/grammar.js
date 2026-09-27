@@ -309,18 +309,60 @@ module.exports = grammar({
       ';',
     ),
 
-    // A block-scope typedef-name declaration can otherwise be accepted as a
-    // multiplication expression because Tree-sitter does not perform C's
-    // typedef-name symbol-table disambiguation during parsing.
+    // A block-scope typedef-name function-pointer declaration can otherwise
+    // be accepted as a multiplication/call expression because Tree-sitter
+    // does not perform C's typedef-name symbol-table disambiguation during
+    // parsing. Keep this entry point narrow: broad identifier-led declarations
+    // would change the ordinary C ambiguity policy used by the upstream corpus.
     cplus_block_type_declaration: $ => prec.dynamic(1000, seq(
       repeat($._declaration_modifiers),
       field('type', $._type_identifier),
       repeat($._declaration_modifiers),
       commaSep1(field('declarator', choice(
-        $._declaration_declarator,
-        $.init_declarator,
+        alias($._cplus_function_pointer_declarator, $.pointer_declarator),
+        alias($._cplus_function_pointer_init_declarator, $.init_declarator),
+        alias($._cplus_function_pointer_alias_declarator, $.function_declarator),
+        alias($._cplus_function_pointer_alias_init_declarator, $.init_declarator),
       ))),
       ';',
+    )),
+
+    _cplus_function_pointer_declarator: $ => prec.right(seq(
+      optional($.ms_based_modifier),
+      '*',
+      repeat($.ms_pointer_modifier),
+      repeat($.type_qualifier),
+      field('declarator', $.function_declarator),
+    )),
+
+    _cplus_function_pointer_init_declarator: $ => seq(
+      field('declarator', $._cplus_function_pointer_declarator),
+      '=',
+      field('value', choice($.initializer_list, $.expression)),
+    ),
+
+    _cplus_function_pointer_alias_declarator: $ => prec.right(seq(
+      field('declarator', alias($._cplus_parenthesized_pointer_declarator, $.parenthesized_declarator)),
+      field('parameters', $.parameter_list),
+      optional($.gnu_asm_expression),
+      repeat(choice(
+        $.attribute_specifier,
+        $.identifier,
+        alias($.preproc_call_expression, $.call_expression),
+      )),
+    )),
+
+    _cplus_function_pointer_alias_init_declarator: $ => seq(
+      field('declarator', $._cplus_function_pointer_alias_declarator),
+      '=',
+      field('value', choice($.initializer_list, $.expression)),
+    ),
+
+    _cplus_parenthesized_pointer_declarator: $ => prec.dynamic(PREC.PAREN_DECLARATOR, seq(
+      '(',
+      optional($.ms_call_modifier),
+      field('declarator', $.pointer_declarator),
+      ')',
     )),
 
     type_definition: $ => seq(
