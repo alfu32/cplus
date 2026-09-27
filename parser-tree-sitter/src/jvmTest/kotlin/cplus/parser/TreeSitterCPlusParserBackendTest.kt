@@ -1502,6 +1502,12 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue("int(*callback)(borrowed named_value_t *item, size_t index)" in generated, generated.takeLast(8_000))
         assertFalse("@InputList" in generated || "@OutputList" in generated || "@T" in generated || "@R" in generated, generated.takeLast(8_000))
         assertC11Syntax(generated, "examples/generic_list.cp")
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val (exitCode, stdout) = compileAndCaptureC(compiler, generated)
+        assertEquals(0, exitCode, stdout)
+        assertTrue("mapped rank=1" in stdout, stdout)
     }
 
     @Test
