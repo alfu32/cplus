@@ -1000,14 +1000,29 @@ private fun CPlusAstNode.cplusMethodDeclaratorLayers(source: String): List<CPlus
     val layers = declaratorLayers()
     if (syntaxKind != "cplus_method_declarator") return layers
     val function = cplusNamedFunctionDeclarator() ?: return layers
+    // When a method returns a pointer to an array, the extension wrapper is
+    // rooted at the outer array declarator.  Normalize that traversal back to
+    // the public binding order (base -> array -> pointer -> function) before
+    // applying the compact direct-pointer recovery below.
+    val normalizedLayers = if (
+        layers.firstOrNull() == CPlusDeclaratorLayer.FUNCTION &&
+        layers.lastOrNull() == CPlusDeclaratorLayer.ARRAY
+    ) {
+        layers.asReversed()
+    } else {
+        layers
+    }
+    if (normalizedLayers != layers) return normalizedLayers
     val hasExplicitPointerNodeBeforeName = descendantsAndSelf().any {
         it.syntaxKind == "pointer_declarator" && it.span.endOffset <= function.span.startOffset
     }
     if (hasExplicitPointerNodeBeforeName) return layers
     val prefix = source.substring(span.startOffset, function.span.startOffset)
     val pointerCount = prefix.count { it == '*' }
-    if (pointerCount == 0) return layers
-    return List(pointerCount) { CPlusDeclaratorLayer.POINTER } + layers
+    val existingPointerCount = layers.count { it == CPlusDeclaratorLayer.POINTER }
+    val missingPointerCount = (pointerCount - existingPointerCount).coerceAtLeast(0)
+    if (missingPointerCount == 0) return layers
+    return List(missingPointerCount) { CPlusDeclaratorLayer.POINTER } + layers
 }
 
 private fun CPlusAstNode.declaratorPrefixPointerLayers(root: CPlusAstNode): List<CPlusDeclaratorLayer> {

@@ -858,6 +858,11 @@ module.exports = grammar({
         repeat1(seq('*', repeat(choice($.type_qualifier, $.ms_pointer_modifier)))),
         $.function_declarator
       )),
+      // A method may return a pointer to an array, for example
+      // `int (*row(*self))[2]`.  The ordinary function-declarator branch
+      // cannot consume the array suffix outside the parenthesized callable
+      // declarator, so retain the complete C binding as an array declarator.
+      prec.dynamic(3, seq(optional($.ms_call_modifier), $.array_declarator)),
     ),
 
     cplus_access_modifier: _ => choice(token(prec(10, 'pub')), token(prec(10, 'priv'))),

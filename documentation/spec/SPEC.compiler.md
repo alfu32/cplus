@@ -38,6 +38,16 @@ Top-level `comptime flags` declarations in the source and its comptime imports a
 
 Comptime exposes `os` as the normalized operating system of the selected target. `compile` and `run` derive it from TinyCC's `--target` option (or the local host when omitted); `transcode` can be given `--target` for the same selection. The current supported spellings include `linux`, `windows`, and `macos`. This only selects source branches: the target compiler/sysroot must still contain the requested libraries.
 
+The shipped cross-runtime distribution names the supported host/architecture pairs explicitly:
+
+| Host/target family | Architecture | Status |
+|---|---|---|
+| Linux | x86_64, arm64 | bundled TinyCC driver/runtime; ABI reflection model available |
+| macOS | x86_64, arm64 | bundled TinyCC driver/runtime; ABI reflection model available |
+| Windows | x86_64, arm64 | bundled TinyCC driver/runtime; ABI reflection model available |
+
+`-Ptarget=cross` packages all six TinyCC runtime payloads without libc sysroots; `-Ptarget=none`/`bare` packages no compiler runtime and uses the selected external compiler. This table describes C-plus target normalization and packaging availability, not a guarantee that every platform library or linker flag exists on every host. The compiler must still report an unsupported target or missing library instead of silently selecting another ABI.
+
 `test` runs all `@test` blocks by default; `test run` is equivalent. Compiler flags may appear before or after source paths, and `-v0`, `-v1`, or `-v2` may be placed before or after the command. Flags from all input files and CLI arguments are logically deduplicated and passed to each test compilation. Generated test C carries one consolidated `cplus compiler flags` comment, matching ordinary transpilation. `test compile` and `test transcode` currently accept one source file because each generated test harness owns a `main` function. Test-name filters remain exact and case-sensitive:
 
 ```sh

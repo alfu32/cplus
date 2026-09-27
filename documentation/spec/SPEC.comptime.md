@@ -53,7 +53,7 @@ comptime-import       := "comptime" "import" string-literal ";"
 comptime-block        := "comptime" "{" comptime-statement* "}"
 comptime-value        := "comptime" c-type ["@"] identifier ["=" comptime-expression] ";"
 comptime-function     := "comptime" result-kind "@" identifier "(" parameter* ")" block
-result-kind           := c-type | "type" | "variable" | "function" | "@var" | "@fn" | "@code"
+result-kind           := c-type | "type" | "variable" | "function" | "string" | "code"
 type-parameter        := "type" identifier
 comptime-invocation   := "comptime" identifier "(" argument* ")" ";" | "comptime typedef" identifier "(" argument* ")" identifier ";"
 inline-value          := "comptime" comptime-expression
@@ -64,7 +64,7 @@ legacy-import         := "@import" string-literal [";"] | "@import" "(" string-l
 legacy-block          := "@" "{" comptime-statement* "}"
 legacy-call           := "@" identifier "(" argument* ")"
 legacy-type-generator := "@type" ["@"] identifier "(" ("@type" identifier)* ")" block
-test-block            := "@test" (string-literal | unquoted-name) block
+test-block            := "@test" (string-literal | identifier) block
 ```
 
 Preferred declarations and invocations look like this:
@@ -103,13 +103,13 @@ Comptime imports and generator declarations are declared at file scope. Comptime
 }
 ```
 
-The recommended name is a quoted string literal; the parser also accepts unquoted text before the opening brace. The body is C-plus statement code and runs in a generated `int` test function after comptime types and functions have materialized. `CPLUS_TEST_ASSERT(condition)` reports failure and returns from the current test; `CPLUS_TEST_FAIL(message)` does the same with a message. A test body may also `return 1` to fail or `return 0` to pass. Tests share process globals but have independent local scopes. Ordinary `transcode`, `compile`, and `run` remove test blocks; `cplus test` extracts them and emits a temporary driver.
+The recommended name is a quoted string literal; the parser also accepts one unquoted C identifier before the opening brace. Names containing spaces must be quoted. The body is C-plus statement code and runs in a generated `int` test function after comptime types and functions have materialized. `CPLUS_TEST_ASSERT(condition)` reports failure and returns from the current test; `CPLUS_TEST_FAIL(message)` does the same with a message. A test body may also `return 1` to fail or `return 0` to pass. Tests share process globals but have independent local scopes. Ordinary `transcode`, `compile`, and `run` remove test blocks; `cplus test` extracts them and emits a temporary driver.
 
 Within test bodies, `@assert(condition)` is shorthand for `CPLUS_TEST_ASSERT(condition)`. It always prints the source expression, fixture-wide assertion ordinal, PASS/FAIL, and the given boolean versus expected `true`. `@assertEquals(expected, actual)` captures both runtime expressions once, compares their sizes and object bytes with `memcmp`, and always prints the source expressions and given/expected values. Common scalar and string-pointer values are formatted; other types fall back to `bytes[size]=0x...`. Equality is bytewise, not string-content or deep equality. Use `strcmp` for strings and avoid array operands or structs with indeterminate padding. These annotations are expanded after comptime resolution, when test-local runtime values are in scope; they are not general comptime functions. Test headings are separated by a blank line, numbered in source order as `n/total`, and highlighted yellow; test PASS/FAIL and assertion PASS/FAIL use green/red.
 
 The test command runs all test blocks by default. Exact names after the source paths select tests; source paths may be multiple `.cp`/`.c+` files, with shell-expanded globs supported. A C file can be included unchanged with either `#include "fixture.c"` or `@import("fixture.c")`; `@import` emits a C preprocessor include, while `comptime import` remains reserved for `.cp` and `.c+` modules. During test compilation any source `main` is renamed and is not executed; the generated test driver owns the entry point. A failed assertion is isolated to its test function so later tests still run. The harness remains process-based and does not provide fixtures, setup/teardown hooks, or parallel execution.
 
-`comptime type` functions return exactly one `@code` fragment containing one named `struct` definition. A `comptime typedef generator(args) alias;` invocation turns it into `typedef struct tag { ... } alias;`. Other comptime invocations materialize the runtime entity returned by the function. Previous `@type`, `@fn`, `@var`, and scalar sigil-led forms remain accepted.
+`comptime type` functions return exactly one `@code` fragment containing one named `struct` definition. A `comptime typedef generator(args) alias;` invocation turns it into `typedef struct tag { ... } alias;`. Other comptime invocations materialize the runtime entity returned by the function. The legacy `@type` and `@fn` generator forms, legacy `@name(args);` invocations, and scalar `@name` references remain accepted. The keyword-led result kinds are `type`, `function`, `variable`, `string`, and `code`; `@var` and `@fn` are not result-kind spellings in the formal grammar.
 
 Inside source materialized by a `comptime type` or `comptime function` generator, a comptime scalar call embedded in an identifier, such as `list_of_@typename(T)` or `mapper__@name(T)__to__@name(R)`, is an identifier splice. The called comptime function must return a string made only from ASCII identifier characters (`A-Z`, `a-z`, `0-9`, `_`); it is inserted without quotes. The combined name after all splices must be one valid C identifier and not a C keyword. This permits type-name fragments such as `int` when combined with a prefix (`list_of_int`). Materialized output is reparsed; C keyword misuse and ordinary/tag namespace collisions are diagnosed by the C compiler during compilation and mapped to the original C-plus file and line. Other `@code` fragments do not eagerly evaluate nested declarations or embedded names; those declarations remain opaque until a later expansion pass. Outside identifier splices, strings keep their normal quoted C representation. Strings are not parsed as source by themselves; source is introduced explicitly by `@code`.
 
@@ -166,7 +166,9 @@ The declaration and its parameters are comptime-only. `comptime expression` eval
 
 An inline `comptime` marker consumes the surrounding C expression up to its enclosing delimiter. It may begin with a scalar literal, a comptime name/function call, a unary operator, or a parenthesized expression. Both the production scanner and the experimental AST path accept literal-leading and parenthesized-leading forms; evaluator support remains limited to the documented scalar subset below. The shared regression compiles and runs both frontends' output for these forms.
 
-The opt-in Tree-sitter scalar prototype uses a signed 64-bit evaluation domain. It accepts integer literals whose value fits `Long`, validates C integer suffix spelling, and reports out-of-range values instead of wrapping. Addition, subtraction, multiplication, and negation detect signed overflow. Division and remainder reject zero divisors and the `LONG_MIN / -1` overflow case. Signed left shift requires a nonnegative operand, a count from 0 through 62, and a representable result; signed right shift rejects negative operands and counts outside that range. Logical `&&` and `||` short-circuit, and the conditional operator (`condition ? consequence : alternative`) evaluates only the selected branch. Conditional/logical operands must evaluate to supported integer or boolean scalar values; unsupported operands produce a source-mapped diagnostic instead of being coerced to false. Unsupported operations fail with a source-mapped diagnostic. This is intentionally narrower than C's target-dependent integer promotions and conversion rules; it does not define the language-wide comptime integer model or replace the production evaluator.
+The opt-in Tree-sitter scalar prototype uses a signed 64-bit materialization domain. It accepts integer literals whose value fits that domain and validates C integer suffix spelling. Unsuffixed decimal literals choose the first fitting type from `int`, `long`, and `long long`; unsuffixed non-decimal literals choose from `int`, `unsigned int`, `long`, `unsigned long`, `long long`, and `unsigned long long`. `u`, `l`, `ul`/`lu`, and `ll`/`ull`/`llu` suffixes select the corresponding C candidate sequence. The target model supplies the width of `long`; values that would require an unsigned representation above the signed-64 materialization boundary fail closed. A leading sign is evaluated as the unary operator applied to the literal, including modulo behavior for unsigned operands.
+
+Unary integer operators apply the modeled integer promotions before evaluating `+`, `-`, and `~`. Addition, subtraction, multiplication, division, remainder, and bitwise binary operators use the common C integer type; signed results are range-checked and unsigned results wrap modulo their width. Shift operands are promoted independently, the left operand determines the result type, and the count must be in `0..width-1`. Unsigned shifts wrap naturally at the target width; negative signed shift operands and signed right shifts whose result would depend on implementation-defined behavior are rejected. Division and remainder reject zero divisors and the signed `LONG_MIN / -1` overflow case. Logical `&&` and `||` short-circuit, and the conditional operator (`condition ? consequence : alternative`) evaluates only the selected branch. Conditional/logical operands must evaluate to supported integer or boolean scalar values; unsupported operands produce a source-mapped diagnostic instead of being coerced to false. Unsupported operations fail with a source-mapped diagnostic. This remains a bounded subset rather than full C constant-expression conformance: non-integer/pointer casts, plain `char` signedness, and unsigned values outside signed-64 materialization remain open; scalar-function argument/result conversion is defined below.
 
 ### Comptime blocks
 
@@ -320,7 +322,7 @@ typedef struct point_t {
 
 ### Entity-returning comptime functions
 
-Comptime functions may return runtime C-plus entities. The result kind is itself the entity kind: `type` returns a type, `variable` returns a variable declaration, and `function` returns a C function definition. In particular, `function` is not repeated as a marker before the generated declaration. A `type T` parameter is substituted as a C type name within the returned declaration. The sigiled result kinds `@type`, `@var`, and `@fn` remain accepted for compatibility; the older `return function ...` and `return @fn ...` spellings also remain accepted.
+Comptime functions may return runtime C-plus entities. The result kind is itself the entity kind: `type` returns a type, `variable` returns a variable declaration, and `function` returns a C function definition. In particular, `function` is not repeated as a marker before the generated declaration. A `type T` parameter is substituted as a C type name within the returned declaration. The legacy generator declarations `@type` and `@fn` remain accepted for compatibility; the older `return function ...` and `return @fn ...` entity-return spellings are represented separately in the grammar. `@var` is not a keyword-led result kind.
 
 ```c
 comptime variable @make_limit(int @value) {
@@ -461,6 +463,63 @@ int runtime_answer = 42;
 ```
 
 The complete generated file also contains the annotation macro preamble and source-mapping directives.
+
+### Typed integer declarations (prototype boundary)
+
+The Tree-sitter prototype keeps the current signed-64 evaluation domain, then applies the declared integer type when a module-scope comptime value is resolved. Fixed-width signed types (`signed char`, `short`, `int`, `long`, and `long long`, including their standard spelling variants) reject values outside their target range with a mapped `CPLUS_COMPTIME_SCALAR_WIDTH` diagnostic. Unsigned types use C-style modulo conversion within their target width; for example, `-1` declared as `unsigned char` materializes as `255`. `_Bool` and `bool` normalize any integer or boolean initializer to `0` or `1`.
+
+`long` is target-dependent in this prototype: it is 64-bit on Linux and macOS targets and 32-bit on Windows targets. The target is selected by the compiler configuration, not by the host running the JVM. Plain `char` remains unvalidated because its signedness is implementation-defined and is not yet part of the target ABI model.
+
+```c
+comptime unsigned char @byte_value = -1;
+comptime bool @enabled = 7;
+comptime long @limit = 4294967296;
+
+int main(void) {
+    return comptime byte_value != 255 ||
+        comptime enabled != 1 ||
+        comptime limit != 4294967296 ? 1 : 0;
+}
+```
+
+For a Linux x86_64 target, the declarations materialize as scalar literals and the program returns zero:
+
+```c
+int main(void) {
+    return 0 || 0 || 0 ? 1 : 0;
+}
+```
+
+For a Windows x86_64 target, the `long` declaration above is rejected because `4294967296` does not fit the target's 32-bit signed `long`. The prototype applies the usual integer conversions for the bounded comparison and arithmetic operators: `bool`, `char`, and `short` promote to `int` when representable, and mixed signed/unsigned operands are compared in their common C integer type. For example, `unsigned int maximum = 4294967295` compared with `-1` is false because `-1` converts to `UINT_MAX`, while an `unsigned char` first promotes to `int`. Literal selection follows the radix/suffix rules above, so `0xffffffff + 1` is an unsigned-`int` wrap to zero while decimal `4294967295 + 1` uses a fitting wider signed type. Unary unsigned negation and complement, and target-width unsigned shifts, follow the same model:
+
+Suffix selection also follows the target's `long` width. On Linux/macOS, `0xffffffffUL + 1` uses a 64-bit `unsigned long` and materializes `4294967296`; on Windows, it uses a 32-bit `unsigned long` and materializes `0`. `0xffffffffLL + 1` and `0xffffffffULL + 1` remain `4294967296` on all three supported target families because both `long long` forms are 64-bit. The prototype verifies the `L`, `UL`/`LU`, `LL`, `ULL`/`LLU` spellings across x86_64/arm64 Unix models and the x86_64 Windows model.
+
+```c
+comptime unsigned int @bits = 0xffffffff;
+
+int main(void) {
+    unsigned int a = comptime (bits << 1); // 4294967294
+    unsigned int b = comptime (-1u);       // 4294967295
+    return a != 4294967294U || b != 4294967295U;
+}
+```
+
+Signed results are range-checked and unsigned results wrap modulo the common type's width. Integer casts use the target-aware width model: unsigned casts modulo-convert, boolean casts normalize to `0` or `1`, and signed casts outside the modeled range fail with a mapped diagnostic instead of assuming implementation-defined behavior. Pointer, array, function, floating-point, and other non-integer casts remain unsupported and fail closed.
+
+Scalar comptime function calls convert each non-generic integer argument to its declared parameter type before evaluating the function body. Their integer or boolean result is converted to the declared result type afterward. This makes narrowing and unsigned modulo behavior explicit:
+
+```c
+comptime bool @nonzero(unsigned char value) {
+    return value;
+}
+
+int main(void) {
+    int result = comptime nonzero(2); // parameter conversion, then bool result: 1
+    return result != 1;
+}
+```
+
+An out-of-range signed parameter or result is rejected with a source-mapped diagnostic; unsigned parameter/result conversions modulo-convert within the bounded signed-64 materialization domain. This boundary must not be read as full C integer-promotion conformance.
 
 ### Imported value
 

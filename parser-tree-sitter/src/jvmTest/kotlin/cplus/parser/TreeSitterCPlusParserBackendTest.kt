@@ -139,6 +139,70 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun provesLiveCPlusSyntaxNodeInventoryForGrammarProof() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib")) && Files.isDirectory(it.resolve("examples")) }
+            ?: error("could not locate repository sources from ${Path.of("").toAbsolutePath()}")
+        val modules = Files.walk(repository).use { paths ->
+            paths.filter { path ->
+                (path.toString().endsWith(".cp") || path.toString().endsWith(".c+")) &&
+                    (path.startsWith(repository.resolve("stdlib")) || path.startsWith(repository.resolve("examples")))
+            }.sorted().toList()
+        }
+        val kinds = linkedSetOf<String>()
+        modules.forEach { path ->
+            val relativePath = repository.relativize(path).toString()
+            val snapshot = sources.open(SourceId.named(relativePath), Files.readString(path))
+            val parsed = backend.parse(snapshot)
+            assertTrue(parsed.diagnostics.isEmpty(), "$relativePath: ${parsed.diagnostics}")
+            assertTrue(
+                parsed.root.descendants().none { it.isError || it.isMissing },
+                "$relativePath contains a recovery node"
+            )
+            parsed.root.descendants().mapTo(kinds) { it.kind }
+        }
+        val expectedLiveKinds = setOf(
+            "cplus_access_modifier",
+            "cplus_at_call_expression",
+            "cplus_at_import",
+            "cplus_comptime_block",
+            "cplus_comptime_body",
+            "cplus_comptime_conditional",
+            "cplus_comptime_declaration",
+            "cplus_comptime_expression",
+            "cplus_comptime_flags",
+            "cplus_comptime_function_definition",
+            "cplus_comptime_import",
+            "cplus_comptime_invocation",
+            "cplus_comptime_return_declaration",
+            "cplus_comptime_type_definition",
+            "cplus_comptime_value",
+            "cplus_defer_statement",
+            "cplus_function_declaration",
+            "cplus_generic_type_parameter",
+            "cplus_interpolated_identifier",
+            "cplus_legacy_comptime_invocation",
+            "cplus_legacy_function_generator",
+            "cplus_legacy_generic_type_parameter",
+            "cplus_legacy_returned_function",
+            "cplus_legacy_type_generator",
+            "cplus_method_declarator",
+            "cplus_method_definition",
+            "cplus_parameter_annotation",
+            "cplus_parameter_declaration",
+            "cplus_result_annotation",
+            "cplus_static_modifier",
+            "cplus_test_assertion_statement",
+            "cplus_test_declaration",
+            "cplus_type_argument",
+            "cplus_type_reference",
+        )
+        val actualLiveKinds = kinds.filter { it.startsWith("cplus_") }.toSet()
+        assertEquals(expectedLiveKinds, actualLiveKinds)
+        assertEquals(62, modules.size)
+    }
+
+    @Test
     fun prototypeTranscodesMemoryAndFileModulesToHostC11() {
         val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
             .firstOrNull { Files.isDirectory(it.resolve("stdlib")) }
@@ -3567,7 +3631,189 @@ class TreeSitterCPlusParserBackendTest {
 
         val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
         assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
-        compileAndRunC(transpiled.cSource?.text ?: error("pointer-return method output is missing"))
+        val generated = transpiled.cSource?.text ?: error("pointer-return method output is missing")
+        compileAndRunC(generated)
+        compileCOnlyIfAvailable("x86_64-w64-mingw32-gcc", generated)
+    }
+
+    @Test
+    fun retainsPointerToArrayReturnLayersOnCPlusMethodSymbols() {
+        val text = """
+            typedef struct array_return_t {
+                pub int (*row(borrowed *self))[2] {
+                    static int values[2] = { 17, 25 };
+                    return &values;
+                }
+            } array_return_t;
+            int main(void) {
+                array_return_t value;
+                return value.row()[0][0] + value.row()[0][1] == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("pointer-to-array-return-method.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "row"
+        }
+        assertEquals(
+            listOf(
+                CPlusDeclaratorLayer.ARRAY,
+                CPlusDeclaratorLayer.POINTER,
+                CPlusDeclaratorLayer.FUNCTION
+            ),
+            method.declaratorLayers
+        )
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("pointer-to-array method output is missing")
+        assertTrue("array_return__row" in generated, generated)
+        compileAndRunC(generated)
+        compileCOnlyIfAvailable("x86_64-w64-mingw32-gcc", generated)
+    }
+
+    @Test
+    fun retainsPointerToArrayParameterLayersOnCPlusMethodSymbols() {
+        val text = """
+            typedef struct array_consumer_t {
+                pub int sum(borrowed *self, borrowed const int (* restrict values)[2]) {
+                    return values[0][0] + values[0][1] + values[1][0] + values[1][1];
+                }
+            } array_consumer_t;
+            int main(void) {
+                array_consumer_t value;
+                int values[2][2] = { { 10, 11 }, { 20, 21 } };
+                return value.sum(values) == 62 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("pointer-to-array-parameter.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "sum"
+        }
+        assertEquals(
+            listOf(CPlusDeclaratorLayer.POINTER, CPlusDeclaratorLayer.ARRAY),
+            method.parameters.single { it.name == "values" }.declaratorLayers
+        )
+        assertEquals(
+            "borrowed const int (* restrict values)[2]",
+            method.parameters.single { it.name == "values" }.declarationText
+        )
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("pointer-to-array parameter output is missing")
+        assertTrue("array_consumer__sum" in generated, generated)
+        compileAndRunC(generated)
+        compileCOnlyIfAvailable("x86_64-w64-mingw32-gcc", generated)
+    }
+
+    @Test
+    fun retainsArrayOfFunctionPointerParameterLayersOnCPlusMethodSymbols() {
+        val text = """
+            typedef struct callback_array_t {
+                pub int invoke(
+                    borrowed *self,
+                    borrowed int (*callbacks[2])(int value),
+                    int value
+                ) {
+                    return callbacks[0](value) + callbacks[1](value);
+                }
+            } callback_array_t;
+
+            int plus_one(int value) { return value + 1; }
+            int plus_two(int value) { return value + 2; }
+
+            int main(void) {
+                callback_array_t value;
+                int (*callbacks[2])(int) = { plus_one, plus_two };
+                return value.invoke(callbacks, 40) == 83 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("array-of-function-pointer-parameter.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "invoke"
+        }
+        val callbacks = method.parameters.single { it.name == "callbacks" }
+        assertEquals(
+            listOf(
+                CPlusDeclaratorLayer.ARRAY,
+                CPlusDeclaratorLayer.POINTER,
+                CPlusDeclaratorLayer.FUNCTION
+            ),
+            callbacks.declaratorLayers
+        )
+        assertEquals("borrowed int (*callbacks[2])(int value)", callbacks.declarationText)
+        assertEquals("int", callbacks.functionType?.returnType)
+        assertEquals(listOf("value"), callbacks.functionType?.parameters?.map { it.name })
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(
+            transpiled.successful,
+            "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}"
+        )
+        val generated = transpiled.cSource?.text ?: error("array-of-function-pointer output is missing")
+        assertTrue("callback_array__invoke" in generated, generated)
+        compileAndRunC(generated)
+        compileCOnlyIfAvailable("x86_64-w64-mingw32-gcc", generated)
+    }
+
+    @Test
+    fun retainsMultidimensionalPointerToArrayReturnLayersOnCPlusMethodSymbols() {
+        val text = """
+            typedef struct matrix_return_t {
+                pub int (*grid(borrowed *self))[2][2] {
+                    static int values[2][2] = { { 1, 2 }, { 3, 4 } };
+                    return &values;
+                }
+            } matrix_return_t;
+
+            int main(void) {
+                matrix_return_t value;
+                return value.grid()[0][0][0] + value.grid()[0][1][1] == 5 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("multidimensional-pointer-to-array-return.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "grid"
+        }
+        assertEquals(
+            listOf(
+                CPlusDeclaratorLayer.ARRAY,
+                CPlusDeclaratorLayer.ARRAY,
+                CPlusDeclaratorLayer.POINTER,
+                CPlusDeclaratorLayer.FUNCTION
+            ),
+            method.declaratorLayers
+        )
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(
+            transpiled.successful,
+            "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}"
+        )
+        val generated = transpiled.cSource?.text ?: error("multidimensional pointer-to-array output is missing")
+        assertTrue("matrix_return__grid" in generated, generated)
+        compileAndRunC(generated)
+        compileCOnlyIfAvailable("x86_64-w64-mingw32-gcc", generated)
     }
 
     @Test
@@ -6107,6 +6353,23 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun prototypeRejectsUnsupportedPrefixedComptimeStringLiteralsAtTheirSourceSpans() {
+        listOf("L", "u8", "u", "U").forEach { prefix ->
+            val literal = "${prefix}\"value\""
+            val text = "const char* value = comptime $literal;"
+            val source = sources.open(SourceId.named("scalar-comptime-string-prefix-$prefix.cp"), text)
+
+            val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+            val diagnostic = result.loweringDiagnostics.single()
+            assertEquals("CPLUS_COMPTIME_SCALAR_STRING", diagnostic.code)
+            assertEquals(source.id.value, diagnostic.span.file)
+            assertEquals(text.indexOf(literal), diagnostic.span.startOffset)
+            assertTrue(result.transcodedSource == null, "unsupported $prefix string must stop C emission")
+        }
+    }
+
+    @Test
     fun prototypeScalarOperatorsMatchHostCResults() {
         val text = """
             comptime int @unary_plus = +5;
@@ -6176,6 +6439,413 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         } ?: return
         val astRun = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
         assertEquals(0, astRun.first, "AST-generated C failed: ${astRun.second}")
+    }
+
+    @Test
+    fun prototypeConvertsComptimeIntegerDeclarationsUsingTargetWidths() {
+        val text = """
+            comptime unsigned char @byte_value = -1;
+            comptime bool @truth_value = 7;
+            comptime short @short_value = 32767;
+            comptime long @long_value = 4294967296;
+            int main(void) {
+                return comptime byte_value != 255 ||
+                    comptime truth_value != 1 ||
+                    comptime short_value != 32767 ||
+                    comptime long_value != 4294967296L ? 1 : 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-integer-widths.cp"), text)
+
+        val linux = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertTrue(linux.successful, "parser=${linux.parserDiagnostics}; lowering=${linux.loweringDiagnostics}")
+        val generated = linux.transcodedSource ?: error("typed scalar declarations should materialize")
+        assertTrue("return 0 || 0 || 0 || 0 ? 1 : 0;" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+
+        val windows = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "windows",
+            targetArch = "x86_64"
+        ).transpile(source)
+        assertFalse(windows.successful, "32-bit Windows long must reject the out-of-range declaration")
+        assertEquals("CPLUS_COMPTIME_SCALAR_WIDTH", windows.loweringDiagnostics.single().code)
+        assertTrue(windows.loweringDiagnostics.single().message.contains("long"))
+        assertEquals(source.id.value, windows.loweringDiagnostics.single().span.file)
+    }
+
+    @Test
+    fun prototypeReportsSignedComptimeIntegerWidthOverflowAtTheDeclaration() {
+        val text = """
+            comptime signed char @too_large = 128;
+            int main(void) { return comptime too_large; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-signed-width.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertFalse(result.successful, "signed char overflow must not be silently materialized")
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_SCALAR_WIDTH", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertTrue(diagnostic.span.startOffset <= text.indexOf("signed char"))
+    }
+
+    @Test
+    fun prototypeUsesCUsualIntegerConversionsForComptimeComparisons() {
+        val text = """
+            comptime unsigned int @maximum = 4294967295;
+            comptime unsigned char @small = 255;
+            int main(void) {
+                int unsigned_vs_negative = comptime (maximum > -1);
+                int promoted_small_vs_negative = comptime (small < -1);
+                int equal_after_promotion = comptime (small == 255);
+                return unsigned_vs_negative != 0 ||
+                    promoted_small_vs_negative != 0 ||
+                    equal_after_promotion != 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-comparisons.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("typed comparisons should materialize")
+        assertTrue("int unsigned_vs_negative = 0;" in generated.code, generated.code)
+        assertTrue("int promoted_small_vs_negative = 0;" in generated.code, generated.code)
+        assertTrue("int equal_after_promotion = 1;" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+
+        val windows = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "windows",
+            targetArch = "x86_64"
+        ).transpile(source)
+        assertTrue(windows.successful, "parser=${windows.parserDiagnostics}; lowering=${windows.loweringDiagnostics}")
+        val windowsGenerated = windows.transcodedSource ?: error("Windows typed comparisons should materialize")
+        assertTrue("int unsigned_vs_negative = 0;" in windowsGenerated.code, windowsGenerated.code)
+    }
+
+    @Test
+    fun prototypeUsesCommonIntegerTypeForComptimeArithmetic() {
+        val text = """
+            comptime unsigned int @maximum = 4294967295;
+            comptime unsigned char @small = 255;
+            int main(void) {
+                int unsigned_wrap = comptime (maximum + 1);
+                int promoted_small = comptime (small + 1);
+                return unsigned_wrap != 0 || promoted_small != 256;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-arithmetic-types.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("typed arithmetic should materialize")
+        assertTrue("int unsigned_wrap = 0;" in generated.code, generated.code)
+        assertTrue("int promoted_small = 256;" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeReportsComptimeArithmeticOverflowForTheCommonSignedType() {
+        val text = """
+            int main(void) {
+                return comptime (2147483647 + 1);
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-arithmetic-overflow.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertFalse(result.successful, "signed int arithmetic overflow must fail closed")
+        val diagnostic = result.loweringDiagnostics.first { it.code == "CPLUS_COMPTIME_SCALAR_ARITHMETIC" }
+        assertEquals("CPLUS_COMPTIME_SCALAR_ARITHMETIC", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+    }
+
+    @Test
+    fun prototypeSelectsCIntegerLiteralTypesForRadixAndSuffix() {
+        val text = """
+            comptime unsigned int @all_bits = 0xffffffff;
+            int main(void) {
+                unsigned int hex_sum = comptime (0xffffffff + 1);
+                int hex_compare = comptime (0xffffffff > -1);
+                long long decimal_wide = comptime (4294967295 + 1);
+                unsigned int suffixed_sum = comptime (4294967295u + 1u);
+                unsigned int unary_minus = comptime (-1u);
+                unsigned int unary_complement = comptime (~0u);
+                unsigned int shifted_left = comptime (all_bits << 1);
+                unsigned int shifted_right = comptime (all_bits >> 1);
+                return hex_sum != 0 ||
+                    hex_compare != 0 ||
+                    decimal_wide != 4294967296LL ||
+                    suffixed_sum != 0 ||
+                    unary_minus != 4294967295U ||
+                    unary_complement != 4294967295U ||
+                    shifted_left != 4294967294U ||
+                    shifted_right != 2147483647U;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-literal-types.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("literal typing should materialize")
+        assertTrue("unsigned int hex_sum = 0;" in generated.code, generated.code)
+        assertTrue("int hex_compare = 0;" in generated.code, generated.code)
+        assertTrue("long long decimal_wide = 4294967296;" in generated.code, generated.code)
+        assertTrue("unsigned int suffixed_sum = 0;" in generated.code, generated.code)
+        assertTrue("unsigned int unary_minus = 4294967295;" in generated.code, generated.code)
+        assertTrue("unsigned int unary_complement = 4294967295;" in generated.code, generated.code)
+        assertTrue("unsigned int shifted_left = 4294967294;" in generated.code, generated.code)
+        assertTrue("unsigned int shifted_right = 2147483647;" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeSelectsLongIntegerLiteralSuffixesPerTargetAbi() {
+        val text = """
+            int main(void) {
+                unsigned long long lower_l = comptime (0xffffffffL + 1);
+                unsigned long long lower_ul = comptime (0xffffffffUL + 1);
+                unsigned long long wide_ll = comptime (0xffffffffLL + 1);
+                unsigned long long wide_ull = comptime (0xffffffffULL + 1);
+                return lower_l != EXPECTED_LOWER_L ||
+                    lower_ul != EXPECTED_LOWER_UL ||
+                    wide_ll != 4294967296ULL ||
+                    wide_ull != 4294967296ULL;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-long-suffixes.cp"), text)
+
+        listOf(
+            Triple("linux", "x86_64", "4294967296" to "4294967296"),
+            Triple("linux", "arm64", "4294967296" to "4294967296"),
+            Triple("macos", "x86_64", "4294967296" to "4294967296"),
+            Triple("macos", "arm64", "4294967296" to "4294967296"),
+            Triple("windows", "x86_64", "0" to "0")
+        ).forEach { (os, arch, expected) ->
+            val targetSource = text
+                .replace("EXPECTED_LOWER_L", expected.first)
+                .replace("EXPECTED_LOWER_UL", expected.second)
+            val target = sources.open(SourceId.named("scalar-comptime-long-suffixes-$os-$arch.cp"), targetSource)
+            val result = TreeSitterCPlusPrototypeTranspiler(
+                backend = backend,
+                sourceManager = sources,
+                targetOs = os,
+                targetArch = arch
+            ).transpile(target)
+
+            assertTrue(result.successful, "$os/$arch parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+            val generated = result.transcodedSource ?: error("long suffixes should materialize for $os/$arch")
+            assertTrue("lower_l = ${expected.first};" in generated.code, generated.code)
+            assertTrue("lower_ul = ${expected.second};" in generated.code, generated.code)
+            assertTrue("wide_ll = 4294967296;" in generated.code, generated.code)
+            assertTrue("wide_ull = 4294967296;" in generated.code, generated.code)
+            compileAndRunC(generated.code)
+        }
+    }
+
+    @Test
+    fun prototypeUsesTargetAwarePlainCharSignedness() {
+        val text = """
+            comptime char @minus_one = -1;
+            comptime char @maximum = 127;
+            int main(void) {
+                int is_negative = comptime (minus_one < 0);
+                int maximum = comptime maximum;
+                return is_negative != EXPECTED_SIGNED || maximum != 127 ? 1 : 0;
+            }
+        """.trimIndent()
+        listOf(
+            Triple("linux", "x86_64", 1),
+            Triple("linux", "arm64", 0),
+            Triple("macos", "x86_64", 1),
+            Triple("macos", "arm64", 1),
+            Triple("windows", "x86_64", 1),
+            Triple("windows", "arm64", 1)
+        ).forEach { (os, arch, expectedSigned) ->
+            val targetSource = text.replace("EXPECTED_SIGNED", expectedSigned.toString())
+            val source = sources.open(SourceId.named("scalar-comptime-plain-char-$os-$arch.cp"), targetSource)
+            val result = TreeSitterCPlusPrototypeTranspiler(
+                backend = backend,
+                sourceManager = sources,
+                targetOs = os,
+                targetArch = arch
+            ).transpile(source)
+
+            assertTrue(result.successful, "$os/$arch parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+            val generated = result.transcodedSource ?: error("plain char should materialize for $os/$arch")
+            assertTrue("int is_negative = $expectedSigned;" in generated.code, generated.code)
+            assertTrue("int maximum = 127;" in generated.code, generated.code)
+            compileAndRunC(generated.code)
+        }
+    }
+
+    @Test
+    fun prototypeRejectsPlainCharWhenTargetSignednessIsUnknown() {
+        val text = """
+            comptime char @value = -1;
+            int main(void) { return comptime value; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-plain-char-unknown-target.cp"), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "freebsd",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertFalse(result.successful, "unknown plain-char ABI must fail closed")
+        val diagnostic = result.loweringDiagnostics.single { it.code == "CPLUS_COMPTIME_SCALAR_TYPE" }
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertTrue(diagnostic.message.contains("plain char signedness"), diagnostic.toString())
+        assertTrue(diagnostic.span.startOffset <= text.indexOf("char"), diagnostic.toString())
+    }
+
+    @Test
+    fun prototypeAppliesTargetAwareIntegerCasts() {
+        val text = """
+            int main(void) {
+                unsigned char byte_value = comptime (unsigned char) 300;
+                unsigned int unsigned_value = comptime (unsigned int) -1;
+                int signed_value = comptime (int) 255U;
+                int bool_value = comptime (_Bool) 9;
+                return byte_value != 44 ||
+                    unsigned_value != 4294967295U ||
+                    signed_value != 255 ||
+                    bool_value != 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-casts.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("integer casts should materialize")
+        assertTrue("unsigned char byte_value = 44;" in generated.code, generated.code)
+        assertTrue("unsigned int unsigned_value = 4294967295;" in generated.code, generated.code)
+        assertTrue("int signed_value = 255;" in generated.code, generated.code)
+        assertTrue("int bool_value = 1;" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeRejectsUnsupportedComptimeScalarCastsWithMappedDiagnostics() {
+        val text = "int main(void) { return comptime (int*) 1; }"
+        val source = sources.open(SourceId.named("scalar-comptime-pointer-cast.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertFalse(result.successful, "pointer casts must remain outside scalar comptime")
+        val diagnostic = result.loweringDiagnostics.first { it.code == "CPLUS_COMPTIME_SCALAR_CAST" }
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertTrue(diagnostic.span.startOffset <= text.indexOf("int*"), diagnostic.toString())
+    }
+
+    @Test
+    fun prototypeConvertsScalarComptimeFunctionParametersAndReturns() {
+        val text = """
+            comptime int @bump(unsigned char value) {
+                return value + 1;
+            }
+            comptime bool @truth(unsigned char value) {
+                return value;
+            }
+            comptime int @accept(unsigned int value) {
+                return value == 4294967295U;
+            }
+            int main(void) {
+                int bumped = comptime bump(255);
+                int truth = comptime truth(2);
+                int accepted = comptime accept(-1);
+                return bumped != 256 || truth != 1 || accepted != 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-function-conversions.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("scalar function conversions should materialize")
+        assertTrue("int bumped = 256;" in generated.code, generated.code)
+        assertTrue("int truth = 1;" in generated.code, generated.code)
+        assertTrue("int accepted = 1;" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeRejectsOutOfRangeScalarComptimeFunctionConversionWithMappedDiagnostics() {
+        val text = """
+            comptime int @needs_signed(signed char value) {
+                return value;
+            }
+            int main(void) { return comptime needs_signed(300); }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-function-conversion-error.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertFalse(result.successful, "out-of-range signed parameter conversion must fail closed")
+        val diagnostic = result.loweringDiagnostics.first { it.code == "CPLUS_COMPTIME_SCALAR_FUNCTION_CONVERSION" }
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertTrue(diagnostic.span.startOffset <= text.indexOf("300"), diagnostic.toString())
     }
 
     @Test

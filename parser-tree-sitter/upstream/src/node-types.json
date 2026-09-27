@@ -2220,6 +2220,10 @@
       "required": true,
       "types": [
         {
+          "type": "array_declarator",
+          "named": true
+        },
+        {
           "type": "function_declarator",
           "named": true
         },

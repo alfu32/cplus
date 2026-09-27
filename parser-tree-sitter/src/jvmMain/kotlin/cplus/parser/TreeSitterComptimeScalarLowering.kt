@@ -338,7 +338,9 @@ class TreeSitterComptimeScalarLowering(
                             replacement = parent?.takeIf { it.kind == "cplus_comptime_declaration" } ?: node,
                             name = indexed.symbol.orEmpty(),
                             parameterNames = indexed.parameters.mapNotNull { it.name },
+                            parameterTypes = indexed.parameters.map { it.typeText.orEmpty() },
                             typeParameters = indexed.parameters.map { it.genericType },
+                            resultType = resultType.orEmpty(),
                             returnExpression = returnExpression
                         )
                     }
@@ -425,9 +427,65 @@ class TreeSitterComptimeScalarLowering(
             }
             val expression = declaration.expression
             val result = expression?.let { evaluate(it) }
+            val converted = result?.let { convertDeclaredInteger(declaration, it) }
             visiting.remove(name)
-            if (result != null) values[name] = result else failedValues += name
-            return result
+            if (converted != null) values[name] = converted else failedValues += name
+            return converted
+        }
+
+        private fun convertDeclaredInteger(declaration: ValueDeclaration, value: Scalar): Scalar? {
+            val typeNode = declaration.type ?: return value
+            val declarationNode = declaration.node
+            val declaredType = textOf(typeNode).replace(Regex("\\s+"), " ").trim()
+            val type = integerType(declaredType) ?: return if (declaredType == "char") {
+                fail(
+                    "CPLUS_COMPTIME_SCALAR_TYPE",
+                    "plain char signedness is unavailable for target $targetArch-$targetOs",
+                    typeNode
+                )
+            } else {
+                value
+            }
+            return when {
+                type.isBoolean -> Scalar.Bool(value.asBoolean() ?: return fail(
+                    "CPLUS_COMPTIME_SCALAR_TYPE",
+                    "comptime integer declaration '${declaration.name}' requires an integer or bool initializer",
+                    declarationNode
+                ))
+
+                value.asInteger() == null -> fail(
+                    "CPLUS_COMPTIME_SCALAR_TYPE",
+                    "comptime integer declaration '${declaration.name}' requires an integer initializer",
+                    declarationNode
+                )
+
+                type.isUnsigned -> {
+                    val modulus = BigInteger.ONE.shiftLeft(type.bits)
+                    val converted = BigInteger.valueOf(value.asInteger()!!).mod(modulus)
+                    if (converted > LONG_MAX) {
+                        fail(
+                            "CPLUS_COMPTIME_SCALAR_WIDTH",
+                            "value ${value.asInteger()} converts to an unsigned '${type.name}' outside the supported signed-64 materialization range",
+                            declarationNode
+                        )
+                    } else {
+                        Scalar.Integer(converted.toLong(), type)
+                    }
+                }
+
+                else -> {
+                    val integer = BigInteger.valueOf(value.asInteger()!!)
+                    if (integer < type.minimum || integer > type.maximum) {
+                        fail(
+                            "CPLUS_COMPTIME_SCALAR_WIDTH",
+                            "value ${value.asInteger()} does not fit comptime type '${type.name}' on target $targetArch-$targetOs",
+                            declarationNode
+                        )
+                    } else {
+                        Scalar.Integer(value.asInteger()!!, type)
+                    }
+                }
+            }
         }
 
         fun evaluate(node: CPlusSyntaxNode, locals: Map<String, Scalar> = emptyMap()): Scalar? = when (node.kind) {
@@ -475,6 +533,7 @@ class TreeSitterComptimeScalarLowering(
                 }
             }
             "parenthesized_expression" -> node.children.firstOrNull { it.named }?.let { evaluate(it, locals) } ?: unsupported(node)
+            "cast_expression" -> evaluateCast(node, locals)
             "unary_expression" -> evaluateUnary(node, locals)
             "binary_expression" -> evaluateBinary(node, locals)
             "conditional_expression" -> evaluateConditional(node, locals)
@@ -516,16 +575,84 @@ class TreeSitterComptimeScalarLowering(
             }
         }
 
+        private fun evaluateCast(node: CPlusSyntaxNode, locals: Map<String, Scalar>): Scalar? {
+            val descriptor = node.children.firstOrNull { it.fieldName == "type" }
+                ?: return unsupported(node)
+            val valueNode = node.children.firstOrNull { it.fieldName == "value" }
+                ?: return unsupported(node)
+            val declarator = descriptor.children.firstOrNull { it.fieldName == "declarator" }
+            if (declarator != null) {
+                return fail(
+                    "CPLUS_COMPTIME_SCALAR_CAST",
+                    "pointer, array, and function casts are not supported in scalar comptime expressions",
+                    descriptor
+                )
+            }
+            val typeNode = descriptor.children.firstOrNull { it.fieldName == "type" }
+                ?: return unsupported(descriptor)
+            val type = integerType(textOf(typeNode))
+                ?: return fail(
+                    "CPLUS_COMPTIME_SCALAR_CAST",
+                    "comptime scalar casts require a supported integer or bool target type",
+                    typeNode
+                )
+            val value = evaluate(valueNode, locals)
+                ?: return null
+            val integer = value.asInteger()
+                ?: return fail(
+                    "CPLUS_COMPTIME_SCALAR_CAST",
+                    "comptime scalar casts require an integer or bool source value",
+                    valueNode
+                )
+            if (type.isBoolean) return Scalar.Integer(if (integer == 0L) 0L else 1L, type)
+            if (type.isUnsigned) {
+                val converted = BigInteger.valueOf(integer).mod(BigInteger.ONE.shiftLeft(type.bits))
+                if (converted > LONG_MAX) {
+                    return fail(
+                        "CPLUS_COMPTIME_SCALAR_CAST",
+                        "unsigned '${type.name}' cast exceeds the supported signed-64 materialization range",
+                        node
+                    )
+                }
+                return Scalar.Integer(converted.toLong(), type)
+            }
+            val converted = BigInteger.valueOf(integer)
+            if (converted < type.minimum || converted > type.maximum) {
+                return fail(
+                    "CPLUS_COMPTIME_SCALAR_CAST",
+                    "value $integer does not fit comptime cast target '${type.name}'",
+                    node
+                )
+            }
+            return Scalar.Integer(integer, type)
+        }
+
         private fun evaluateUnary(node: CPlusSyntaxNode, locals: Map<String, Scalar>): Scalar? {
             val operand = node.children.lastOrNull { it.named } ?: return unsupported(node)
             val value = evaluate(operand, locals) ?: return null
             val operator = text.substring(node.span.startOffset, operand.span.startOffset).trim()
             return when (operator) {
-                "+" -> value.asInteger()?.let(Scalar::Integer) ?: unsupported(node)
-                "-" -> value.asInteger()?.let { arithmetic(node) { Math.negateExact(it) } }
-                    ?: unsupported(node)
+                "+" -> promoteInteger(node, value)
+                "-" -> {
+                    val promoted = promoteInteger(node, value) ?: return null
+                    val integer = promoted as? Scalar.Integer ?: return unsupported(node)
+                    val type = integer.type ?: return unsupported(node)
+                    normalizeArithmeticResult(
+                        BigInteger.valueOf(integer.value).negate(),
+                        type,
+                        node
+                    )
+                }
                 "!" -> value.asBoolean()?.let { Scalar.Bool(!it) } ?: unsupported(node)
-                "~" -> value.asInteger()?.let { Scalar.Integer(it.inv()) } ?: unsupported(node)
+                "~" -> {
+                    val promoted = promoteInteger(node, value) ?: return null
+                    val promotedInteger = promoted as? Scalar.Integer ?: return unsupported(node)
+                    val type = promotedInteger.type ?: return unsupported(node)
+                    val integer = BigInteger.valueOf(promotedInteger.value)
+                    val mask = BigInteger.ONE.shiftLeft(type.bits).subtract(BigInteger.ONE)
+                    val result = if (type.isUnsigned) integer.xor(mask) else integer.not()
+                    normalizeArithmeticResult(result, type, node)
+                }
                 else -> unsupported(node)
             }
         }
@@ -536,7 +663,7 @@ class TreeSitterComptimeScalarLowering(
             val left = evaluate(operands[0], locals) ?: return null
             val operator = text.substring(operands[0].span.endOffset, operands[1].span.startOffset).trim()
             if (operator == "&&" || operator == "||") {
-                val leftTruth = left.asBoolean() ?: return unsupported(operands[0])
+            val leftTruth = left.asBoolean() ?: return unsupported(operands[0])
                 if (operator == "&&" && !leftTruth) return Scalar.Bool(false)
                 if (operator == "||" && leftTruth) return Scalar.Bool(true)
                 val right = evaluate(operands[1], locals) ?: return null
@@ -549,37 +676,52 @@ class TreeSitterComptimeScalarLowering(
             return when (operator) {
                 "+" -> when {
                     left is Scalar.String && right is Scalar.String -> Scalar.String(left.value + right.value)
-                    a != null && b != null -> arithmetic(node) { Math.addExact(a, b) }
+                    a != null && b != null -> integerArithmetic(node, left, right) { leftValue, rightValue ->
+                        leftValue.add(rightValue)
+                    }
                     else -> unsupported(node)
                 }
-                "-" -> if (a != null && b != null) arithmetic(node) { Math.subtractExact(a, b) } else unsupported(node)
-                "*" -> if (a != null && b != null) arithmetic(node) { Math.multiplyExact(a, b) } else unsupported(node)
+                "-" -> if (a != null && b != null) integerArithmetic(node, left, right) { leftValue, rightValue ->
+                    leftValue.subtract(rightValue)
+                } else unsupported(node)
+                "*" -> if (a != null && b != null) integerArithmetic(node, left, right) { leftValue, rightValue ->
+                    leftValue.multiply(rightValue)
+                } else unsupported(node)
                 "/" -> when {
                     a == null || b == null || b == 0L -> arithmeticError(node, "division requires integer operands and a nonzero divisor")
-                    a == Long.MIN_VALUE && b == -1L -> arithmeticError(node, "signed integer overflow in comptime division")
-                    else -> Scalar.Integer(a / b)
+                    else -> integerArithmetic(node, left, right) { leftValue, rightValue ->
+                        leftValue.divide(rightValue)
+                    }
                 }
                 "%" -> when {
                     a == null || b == null || b == 0L -> arithmeticError(node, "remainder requires integer operands and a nonzero divisor")
-                    a == Long.MIN_VALUE && b == -1L -> arithmeticError(node, "signed integer overflow in comptime remainder")
-                    else -> Scalar.Integer(a % b)
+                    else -> integerArithmetic(node, left, right) { leftValue, rightValue ->
+                        leftValue.remainder(rightValue)
+                    }
                 }
-                "==" -> Scalar.Bool(left == right)
-                "!=" -> Scalar.Bool(left != right)
-                "<" -> if (a != null && b != null) Scalar.Bool(a < b) else unsupported(node)
-                "<=" -> if (a != null && b != null) Scalar.Bool(a <= b) else unsupported(node)
-                ">" -> if (a != null && b != null) Scalar.Bool(a > b) else unsupported(node)
-                ">=" -> if (a != null && b != null) Scalar.Bool(a >= b) else unsupported(node)
-                "&" -> if (a != null && b != null) Scalar.Integer(a and b) else unsupported(node)
-                "|" -> if (a != null && b != null) Scalar.Integer(a or b) else unsupported(node)
-                "^" -> if (a != null && b != null) Scalar.Integer(a xor b) else unsupported(node)
-                "<<" -> if (a != null && b != null && a >= 0L && b in 0L..62L) {
-                    val factor = 1L shl b.toInt()
-                    arithmetic(node) { Math.multiplyExact(a, factor) }
-                } else arithmeticError(node, "signed left shift requires a nonnegative value and a shift count from 0 through 62")
-                ">>" -> if (a != null && b != null && a >= 0L && b in 0L..62L) {
-                    Scalar.Integer(a shr b.toInt())
-                } else arithmeticError(node, "signed right shift requires a nonnegative value and a shift count from 0 through 62")
+                "==" -> compareIntegers(left, right, node) { leftValue, rightValue -> leftValue == rightValue }
+                    ?: Scalar.Bool(left == right)
+                "!=" -> compareIntegers(left, right, node) { leftValue, rightValue -> leftValue != rightValue }
+                    ?: Scalar.Bool(left != right)
+                "<" -> compareIntegers(left, right, node) { leftValue, rightValue -> leftValue < rightValue }
+                    ?: unsupported(node)
+                "<=" -> compareIntegers(left, right, node) { leftValue, rightValue -> leftValue <= rightValue }
+                    ?: unsupported(node)
+                ">" -> compareIntegers(left, right, node) { leftValue, rightValue -> leftValue > rightValue }
+                    ?: unsupported(node)
+                ">=" -> compareIntegers(left, right, node) { leftValue, rightValue -> leftValue >= rightValue }
+                    ?: unsupported(node)
+                "&" -> if (a != null && b != null) integerArithmetic(node, left, right) { leftValue, rightValue ->
+                    leftValue.and(rightValue)
+                } else unsupported(node)
+                "|" -> if (a != null && b != null) integerArithmetic(node, left, right) { leftValue, rightValue ->
+                    leftValue.or(rightValue)
+                } else unsupported(node)
+                "^" -> if (a != null && b != null) integerArithmetic(node, left, right) { leftValue, rightValue ->
+                    leftValue.xor(rightValue)
+                } else unsupported(node)
+                "<<" -> integerShift(node, left, right, leftShift = true)
+                ">>" -> integerShift(node, left, right, leftShift = false)
                 else -> unsupported(node)
             }
         }
@@ -595,6 +737,152 @@ class TreeSitterComptimeScalarLowering(
                 node.children.firstOrNull { it.fieldName == "alternative" }
             } ?: return unsupported(node)
             return evaluate(selected, locals)
+        }
+
+        private fun compareIntegers(
+            left: Scalar,
+            right: Scalar,
+            node: CPlusSyntaxNode,
+            comparison: (BigInteger, BigInteger) -> Boolean
+        ): Scalar? {
+            if (left.asInteger() == null || right.asInteger() == null) return null
+            val commonType = commonIntegerType(left, right)
+                ?: return fail(
+                    "CPLUS_COMPTIME_SCALAR_TYPE",
+                    "integer comparison requires supported integer operands",
+                    node
+                )
+            val leftValue = convertForComparison(left.asInteger()!!, commonType)
+            val rightValue = convertForComparison(right.asInteger()!!, commonType)
+            return Scalar.Bool(comparison(leftValue, rightValue))
+        }
+
+        private fun integerArithmetic(
+            node: CPlusSyntaxNode,
+            left: Scalar,
+            right: Scalar,
+            operation: (BigInteger, BigInteger) -> BigInteger
+        ): Scalar? {
+            val commonType = commonIntegerType(left, right)
+                ?: return fail(
+                    "CPLUS_COMPTIME_SCALAR_TYPE",
+                    "integer arithmetic requires supported integer operands",
+                    node
+                )
+            val leftValue = convertForComparison(left.asInteger()!!, commonType)
+            val rightValue = convertForComparison(right.asInteger()!!, commonType)
+            val result = operation(leftValue, rightValue)
+            return normalizeArithmeticResult(result, commonType, node)
+        }
+
+        private fun promoteInteger(node: CPlusSyntaxNode, value: Scalar): Scalar? {
+            val integer = value.asInteger()
+                ?: return unsupported(node)
+            val type = promotedIntegerType(value)
+                ?: return fail(
+                    "CPLUS_COMPTIME_SCALAR_TYPE",
+                    "unary integer operator requires a supported integer operand",
+                    node
+                )
+            val normalized = convertForComparison(integer, type)
+            if (normalized < LONG_MIN || normalized > LONG_MAX) {
+                return arithmeticError(
+                    node,
+                    "comptime ${type.name} operand exceeds the supported signed-64 materialization range"
+                )
+            }
+            return Scalar.Integer(normalized.toLong(), type)
+        }
+
+        private fun integerShift(
+            node: CPlusSyntaxNode,
+            left: Scalar,
+            right: Scalar,
+            leftShift: Boolean
+        ): Scalar? {
+            val leftInteger = left.asInteger()
+            val rightInteger = right.asInteger()
+            if (leftInteger == null || rightInteger == null) {
+                return arithmeticError(node, "shift requires integer operands")
+            }
+            val leftType = promotedIntegerType(left)
+                ?: return fail(
+                    "CPLUS_COMPTIME_SCALAR_TYPE",
+                    "shift requires a supported integer left operand",
+                    node
+                )
+            val shiftCount = BigInteger.valueOf(rightInteger)
+            if (shiftCount.signum() < 0 || shiftCount >= BigInteger.valueOf(leftType.bits.toLong())) {
+                return arithmeticError(
+                    node,
+                    "shift count must be between 0 and ${leftType.bits - 1} for ${leftType.name}"
+                )
+            }
+            val leftValue = convertForComparison(leftInteger, leftType)
+            if (!leftType.isUnsigned && leftValue.signum() < 0) {
+                return arithmeticError(
+                    node,
+                    "signed shift requires a nonnegative left operand"
+                )
+            }
+            val count = shiftCount.toInt()
+            val result = if (leftShift) leftValue.shiftLeft(count) else leftValue.shiftRight(count)
+            return normalizeArithmeticResult(result, leftType, node)
+        }
+
+        private fun normalizeArithmeticResult(
+            value: BigInteger,
+            type: ComptimeIntegerType,
+            node: CPlusSyntaxNode
+        ): Scalar? {
+            val normalized = if (type.isUnsigned) {
+                value.mod(BigInteger.ONE.shiftLeft(type.bits))
+            } else {
+                if (value < type.minimum || value > type.maximum) {
+                    return arithmeticError(node, "integer overflow in comptime ${type.name} arithmetic")
+                }
+                value
+            }
+            if (normalized < LONG_MIN || normalized > LONG_MAX) {
+                return arithmeticError(node, "comptime ${type.name} result exceeds the supported signed-64 materialization range")
+            }
+            return Scalar.Integer(normalized.toLong(), type)
+        }
+
+        private fun commonIntegerType(left: Scalar, right: Scalar): ComptimeIntegerType? {
+            val leftType = promotedIntegerType(left) ?: return null
+            val rightType = promotedIntegerType(right) ?: return null
+            if (leftType.isUnsigned == rightType.isUnsigned) {
+                return if (leftType.rank >= rightType.rank) leftType else rightType
+            }
+            val unsigned = if (leftType.isUnsigned) leftType else rightType
+            val signed = if (leftType.isUnsigned) rightType else leftType
+            return when {
+                signed.bits > unsigned.bits -> signed
+                unsigned.rank >= signed.rank -> unsigned
+                else -> integerTypeByRank(signed.rank, unsigned = true)
+            }
+        }
+
+        private fun promotedIntegerType(value: Scalar): ComptimeIntegerType? {
+            val type = when (value) {
+                is Scalar.Bool -> integerType("int")
+                is Scalar.Integer -> value.type ?: integerType("int")
+                else -> null
+            } ?: return null
+            if (type.isBoolean || type.rank < 3) {
+                return if (!type.isUnsigned || type.bits < 32) integerType("int") else integerType("unsigned int")
+            }
+            return type
+        }
+
+        private fun convertForComparison(value: Long, type: ComptimeIntegerType): BigInteger {
+            val integer = BigInteger.valueOf(value)
+            return if (type.isUnsigned) {
+                integer.mod(BigInteger.ONE.shiftLeft(type.bits))
+            } else {
+                integer
+            }
         }
 
         private fun evaluateStringLiteral(node: CPlusSyntaxNode): Scalar? {
@@ -678,14 +966,87 @@ class TreeSitterComptimeScalarLowering(
                 )
             }
             val argumentValues = arguments.mapIndexed { index, argument ->
-                if (function.typeParameters[index]) evaluateTypeArgument(argument, locals) ?: return null
-                else evaluate(argument, locals) ?: return null
+                if (function.typeParameters[index]) {
+                    evaluateTypeArgument(argument, locals) ?: return null
+                } else {
+                    val value = evaluate(argument, locals) ?: return null
+                    convertFunctionIntegerValue(function, index, value, argument) ?: return null
+                }
             }
             activeFunctions += name
             val functionLocals = function.parameterNames.zip(argumentValues).toMap()
             val result = evaluate(function.returnExpression, functionLocals)
             activeFunctions -= name
-            return result
+            if (result == null) return null
+            if (function.resultType == "string") {
+                return if (result is Scalar.String) result else fail(
+                    "CPLUS_COMPTIME_SCALAR_FUNCTION_RETURN",
+                    "scalar comptime function '$name' must return a string value",
+                    node
+                )
+            }
+            val returnType = integerType(function.resultType)
+                ?: return fail(
+                    "CPLUS_COMPTIME_SCALAR_FUNCTION_RETURN",
+                    "scalar comptime function '$name' has an unsupported integer return type",
+                    node
+                )
+            return convertIntegerValue(
+                result,
+                returnType,
+                node,
+                "CPLUS_COMPTIME_SCALAR_FUNCTION_RETURN",
+                "return value from '$name'"
+            )
+        }
+
+        private fun convertFunctionIntegerValue(
+            function: ScalarFunctionDeclaration,
+            index: Int,
+            value: Scalar,
+            argument: CPlusSyntaxNode
+        ): Scalar? {
+            val type = integerType(function.parameterTypes[index])
+                ?: return fail(
+                    "CPLUS_COMPTIME_SCALAR_FUNCTION_PARAMETER",
+                    "scalar comptime function '${function.name}' has an unsupported integer parameter type",
+                    argument
+                )
+            return convertIntegerValue(
+                value,
+                type,
+                argument,
+                "CPLUS_COMPTIME_SCALAR_FUNCTION_CONVERSION",
+                "argument for '${function.name}'"
+            )
+        }
+
+        private fun convertIntegerValue(
+            value: Scalar,
+            type: ComptimeIntegerType,
+            node: CPlusSyntaxNode,
+            code: String,
+            context: String
+        ): Scalar? {
+            val integer = value.asInteger()
+                ?: return fail(code, "$context requires an integer or bool value", node)
+            if (type.isBoolean) return Scalar.Integer(if (integer == 0L) 0L else 1L, type)
+            if (type.isUnsigned) {
+                val converted = BigInteger.valueOf(integer).mod(BigInteger.ONE.shiftLeft(type.bits))
+                if (converted > LONG_MAX) {
+                    return fail(
+                        code,
+                        "$context exceeds the supported signed-64 materialization range for '${type.name}'",
+                        node
+                    )
+                }
+                return Scalar.Integer(converted.toLong(), type)
+            }
+            val converted = BigInteger.valueOf(integer)
+            if (converted < type.minimum || converted > type.maximum) {
+                return fail(code, "$context does not fit '${type.name}'", node)
+            }
+            return Scalar.Integer(integer, type)
         }
 
         private fun evaluateTypeArgument(node: CPlusSyntaxNode, locals: Map<String, Scalar>): Scalar? {
@@ -757,6 +1118,44 @@ class TreeSitterComptimeScalarLowering(
             return AbiLayout(size, size)
         }
 
+        private fun integerType(rawType: String): ComptimeIntegerType? {
+            var normalized = rawType.replace(Regex("\\s+"), " ").trim()
+            val visited = mutableSetOf<String>()
+            while (visited.add(normalized)) {
+                val alias = primitiveAliases[normalized] ?: break
+                normalized = alias.replace(Regex("\\s+"), " ").trim()
+            }
+            val longBits = if (targetOs == "windows") 32 else 64
+            return when (normalized) {
+                "_Bool", "bool" -> ComptimeIntegerType(normalized, 1, false, true)
+                "signed char" -> ComptimeIntegerType(normalized, 8, false, rank = 1)
+                "unsigned char" -> ComptimeIntegerType(normalized, 8, true, rank = 1)
+                "short", "short int", "signed short", "signed short int" ->
+                    ComptimeIntegerType(normalized, 16, false, rank = 2)
+                "unsigned short", "unsigned short int" -> ComptimeIntegerType(normalized, 16, true, rank = 2)
+                "int", "signed", "signed int" -> ComptimeIntegerType(normalized, 32, false, rank = 3)
+                "unsigned", "unsigned int" -> ComptimeIntegerType(normalized, 32, true, rank = 3)
+                "long", "long int", "signed long", "signed long int" ->
+                    ComptimeIntegerType(normalized, longBits, false, rank = 4)
+                "unsigned long", "unsigned long int" -> ComptimeIntegerType(normalized, longBits, true, rank = 4)
+                "long long", "long long int", "signed long long", "signed long long int" ->
+                    ComptimeIntegerType(normalized, 64, false, rank = 5)
+                "unsigned long long", "unsigned long long int" -> ComptimeIntegerType(normalized, 64, true, rank = 5)
+                "char" -> cplus.CPlusTarget.plainCharIsUnsigned(targetOs, targetArch)?.let { unsigned ->
+                    ComptimeIntegerType(normalized, 8, unsigned, rank = 1)
+                }
+                else -> null
+            }
+        }
+
+        private fun integerTypeByRank(rank: Int, unsigned: Boolean): ComptimeIntegerType = when (rank) {
+            1 -> integerType(if (unsigned) "unsigned char" else "signed char")!!
+            2 -> integerType(if (unsigned) "unsigned short" else "short")!!
+            3 -> integerType(if (unsigned) "unsigned int" else "int")!!
+            4 -> integerType(if (unsigned) "unsigned long" else "long")!!
+            else -> integerType(if (unsigned) "unsigned long long" else "long long")!!
+        }
+
         private fun canonicalPrimitiveType(type: String, visited: MutableSet<String>): String? {
             if (!visited.add(type)) return null
             val alias = primitiveAliases[type]
@@ -801,6 +1200,7 @@ class TreeSitterComptimeScalarLowering(
         private fun parseInteger(raw: String): Scalar? {
             val literal = INTEGER_LITERAL.matchEntire(raw) ?: return null
             val signedValue = literal.groupValues[1]
+            val suffix = literal.groupValues[2]
             val isNegative = signedValue.startsWith('-')
             val value = signedValue.removePrefix("-").removePrefix("+")
             val radix = when {
@@ -817,13 +1217,52 @@ class TreeSitterComptimeScalarLowering(
             val magnitude = digits.toBigIntegerOrNull(radix) ?: return null
             val signed = if (isNegative) magnitude.negate() else magnitude
             if (signed < LONG_MIN || signed > LONG_MAX) return null
-            return Scalar.Integer(signed.toLong())
+            val type = literalIntegerType(suffix, radix, magnitude) ?: return null
+            val materialized = if (isNegative && type.isUnsigned) {
+                signed.mod(BigInteger.ONE.shiftLeft(type.bits))
+            } else {
+                signed
+            }
+            if (materialized < LONG_MIN || materialized > LONG_MAX) return null
+            return Scalar.Integer(materialized.toLong(), type)
+        }
+
+        private fun literalIntegerType(
+            suffix: String,
+            radix: Int,
+            magnitude: BigInteger
+        ): ComptimeIntegerType? {
+            val decimal = radix == 10
+            val candidates = when (suffix.lowercase()) {
+                "" -> if (decimal) {
+                    listOf("int", "long", "long long")
+                } else {
+                    listOf("int", "unsigned int", "long", "unsigned long", "long long", "unsigned long long")
+                }
+                "u" -> listOf("unsigned int", "unsigned long", "unsigned long long")
+                "l" -> if (decimal) {
+                    listOf("long", "long long")
+                } else {
+                    listOf("long", "unsigned long", "long long", "unsigned long long")
+                }
+                "ul", "lu" -> listOf("unsigned long", "unsigned long long")
+                "ll" -> if (decimal) {
+                    listOf("long long")
+                } else {
+                    listOf("long long", "unsigned long long")
+                }
+                "ull", "llu" -> listOf("unsigned long long")
+                else -> emptyList()
+            }
+            return candidates.asSequence()
+                .mapNotNull(::integerType)
+                .firstOrNull { type -> magnitude <= type.maximum && magnitude <= LONG_MAX }
         }
 
         private companion object {
             const val MAX_FUNCTION_DEPTH = 128
             val INTEGER_LITERAL = Regex(
-                """([+-]?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|0[0-7]*|[1-9][0-9]*))(?:[uU](?:[lL]{1,2})?|[lL]{1,2}[uU]?)?"""
+                """([+-]?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|0[0-7]*|[1-9][0-9]*))(([uU](?:[lL]{1,2})?|[lL]{1,2}[uU]?))?"""
             )
             val LONG_MIN = BigInteger.valueOf(Long.MIN_VALUE)
             val LONG_MAX = BigInteger.valueOf(Long.MAX_VALUE)
@@ -852,22 +1291,42 @@ class TreeSitterComptimeScalarLowering(
         val replacement: CPlusSyntaxNode,
         val name: String,
         val parameterNames: List<String>,
+        val parameterTypes: List<String>,
         val typeParameters: List<Boolean>,
+        val resultType: String,
         val returnExpression: CPlusSyntaxNode
     )
 
     private data class AbiLayout(val size: Long, val alignment: Long)
 
+    private data class ComptimeIntegerType(
+        val name: String,
+        val bits: Int,
+        val isUnsigned: Boolean,
+        val isBoolean: Boolean = false,
+        val rank: Int = 3
+    ) {
+        val minimum: BigInteger = if (isUnsigned) BigInteger.ZERO else BigInteger.ONE.shiftLeft(bits - 1).negate()
+        val maximum: BigInteger = if (isUnsigned) BigInteger.ONE.shiftLeft(bits).subtract(BigInteger.ONE)
+        else BigInteger.ONE.shiftLeft(bits - 1).subtract(BigInteger.ONE)
+    }
+
     private sealed interface Scalar {
         fun render(): kotlin.String
-        fun asInteger(): Long? = (this as? Integer)?.value
+        fun asInteger(): Long? = when (this) {
+            is Integer -> value
+            is Bool -> if (value) 1L else 0L
+            else -> null
+        }
         fun asBoolean(): Boolean? = when (this) {
             is Bool -> value
             is Integer -> value != 0L
             else -> null
         }
 
-        data class Integer(val value: Long) : Scalar { override fun render() = value.toString() }
+        data class Integer(val value: Long, val type: ComptimeIntegerType? = null) : Scalar {
+            override fun render() = value.toString()
+        }
         data class Bool(val value: Boolean) : Scalar { override fun render() = if (value) "1" else "0" }
         data class String(val value: kotlin.String) : Scalar {
             override fun render() = buildString {

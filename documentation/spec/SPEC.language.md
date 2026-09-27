@@ -6,6 +6,8 @@ Status: living specification. Update this document whenever the language or gene
 
 C-plus is C with a small object-oriented surface syntax. Files use `.cp` or `.c+` and otherwise contain ordinary C declarations, expressions, statements, and preprocessor directives. The compiler lowers C-plus to C; it does not impose a runtime or ownership checker.
 
+The syntax contract is maintained in [`SPEC.grammar.md`](SPEC.grammar.md). It records the C-plus extension grammar separately from the pinned upstream C grammar and includes the live stdlib/example parser proof.
+
 ## Annotations
 
 The following annotations are optional, empty C macros retained in generated code:
@@ -178,7 +180,7 @@ Test blocks use a named C-plus annotation and are compiled only by the `test` co
 }
 ```
 
-Quoted names are recommended; unquoted names such as `@test print and init struct { ... }` are also accepted. Each body is emitted as a test function. `@assert(condition)` and `CPLUS_TEST_ASSERT(condition)` always print the expression, invocation-wide assertion number/total, obtained boolean, expected `true`, and green/red PASS/FAIL status. `@assertEquals(expected, actual)` always prints both expressions and obtained/expected values; common scalar and string-pointer values are formatted, while unsupported types use a byte-hex fallback. Equality remains bytewise, not deep equality (for strings, compare contents with `strcmp`), and arrays are not supported operands. `CPLUS_TEST_FAIL(message)` also fails the current test. The runner separates test headings from preceding output with a blank line and displays each selected test's number out of the invocation-wide total in yellow. Test blocks are removed from ordinary `transcode`, `compile`, and `run` output.
+Quoted names are recommended; the unquoted form accepts one C identifier, such as `@test initialization { ... }`. Names containing spaces must be quoted. Each body is emitted as a test function. `@assert(condition)` and `CPLUS_TEST_ASSERT(condition)` always print the expression, invocation-wide assertion number/total, obtained boolean, expected `true`, and green/red PASS/FAIL status. `@assertEquals(expected, actual)` always prints both expressions and obtained/expected values; common scalar and string-pointer values are formatted, while unsupported types use a byte-hex fallback. Equality remains bytewise, not deep equality (for strings, compare contents with `strcmp`), and arrays are not supported operands. `CPLUS_TEST_FAIL(message)` also fails the current test. The runner separates test headings from preceding output with a blank line and displays each selected test's number out of the invocation-wide total in yellow. Test blocks are removed from ordinary `transcode`, `compile`, and `run` output.
 
 The runner accepts one or more `.cp`/`.c+` sources, followed by optional exact test names. The shell expands patterns such as `test/folder/*.cp`. At completion it reports selected fixture and assertion-site counts per file, then totals files, fixtures, and assertions for the invocation. Filters affect all these counts; files with no matching fixtures are omitted. Ordinary C files can remain unchanged and be included with `#include "fixture.c"` or `@import("fixture.c")`; the latter emits a normal C preprocessor include and does not evaluate the C file at comptime. In test mode, a source-defined `main` is renamed so the generated test driver can own the executable entry point; the application `main` is not run.
 

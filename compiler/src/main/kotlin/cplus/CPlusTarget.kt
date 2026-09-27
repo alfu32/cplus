@@ -9,6 +9,23 @@ object CPlusTarget {
     @JvmStatic
     fun hostArch(): String = normalizeArch(System.getProperty("os.arch"))
 
+    /**
+     * Return the default signedness of C's plain `char` for the supported target
+     * model, or null when the model intentionally does not guess.
+     *
+     * AArch64 Linux uses unsigned plain char by default; the supported x86,
+     * Windows, and Apple targets use signed plain char unless the selected C
+     * compiler is explicitly configured otherwise.
+     */
+    @JvmStatic
+    fun plainCharIsUnsigned(os: String?, arch: String?): Boolean? {
+        val normalizedOs = normalizeOs(os)
+        val normalizedArch = normalizeArch(arch)
+        if (normalizedOs !in setOf("linux", "windows", "macos")) return null
+        if (normalizedArch !in setOf("x86_64", "arm64")) return null
+        return normalizedOs == "linux" && normalizedArch == "arm64"
+    }
+
     /** Normalize an architecture name or target triple to a stable spelling. */
     @JvmStatic
     fun normalizeArch(value: String?): String {
