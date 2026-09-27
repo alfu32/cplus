@@ -6260,6 +6260,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "cplus_legacy_comptime_invocation"
+        },
+        {
+          "type": "SYMBOL",
           "name": "cplus_comptime_import"
         },
         {
@@ -6355,6 +6359,10 @@
                       },
                       {
                         "type": "SYMBOL",
+                        "name": "cplus_comptime_parameter"
+                      },
+                      {
+                        "type": "SYMBOL",
                         "name": "parameter_declaration"
                       }
                     ]
@@ -6374,6 +6382,10 @@
                             {
                               "type": "SYMBOL",
                               "name": "cplus_generic_type_parameter"
+                            },
+                            {
+                              "type": "SYMBOL",
+                              "name": "cplus_comptime_parameter"
                             },
                             {
                               "type": "SYMBOL",
@@ -6401,6 +6413,36 @@
             "content": {
               "type": "SYMBOL",
               "name": "cplus_comptime_body"
+            }
+          }
+        ]
+      }
+    },
+    "cplus_comptime_parameter": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "type",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_declaration_specifiers"
+            }
+          },
+          {
+            "type": "FIELD",
+            "name": "name",
+            "content": {
+              "type": "ALIAS",
+              "content": {
+                "type": "SYMBOL",
+                "name": "cplus_comptime_marked_identifier"
+              },
+              "named": true,
+              "value": "identifier"
             }
           }
         ]
@@ -6436,38 +6478,56 @@
       ]
     },
     "cplus_comptime_return_declaration": {
-      "type": "PREC_DYNAMIC",
-      "value": 10,
-      "content": {
-        "type": "SEQ",
-        "members": [
-          {
-            "type": "STRING",
-            "value": "return"
-          },
-          {
-            "type": "CHOICE",
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "PREC_DYNAMIC",
+          "value": 10,
+          "content": {
+            "type": "SEQ",
             "members": [
+              {
+                "type": "STRING",
+                "value": "return"
+              },
               {
                 "type": "SYMBOL",
                 "name": "function_definition"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "type_definition"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "declaration"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "cplus_legacy_returned_function"
               }
             ]
           }
-        ]
-      }
+        },
+        {
+          "type": "PREC_DYNAMIC",
+          "value": 1,
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "return"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "type_definition"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "declaration"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "cplus_legacy_returned_function"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
     },
     "cplus_legacy_returned_function": {
       "type": "PREC_RIGHT",
@@ -6781,6 +6841,35 @@
         }
       ]
     },
+    "cplus_legacy_comptime_invocation": {
+      "type": "PREC_DYNAMIC",
+      "value": 3,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "@"
+          },
+          {
+            "type": "FIELD",
+            "name": "generator",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            }
+          },
+          {
+            "type": "SYMBOL",
+            "name": "argument_list"
+          },
+          {
+            "type": "STRING",
+            "value": ";"
+          }
+        ]
+      }
+    },
     "cplus_comptime_import": {
       "type": "SEQ",
       "members": [
@@ -6829,6 +6918,10 @@
               {
                 "type": "SYMBOL",
                 "name": "identifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "cplus_type_reference"
               },
               {
                 "type": "SYMBOL",
@@ -6901,11 +6994,7 @@
                     },
                     {
                       "type": "SYMBOL",
-                      "name": "_type_identifier"
-                    },
-                    {
-                      "type": "SYMBOL",
-                      "name": "primitive_type"
+                      "name": "cplus_type_argument"
                     }
                   ]
                 },
@@ -6927,11 +7016,7 @@
                           },
                           {
                             "type": "SYMBOL",
-                            "name": "_type_identifier"
-                          },
-                          {
-                            "type": "SYMBOL",
-                            "name": "primitive_type"
+                            "name": "cplus_type_argument"
                           }
                         ]
                       }
@@ -6970,6 +7055,18 @@
           "value": ";"
         }
       ]
+    },
+    "cplus_type_argument": {
+      "type": "PREC_DYNAMIC",
+      "value": 2,
+      "content": {
+        "type": "FIELD",
+        "name": "descriptor",
+        "content": {
+          "type": "SYMBOL",
+          "name": "type_descriptor"
+        }
+      }
     },
     "cplus_comptime_value": {
       "type": "CHOICE",
@@ -8439,6 +8536,10 @@
         {
           "type": "SYMBOL",
           "name": "cplus_at_call_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "cplus_type_reference"
         },
         {
           "type": "SYMBOL",
@@ -11652,6 +11753,10 @@
       "_old_style_parameter_list"
     ],
     [
+      "cplus_type_argument",
+      "macro_type_specifier"
+    ],
+    [
       "function_declarator",
       "_function_declaration_declarator"
     ],
@@ -11706,6 +11811,15 @@
     [
       "cplus_at_call_expression",
       "cplus_type_reference"
+    ],
+    [
+      "cplus_legacy_comptime_invocation",
+      "cplus_at_call_expression",
+      "cplus_type_reference"
+    ],
+    [
+      "cplus_legacy_comptime_invocation",
+      "cplus_at_call_expression"
     ]
   ],
   "precedences": [],

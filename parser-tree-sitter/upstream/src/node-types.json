@@ -184,6 +184,10 @@
         "named": true
       },
       {
+        "type": "cplus_type_reference",
+        "named": true
+      },
+      {
         "type": "extension_expression",
         "named": true
       },
@@ -1559,6 +1563,10 @@
           "named": true
         },
         {
+          "type": "cplus_legacy_comptime_invocation",
+          "named": true
+        },
+        {
           "type": "cplus_legacy_function_generator",
           "named": true
         },
@@ -1592,6 +1600,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "cplus_type_reference",
+          "named": true
+        },
         {
           "type": "identifier",
           "named": true
@@ -1671,6 +1683,10 @@
       "required": false,
       "types": [
         {
+          "type": "cplus_comptime_parameter",
+          "named": true
+        },
+        {
           "type": "cplus_generic_type_parameter",
           "named": true
         },
@@ -1726,18 +1742,68 @@
       "required": false,
       "types": [
         {
+          "type": "cplus_type_argument",
+          "named": true
+        },
+        {
           "type": "expression",
-          "named": true
-        },
-        {
-          "type": "primitive_type",
-          "named": true
-        },
-        {
-          "type": "type_identifier",
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "cplus_comptime_parameter",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "attribute_declaration",
+            "named": true
+          },
+          {
+            "type": "attribute_specifier",
+            "named": true
+          },
+          {
+            "type": "cplus_access_modifier",
+            "named": true
+          },
+          {
+            "type": "cplus_result_annotation",
+            "named": true
+          },
+          {
+            "type": "ms_declspec_modifier",
+            "named": true
+          },
+          {
+            "type": "storage_class_specifier",
+            "named": true
+          },
+          {
+            "type": "type_qualifier",
+            "named": true
+          },
+          {
+            "type": "type_specifier",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1952,6 +2018,32 @@
         },
         {
           "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "cplus_legacy_comptime_invocation",
+    "named": true,
+    "fields": {
+      "generator": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "argument_list",
           "named": true
         }
       ]
@@ -2355,6 +2447,22 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "cplus_type_argument",
+    "named": true,
+    "fields": {
+      "descriptor": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_descriptor",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {

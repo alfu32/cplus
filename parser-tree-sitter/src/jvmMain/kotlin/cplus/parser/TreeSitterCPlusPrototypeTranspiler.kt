@@ -195,6 +195,61 @@ class TreeSitterCPlusPrototypeTranspiler(
             ast = CPlusAstAdapter().adapt(parsed)
         }
 
+        // Entity generators materialize from AST nodes and may reveal another top-level
+        // generator/invocation layer. Reparse each changed revision before binding the next one.
+        var entityPassCount = 0
+        while (entityPassCount < MAX_COMPTIME_CONDITIONAL_PASSES) {
+            val entities = TreeSitterComptimeEntityLowering().lower(parsed, mapped)
+            if (entities.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    emptyList(),
+                    entities.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    testFixtures = testFixtures
+                )
+            }
+            if (entities.source.text == mapped.text) break
+            entityPassCount++
+            mapped = entities.source
+            snapshot = snapshotFor(mapped.text)
+            parsed = backend.parse(snapshot)
+            if (parsed.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    emptyList(),
+                    testFixtures = testFixtures
+                )
+            }
+            ast = CPlusAstAdapter().adapt(parsed)
+        }
+        val remainingEntityInvocation = descendants(parsed.root).firstOrNull {
+            it.kind in setOf("cplus_comptime_invocation", "cplus_legacy_comptime_invocation") && it.children.firstOrNull { child -> child.fieldName == "generator" }
+                ?.let { generator -> mapped.text.substring(generator.span.startOffset, generator.span.endOffset) }
+                ?.let { name ->
+                    CPlusComptimeIndexer().index(ast).constructs.any { construct ->
+                        construct.syntaxKind in setOf("cplus_comptime_function_definition", "cplus_legacy_function_generator") &&
+                            (construct.resultKind in setOf("function", "variable") || construct.syntaxKind == "cplus_legacy_function_generator") &&
+                            construct.symbol == name
+                    }
+                } == true
+        }
+        if (remainingEntityInvocation != null && entityPassCount >= MAX_COMPTIME_CONDITIONAL_PASSES) {
+            return TreeSitterPrototypeResult(
+                null,
+                emptyList(),
+                listOf(CPlusLoweringDiagnostic(
+                    "CPLUS_COMPTIME_ENTITY_LIMIT",
+                    "entity generator expansion exceeded the materialization pass limit",
+                    mapped.toOriginalSpan(remainingEntityInvocation.span)
+                )),
+                emptyList(),
+                testFixtures = testFixtures
+            )
+        }
+
         val comptimeResolution = cplus.CPlusComptimeResolver().resolve(CPlusComptimeIndexer().index(ast))
         if (comptimeResolution.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(

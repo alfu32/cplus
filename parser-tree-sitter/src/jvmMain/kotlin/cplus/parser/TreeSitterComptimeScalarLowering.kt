@@ -39,7 +39,7 @@ class TreeSitterComptimeScalarLowering {
                     val bodyItems = body?.children.orEmpty().filter { it.named && it.kind != "comment" }
                     val returnStatement = returnStatements.singleOrNull()
                     val returnExpression = returnStatement?.children?.singleOrNull { it.named && it.kind != "comment" }
-                    if (body == null || bodyItems.size != 1 || bodyItems.singleOrNull() != returnStatement || returnExpression == null) {
+                    if (body == null || bodyItems.size != 1 || bodyItems.singleOrNull()?.span != returnStatement?.span || returnExpression == null) {
                         declarationDiagnostics += diagnostic(
                             "CPLUS_COMPTIME_SCALAR_FUNCTION_BODY",
                             "scalar comptime functions in this prototype must contain exactly one return expression",

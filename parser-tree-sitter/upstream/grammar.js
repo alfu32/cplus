@@ -57,6 +57,7 @@ module.exports = grammar({
     [$._declaration_modifiers, $.cplus_parameter_declaration],
     [$.type_specifier, $._old_style_parameter_list],
     [$.parameter_list, $._old_style_parameter_list],
+    [$.cplus_type_argument, $.macro_type_specifier],
     [$.function_declarator, $._function_declaration_declarator],
     [$._block_item, $.statement],
     [$._top_level_item, $._top_level_statement],
@@ -71,6 +72,8 @@ module.exports = grammar({
     [$.sized_type_specifier, $.cplus_interpolated_identifier],
     [$.expression, $.cplus_interpolated_identifier],
     [$.cplus_at_call_expression, $.cplus_type_reference],
+    [$.cplus_legacy_comptime_invocation, $.cplus_at_call_expression, $.cplus_type_reference],
+    [$.cplus_legacy_comptime_invocation, $.cplus_at_call_expression],
   ],
 
   extras: $ => [
@@ -854,6 +857,7 @@ module.exports = grammar({
       $.cplus_comptime_function_definition,
       $.cplus_legacy_type_generator,
       $.cplus_legacy_function_generator,
+      $.cplus_legacy_comptime_invocation,
       $.cplus_comptime_import,
       $.cplus_comptime_flags,
       $.cplus_comptime_invocation,
@@ -865,9 +869,15 @@ module.exports = grammar({
       field('result_kind', choice('type', 'function', 'variable', 'string', 'code', $.identifier, $.primitive_type)),
       field('name', alias($.cplus_comptime_marked_identifier, $.identifier)),
       '(',
-      commaSep(choice($.cplus_generic_type_parameter, $.parameter_declaration)),
+      commaSep(choice($.cplus_generic_type_parameter, $.cplus_comptime_parameter, $.parameter_declaration)),
       ')',
       field('body', $.cplus_comptime_body),
+    )),
+
+    // Legacy scalar parameters mark their comptime binding at the name (`int @value`).
+    cplus_comptime_parameter: $ => prec(2, seq(
+      field('type', $._declaration_specifiers),
+      field('name', alias($.cplus_comptime_marked_identifier, $.identifier)),
     )),
 
     cplus_comptime_body: $ => seq(
@@ -876,15 +886,16 @@ module.exports = grammar({
       '}',
     ),
 
-    cplus_comptime_return_declaration: $ => prec.dynamic(10, seq(
-      'return',
-      choice(
-        $.function_definition,
+    cplus_comptime_return_declaration: $ => choice(
+      // A returned runtime function definition is an entity even though it begins with a type.
+      prec.dynamic(10, seq('return', $.function_definition)),
+      // Keep C declaration-like calls such as `return helper(value);` on the expression path.
+      prec.dynamic(1, seq('return', choice(
         $.type_definition,
         $.declaration,
         $.cplus_legacy_returned_function,
-      ),
-    )),
+      ))),
+    ),
 
     cplus_legacy_returned_function: $ => prec.right(seq('@', 'fn', $.cplus_function_declaration, optional(';'))),
 
@@ -911,12 +922,17 @@ module.exports = grammar({
       field('body', $.cplus_comptime_body),
     ),
 
+    cplus_legacy_comptime_invocation: $ => prec.dynamic(3, seq(
+      '@', field('generator', $.identifier), $.argument_list, ';',
+    )),
+
     cplus_comptime_import: $ => seq('comptime', 'import', optional($.string_literal), ';'),
 
     // Empty argument lists remain structurally parseable so the compiler can emit a precise
     // semantic diagnostic at the terminating semicolon instead of a whole-directive ERROR node.
     cplus_comptime_flags: $ => seq('comptime', 'flags', repeat(choice(
       $.identifier,
+      $.cplus_type_reference,
       $.number_literal,
       $.string_literal,
       '-',
@@ -928,11 +944,13 @@ module.exports = grammar({
       optional('typedef'),
       field('generator', $.identifier),
       '(',
-      commaSep(choice($.expression, $._type_identifier, $.primitive_type)),
+      commaSep(choice($.expression, $.cplus_type_argument)),
       ')',
       optional(field('alias', $.identifier)),
       ';',
     ),
+
+    cplus_type_argument: $ => prec.dynamic(2, field('descriptor', $.type_descriptor)),
 
     cplus_comptime_value: $ => choice(
       prec(2, seq(
@@ -1226,6 +1244,7 @@ module.exports = grammar({
       $.gnu_asm_expression,
       $.extension_expression,
       $.cplus_at_call_expression,
+      $.cplus_type_reference,
       $.cplus_interpolated_identifier,
       $.cplus_code_fragment,
     ),

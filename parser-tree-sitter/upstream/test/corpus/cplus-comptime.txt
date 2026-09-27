@@ -15,6 +15,13 @@ comptime flags -lraylib -lm;
 comptime flags ;
 comptime int @answer = 73;
 comptime int @twice(int value) { return value * 2; }
+comptime variable @make_limit(int @value) { return int generated_limit = @value; }
+comptime make_limit(42);
+comptime function @make_identity(type T) { return T generated_identity(T value) { return value; } }
+comptime make_identity(int);
+comptime make_identity(const char*);
+comptime type @box(type T) { return @code { struct box { T value; }; }; }
+comptime typedef box(int) int_box_t;
 comptime { comptime int local_answer = 42; }
 int runtime_answer = comptime answer;
 @test "fixture works" { return 0; }
@@ -85,13 +92,19 @@ comptime outer();
   (cplus_comptime_declaration
     (cplus_comptime_invocation
       (identifier)
-      (type_identifier)
+      (cplus_type_argument
+        (type_descriptor
+          (type_identifier)))
       (identifier)))
   (cplus_comptime_declaration
     (cplus_comptime_invocation
       (identifier)
-      (type_identifier)
-      (type_identifier)))
+      (cplus_type_argument
+        (type_descriptor
+          (type_identifier)))
+      (cplus_type_argument
+        (type_descriptor
+          (type_identifier)))))
   (cplus_comptime_declaration
     (cplus_comptime_import
       (string_literal
@@ -121,6 +134,78 @@ comptime outer();
           (binary_expression
             (identifier)
             (number_literal))))))
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (identifier)
+      (cplus_comptime_parameter
+        (primitive_type)
+        (identifier))
+      (cplus_comptime_body
+        (cplus_comptime_return_declaration
+          (declaration
+            (primitive_type)
+            (init_declarator
+              (identifier)
+              (cplus_type_reference
+                (identifier))))))))
+  (cplus_comptime_declaration
+    (cplus_comptime_invocation
+      (identifier)
+      (number_literal)))
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (identifier)
+      (cplus_generic_type_parameter
+        (identifier))
+      (cplus_comptime_body
+        (cplus_comptime_return_declaration
+          (function_definition
+            (type_identifier)
+            (function_declarator
+              (identifier)
+              (parameter_list
+                (parameter_declaration
+                  (type_identifier)
+                  (identifier))))
+            (compound_statement
+              (return_statement
+                (identifier))))))))
+  (cplus_comptime_declaration
+    (cplus_comptime_invocation
+      (identifier)
+      (cplus_type_argument
+        (type_descriptor
+          (primitive_type)))))
+  (cplus_comptime_declaration
+    (cplus_comptime_invocation
+      (identifier)
+      (cplus_type_argument
+        (type_descriptor
+          (type_qualifier)
+          (primitive_type)
+          (abstract_pointer_declarator)))))
+  (cplus_comptime_declaration
+    (cplus_comptime_function_definition
+      (identifier)
+      (cplus_generic_type_parameter
+        (identifier))
+      (cplus_comptime_body
+        (return_statement
+          (cplus_code_fragment
+            (compound_statement
+              (struct_specifier
+                (type_identifier)
+                (field_declaration_list
+                  (field_declaration
+                    (type_identifier)
+                    (field_identifier))))))))))
+  (cplus_comptime_declaration
+    (cplus_comptime_invocation
+      (identifier)
+      (cplus_type_argument
+        (type_descriptor
+          (primitive_type)))
+      (identifier)))
   (cplus_comptime_block
     (compound_statement
       (cplus_comptime_declaration

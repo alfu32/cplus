@@ -1,0 +1,41 @@
+==================
+Legacy function generator invocation
+==================
+@fn @identity(@type T) {
+  return @fn pub T identity(borrowed @T* value) { return *value; };
+}
+@identity(int);
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (cplus_comptime_declaration
+    (cplus_legacy_function_generator
+      (identifier)
+      (cplus_legacy_generic_type_parameter
+        (identifier))
+      (cplus_comptime_body
+        (cplus_comptime_return_declaration
+          (cplus_legacy_returned_function
+            (cplus_function_declaration
+              (cplus_access_modifier)
+              (type_identifier)
+              (cplus_method_declarator
+                (function_declarator
+                  (identifier)
+                  (parameter_list
+                    (cplus_parameter_declaration
+                      (cplus_parameter_annotation)
+                      (cplus_type_reference
+                        (identifier))
+                      (pointer_declarator
+                        (identifier))))))
+              (compound_statement
+                (return_statement
+                  (pointer_expression
+                    (identifier))))))))))
+  (cplus_comptime_declaration
+    (cplus_legacy_comptime_invocation
+      (identifier)
+      (argument_list
+        (identifier)))))
