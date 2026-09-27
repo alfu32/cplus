@@ -4429,12 +4429,14 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
 
         assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
         val generated = result.transcodedSource ?: error("successful comptime type materialization must expose TranscodedSource")
-        assertTrue("typedef struct box" in generated.code, generated.code)
+        assertTrue("typedef struct box__int_box_t" in generated.code, generated.code)
         assertTrue("int value;" in generated.code, generated.code)
         assertTrue("int_box_t;" in generated.code, generated.code)
         val mappedText = result.cSource ?: error("successful comptime type materialization must retain mapped source")
-        val structureOffset = mappedText.text.indexOf("struct box")
+        val structureOffset = mappedText.text.indexOf("struct box__int_box_t")
         assertEquals(text.indexOf("struct box"), mappedText.originAt(structureOffset)?.offset)
+        val specializedTagOffset = mappedText.text.indexOf("box__int_box_t")
+        assertEquals(text.indexOf("comptime typedef box(int)"), mappedText.originAt(specializedTagOffset)?.offset)
         val substitutedTypeOffset = mappedText.text.indexOf("int value;")
         assertEquals(text.indexOf("comptime typedef box(int)"), mappedText.originAt(substitutedTypeOffset)?.offset)
 
@@ -4446,6 +4448,64 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals(0, astRun.first, astRun.second)
         assertEquals(0, legacyRun.first, legacyRun.second)
         assertEquals(legacyRun, astRun)
+    }
+
+    @Test
+    fun prototypeMaterializesMultipleSpecializationsWithDistinctStructTags() {
+        val text = """
+            comptime type @box(type T) {
+                return @code { struct box { T value; }; };
+            }
+            comptime typedef box(int) int_box_t;
+            comptime typedef box(float) float_box_t;
+            int main(void) {
+                int_box_t integer = { 42 };
+                float_box_t decimal = { 3.5f };
+                return integer.value == 42 && decimal.value == 3.5f ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-multiple-specializations.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("successful specializations must expose mapped C output")
+        assertTrue("struct box__int_box_t" in generated.code, generated.code)
+        assertTrue("struct box__float_box_t" in generated.code, generated.code)
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
+    }
+
+    @Test
+    fun prototypeMaterializesQualifiedAndMultiwordGenericTypes() {
+        val text = """
+            comptime type @box(type T) {
+                return @code { struct box { T value; }; };
+            }
+            comptime typedef box(unsigned long) ulong_box_t;
+            comptime typedef box(const char*) string_box_t;
+            int main(void) {
+                ulong_box_t number = { 42UL };
+                string_box_t text = { "c-plus" };
+                return number.value == 42UL && text.value[0] == 'c' ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-qualified-types.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("successful qualified type materialization must expose C output")
+        assertTrue("unsigned long value" in generated.code, generated.code)
+        assertTrue("const char *value" in generated.code, generated.code)
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
     }
 
     @Test
@@ -4475,12 +4535,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
                 comptime typedef box(int) int_box_t;
             """.trimIndent() to "comptime typedef box(int)",
             """
-                comptime type @box(type T) { return @code { struct box { T value; }; }; }
-                comptime typedef box(int) int_box_t;
-                comptime typedef box(float) float_box_t;
-            """.trimIndent() to "comptime typedef box(float)",
-            """
-                struct box { long existing; };
+                struct box__int_box_t { long existing; };
                 comptime type @box(type T) { return @code { struct box { T value; }; }; }
                 comptime typedef box(int) int_box_t;
             """.trimIndent() to "comptime typedef box(int)"

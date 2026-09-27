@@ -254,8 +254,9 @@ class TreeSitterComptimeEntityLowering {
         val tag = structure.children.firstOrNull { it.kind in IDENTIFIER_NODES } ?: return null
         if (tag.span.endOffset <= tag.span.startOffset) return null
         val tagName = source.text.substring(tag.span.startOffset, tag.span.endOffset)
+        val specializedTag = "${tagName}__${alias}"
 
-        val substitutions = typeParameterReferences(structure, source, parameters.keys)
+        val substitutions = (typeParameterReferences(structure, source, parameters.keys)
             .mapNotNull { reference ->
                 val name = source.text.substring(reference.span.startOffset, reference.span.endOffset).removePrefix("@").trim()
                 parameters[name]?.let { replacement ->
@@ -266,14 +267,18 @@ class TreeSitterComptimeEntityLowering {
                     )
                 }
             }
-            .toList()
+            .toList() + Edit(
+                tag.span.startOffset,
+                tag.span.endOffset,
+                MappedText.generated(specializedTag, source.originAt(invocation.span.startOffset))
+            ))
         val mappedStructure = applyFragment(source, structure.span.startOffset, structure.span.endOffset, substitutions) ?: return null
         val output = MappedTextBuilder()
         val invocationOrigin = source.originAt(invocation.span.startOffset)
         output.appendGenerated("typedef ", invocationOrigin)
         output.append(mappedStructure)
         output.appendGenerated(" $alias;\n", invocationOrigin)
-        return MaterializedType(output.build(), tagName)
+        return MaterializedType(output.build(), specializedTag)
     }
 
     private fun materializeLegacyTypeEntity(
@@ -405,7 +410,9 @@ class TreeSitterComptimeEntityLowering {
     private companion object {
         val ENTITY_RESULT_KINDS = setOf("function", "variable")
         val IDENTIFIER_NODES = setOf("identifier", "type_identifier")
-        val SUPPORTED_TYPE_SPECIFIERS = setOf("primitive_type", "type_identifier", "struct_specifier", "union_specifier", "enum_specifier")
+        val SUPPORTED_TYPE_SPECIFIERS = setOf(
+            "primitive_type", "sized_type_specifier", "type_identifier", "struct_specifier", "union_specifier", "enum_specifier"
+        )
         val ABSTRACT_POINTER_NODES = setOf("abstract_pointer_declarator", "abstract_parenthesized_declarator")
         val POINTER_QUALIFIER_NODES = setOf("type_qualifier", "ms_pointer_modifier")
         val TYPE_QUERY_NODES = setOf("sizeof_expression", "alignof_expression", "offsetof_expression")
