@@ -223,7 +223,7 @@ class CPlusParserShadowRunner(
                         "cplus_comptime_value" -> "comptime_value_declaration"
                         "cplus_comptime_flags" -> "comptime_flags"
                         "cplus_comptime_import" -> "comptime_import"
-                        "cplus_comptime_invocation" -> "comptime_invocation"
+                        "cplus_comptime_invocation", "cplus_legacy_comptime_invocation" -> "comptime_invocation"
                         "cplus_legacy_type_generator" -> "comptime_type_declaration"
                         "cplus_legacy_function_generator" -> "comptime_function_declaration"
                         // The legacy parser models `comptime type @name(...)` as a function

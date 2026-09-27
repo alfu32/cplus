@@ -9,11 +9,27 @@ class CPlusDeferLoweringPass {
     fun lower(ast: CPlusAst, source: MappedText): CPlusLoweringResult {
         require(ast.source.text == source.text) { "AST and mapped source must contain the same snapshot text" }
         val functions = ast.root.descendantsAndSelf()
-            .filter { it.kind in setOf(CPlusAstKind.FUNCTION_DECLARATION, CPlusAstKind.METHOD_DECLARATION) }
+            .filter {
+                it.kind in setOf(
+                    CPlusAstKind.FUNCTION_DECLARATION,
+                    CPlusAstKind.METHOD_DECLARATION,
+                    // A named @test is lowered to a generated function by the harness. Treat
+                    // its body as a function closure while the AST still contains the test so
+                    // fixture-local defer statements are lowered before extraction.
+                    CPlusAstKind.TEST
+                )
+            }
             .flatMap { function ->
-                function.descendantsAndSelf()
-                    .filter { it.kind == CPlusAstKind.BLOCK }
-                    .filter { block -> block.fieldName == "body" }
+                if (function.kind == CPlusAstKind.TEST) {
+                    // The grammar deliberately keeps @test declaration children unlabelled,
+                    // unlike function_definition.body. Only its direct compound statement is
+                    // the generated fixture closure; nested blocks must remain inside it.
+                    function.children.asSequence().filter { it.kind == CPlusAstKind.BLOCK }
+                } else {
+                    function.descendantsAndSelf()
+                        .filter { it.kind == CPlusAstKind.BLOCK }
+                        .filter { block -> block.fieldName == "body" }
+                }
             }
             .toList()
         val deferred = ast.root.descendantsAndSelf().filter { it.kind == CPlusAstKind.DEFER }.toList()
@@ -21,6 +37,8 @@ class CPlusDeferLoweringPass {
 
         val diagnostics = mutableListOf<CPlusLoweringDiagnostic>()
         val byFunction = LinkedHashMap<CPlusAstNode, MutableList<Pair<CPlusAstNode, CPlusAstNode>>>()
+        var deferSequence = 0
+        val flags = mutableMapOf<CPlusAstNode, String>()
         deferred.forEach { defer ->
             val owner = functions.filter { defer.span.startOffset in it.span.startOffset until it.span.endOffset }
                 .minByOrNull { it.span.endOffset - it.span.startOffset }
@@ -33,18 +51,27 @@ class CPlusDeferLoweringPass {
                 )
             } else {
                 byFunction.getOrPut(owner, ::mutableListOf) += defer to body
+                var name: String
+                do {
+                    name = "cplus_defer_active_${deferSequence++}"
+                } while (source.text.contains(name))
+                flags[defer] = name
             }
         }
         if (diagnostics.isNotEmpty()) return CPlusLoweringResult(source, diagnostics)
 
         val replacements = linkedMapOf<CPlusAstNode, MappedText>()
         val insertionsBefore = linkedMapOf<CPlusAstNode, MappedText>()
+        val insertionsAfter = linkedMapOf<CPlusAstNode, MappedText>()
         byFunction.forEach { (function, statements) ->
-            val body = function.descendantsAndSelf().firstOrNull {
+            // [functions] contains body nodes. Ordinary function bodies carry the `body`
+            // field; @test bodies are direct, unlabelled compound children.
+            val body = function.takeIf { it.kind == CPlusAstKind.BLOCK } ?: function.descendantsAndSelf().firstOrNull {
                 it.kind == CPlusAstKind.BLOCK && it.fieldName == "body"
             } ?: return@forEach
             val closingBrace = body.children.lastOrNull { it.syntaxKind == "}" }
-            if (closingBrace == null) {
+            val openingBrace = body.children.firstOrNull { it.syntaxKind == "{" }
+            if (closingBrace == null || openingBrace == null) {
                 diagnostics += CPlusLoweringDiagnostic(
                     "CPLUS_DEFER_MALFORMED_FUNCTION",
                     "could not locate the closing brace for deferred statements",
@@ -65,22 +92,39 @@ class CPlusDeferLoweringPass {
             }
 
             val indentation = indentationAt(source.text, body.span.startOffset) + "    "
+            val declarations = MappedTextBuilder()
+            statements.forEach { (defer, _) ->
+                declarations.appendGenerated(
+                    "\n$indentation int ${flags.getValue(defer)} = 0;",
+                    source.originAt(defer.span.startOffset)
+                )
+            }
+            declarations.appendGenerated("\n", source.originAt(openingBrace.span.startOffset))
+            insertionsAfter[openingBrace] = declarations.build()
+
             val insertion = MappedTextBuilder()
+            statements.forEach { (defer, _) ->
+                val origin = source.originAt(defer.span.startOffset)
+                replacements[defer] = MappedText.generated("${flags.getValue(defer)} = 1;", origin)
+            }
             statements.asReversed().forEach { (defer, statement) ->
                 val origin = source.originAt(defer.span.startOffset)
-                insertion.appendGenerated("\n$indentation", origin)
+                insertion.appendGenerated("\n${indentation}if (${flags.getValue(defer)}) {\n$indentation    ", origin)
                 insertion.append(source, statement.span.startOffset, statement.span.endOffset)
-                if (source.text.getOrNull(statement.span.endOffset - 1) != '\n') {
-                    insertion.appendGenerated("\n", origin)
-                }
-                replacements[defer] = MappedText.generated(";", origin)
+                insertion.appendGenerated("\n$indentation}", origin)
             }
             insertionsBefore[closingBrace] = insertion.build()
         }
         if (diagnostics.isNotEmpty()) return CPlusLoweringResult(source, diagnostics)
 
         return CPlusLoweringResult(
-            CPlusMappedAstEmitter().emit(ast, source, replacements, insertionsBefore = insertionsBefore),
+            CPlusMappedAstEmitter().emit(
+                ast,
+                source,
+                replacements,
+                insertionsAfter = insertionsAfter,
+                insertionsBefore = insertionsBefore
+            ),
             emptyList()
         )
     }

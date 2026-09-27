@@ -2,6 +2,8 @@ package cplus
 
 /** Extracts grammar-recognized methods from struct bodies and emits ordinary C function definitions. */
 class CPlusStructMethodLoweringPass {
+    private data class RangeReplacement(val start: Int, val end: Int, val content: MappedText)
+
     fun lower(ast: CPlusAst, source: MappedText): CPlusLoweringResult {
         require(ast.source.text == source.text) { "AST and mapped source must contain the same snapshot text" }
         val parents = mutableMapOf<CPlusAstNode, CPlusAstNode>()
@@ -114,75 +116,64 @@ class CPlusStructMethodLoweringPass {
             ?: throw CPlusSyntaxException("method in struct $typeName is missing an access modifier")
         val declarator = method.children.firstOrNull { it.fieldName == "declarator" }
             ?: throw CPlusSyntaxException("method in struct $typeName is missing a declarator")
-        val function = declarator.descendantsAndSelf().firstOrNull { it.syntaxKind == "function_declarator" }
+        val function = declarator.cplusNamedFunctionDeclarator()
             ?: throw CPlusSyntaxException("method in struct $typeName has an unsupported declarator")
         val name = function.children.firstOrNull { it.syntaxKind == "identifier" }
             ?: throw CPlusSyntaxException("method in struct $typeName is missing a name")
         val parameters = function.descendantsAndSelf().firstOrNull { it.syntaxKind == "parameter_list" }
             ?: throw CPlusSyntaxException("method in struct $typeName is missing a parameter list")
-        val open = parameters.children.firstOrNull { it.syntaxKind == "(" }
-            ?: throw CPlusSyntaxException("method in struct $typeName has a malformed parameter list")
-        val close = parameters.children.lastOrNull { it.syntaxKind == ")" }
-            ?: throw CPlusSyntaxException("method in struct $typeName has a malformed parameter list")
-
-        val output = MappedTextBuilder()
-        val declarationOrigin = source.originAt(access.span.startOffset)
-        if (isStatic) output.appendGenerated("static ", declarationOrigin)
-        output.append(source, access.span.startOffset, access.span.endOffset)
-        output.appendGenerated(" ", source.originAt(access.span.endOffset))
-        appendTrimmed(output, source, access.span.endOffset, declarator.span.startOffset)
-        val declaratorPrefix = source.text.substring(declarator.span.startOffset, name.span.startOffset)
-        val pointerReturn = declaratorPrefix.trimStart().startsWith("*")
-        if (pointerReturn) {
-            output.appendGenerated(" ", source.originAt(declarator.span.startOffset))
-        }
-        val prefixEnd = if (pointerReturn) {
-            name.span.startOffset - declaratorPrefix.takeLastWhile(Char::isWhitespace).length
-        } else {
-            name.span.startOffset
-        }
-        output.append(source, declarator.span.startOffset, prefixEnd)
-        if (!pointerReturn) output.appendGenerated(" ", source.originAt(name.span.startOffset))
         val methodName = source.text.substring(name.span.startOffset, name.span.endOffset)
-        output.appendGenerated("${typeStem(typeName)}__$methodName", source.originAt(name.span.startOffset))
-        output.append(source, name.span.endOffset, open.span.startOffset)
-        output.appendGenerated("(", source.originAt(open.span.startOffset))
-
         val parameterNodes = parameters.children.filter {
             it.syntaxKind in setOf("parameter_declaration", "cplus_parameter_declaration", "variadic_parameter")
         }
-        if (isStatic) {
-            output.append(source, open.span.endOffset, close.span.startOffset)
-        } else {
+        val replacements = mutableListOf<RangeReplacement>()
+        replacements += RangeReplacement(
+            name.span.startOffset,
+            name.span.endOffset,
+            MappedText.generated("${typeStem(typeName)}__$methodName", source.originAt(name.span.startOffset))
+        )
+        if (!isStatic) {
             val receiver = parameterNodes.firstOrNull()
                 ?: throw CPlusSyntaxException("instance method $methodName has no self receiver")
             val receiverAnnotations = receiver.descendantsAndSelf()
                 .filter { it.syntaxKind == "cplus_parameter_annotation" }
                 .map { source.text.substring(it.span.startOffset, it.span.endOffset) }
                 .toList()
-            val receiverOrigin = source.originAt(receiver.span.startOffset)
             val receiverPrefix = receiverAnnotations.joinToString(" ")
-            if (receiverPrefix.isNotEmpty()) output.appendGenerated("$receiverPrefix ", receiverOrigin)
-            output.appendGenerated("$typeName *self", receiverOrigin)
-            var previousEnd = receiver.span.endOffset
-            parameterNodes.drop(1).forEach { parameter ->
-                output.append(source, previousEnd, parameter.span.startOffset)
-                output.append(source, parameter.span.startOffset, parameter.span.endOffset)
-                previousEnd = parameter.span.endOffset
+            val receiverText = buildString {
+                if (receiverPrefix.isNotEmpty()) append(receiverPrefix).append(' ')
+                append(typeName).append(" *self")
             }
-            output.append(source, previousEnd, close.span.startOffset)
+            replacements += RangeReplacement(
+                receiver.span.startOffset,
+                receiver.span.endOffset,
+                MappedText.generated(receiverText, source.originAt(receiver.span.startOffset))
+            )
         }
-        output.appendGenerated(")", source.originAt(close.span.startOffset))
-        output.append(source, close.span.endOffset, method.span.endOffset)
+        val output = MappedTextBuilder()
+        val declarationOrigin = source.originAt(access.span.startOffset)
+        if (isStatic) output.appendGenerated("static ", declarationOrigin)
+        appendReplacedRange(output, source, access.span.startOffset, method.span.endOffset, replacements)
         return output.build()
     }
 
-    private fun appendTrimmed(output: MappedTextBuilder, source: MappedText, start: Int, end: Int) {
-        var left = start
-        var right = end
-        while (left < right && source.text[left].isWhitespace()) left++
-        while (right > left && source.text[right - 1].isWhitespace()) right--
-        output.append(source, left, right)
+    private fun appendReplacedRange(
+        output: MappedTextBuilder,
+        source: MappedText,
+        start: Int,
+        end: Int,
+        replacements: List<RangeReplacement>
+    ) {
+        var cursor = start
+        replacements.sortedBy { it.start }.forEach { replacement ->
+            require(replacement.start >= cursor && replacement.end <= end) {
+                "method replacement ${replacement.start}..${replacement.end} is outside $start..$end"
+            }
+            output.append(source, cursor, replacement.start)
+            output.append(replacement.content)
+            cursor = replacement.end
+        }
+        output.append(source, cursor, end)
     }
 
     private fun typeStem(typeName: String): String = if (typeName.endsWith("_t")) typeName.dropLast(2) else typeName

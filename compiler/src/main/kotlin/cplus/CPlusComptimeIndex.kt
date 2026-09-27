@@ -74,7 +74,7 @@ class CPlusComptimeIndexer {
                 val symbolNode = when (node.syntaxKind) {
                     "cplus_comptime_function_definition", "cplus_legacy_type_generator", "cplus_legacy_function_generator" ->
                         node.children.firstOrNull { it.fieldName == "name" }
-                    "cplus_comptime_invocation" -> node.children.firstOrNull { it.fieldName == "generator" }
+                    "cplus_comptime_invocation", "cplus_legacy_comptime_invocation" -> node.children.firstOrNull { it.fieldName == "generator" }
                     "cplus_comptime_type_definition" -> node.children.firstOrNull { it.fieldName == "generator" }
                         ?.children?.firstOrNull { it.syntaxKind == "identifier" }
                     "cplus_comptime_value" -> node.children.firstOrNull { it.fieldName == "name" }
@@ -93,7 +93,7 @@ class CPlusComptimeIndexer {
                                     .firstOrNull { it.syntaxKind in setOf("identifier", "type_identifier") }
                             val typeNode = parameter.children.firstOrNull { it.fieldName == "type" }
                             CPlusComptimeParameter(
-                                name = nameNode?.text(ast.source.text),
+                                name = nameNode?.text(ast.source.text)?.removePrefix("@"),
                                 typeText = if (genericType) "type" else typeNode?.text(ast.source.text),
                                 span = parameter.span,
                                 genericType = genericType
@@ -101,15 +101,17 @@ class CPlusComptimeIndexer {
                         }.toList()
                 } else emptyList()
                 val invocation = when (node.syntaxKind) {
-                    "cplus_comptime_invocation" -> node
+                    "cplus_comptime_invocation", "cplus_legacy_comptime_invocation" -> node
                     "cplus_comptime_type_definition" -> node.children.firstOrNull { it.fieldName == "generator" }
                     else -> null
                 }
-                val argumentList = invocation?.descendantsAndSelf()
-                    ?.firstOrNull { it.syntaxKind == "argument_list" }
+                // Only use an argument_list that belongs directly to the invocation.
+                // Descending through an argument expression can accidentally pick a nested
+                // runtime/comptime call's list and truncate the generator's arguments.
+                val argumentList = invocation?.children?.firstOrNull { it.syntaxKind == "argument_list" }
                 val argumentSpans = if (argumentList != null) {
                     argumentList.children.filter { it.named && it.syntaxKind != "comment" }.map { it.span }
-                } else if (invocation?.syntaxKind == "cplus_comptime_invocation") {
+                } else if (invocation != null && invocation.syntaxKind in setOf("cplus_comptime_invocation", "cplus_legacy_comptime_invocation")) {
                     invocation.children.filter {
                         it.named && it.fieldName != "generator" && it.fieldName != "alias" && it.syntaxKind != "comment"
                     }.map { it.span }
@@ -144,7 +146,7 @@ class CPlusComptimeIndexer {
         val COMPTIME_NODES = setOf(
             "cplus_comptime_function_definition", "cplus_legacy_type_generator", "cplus_legacy_function_generator",
             "cplus_comptime_type_definition", "cplus_comptime_import", "cplus_comptime_flags",
-            "cplus_comptime_invocation", "cplus_comptime_value", "cplus_comptime_block",
+            "cplus_comptime_invocation", "cplus_legacy_comptime_invocation", "cplus_comptime_value", "cplus_comptime_block",
             "cplus_comptime_conditional"
         )
         val IMPORT_NODES = setOf("cplus_comptime_import", "cplus_at_import")
@@ -153,7 +155,7 @@ class CPlusComptimeIndexer {
         )
         val PARAMETER_NODES = setOf(
             "cplus_generic_type_parameter", "cplus_legacy_generic_type_parameter",
-            "parameter_declaration", "cplus_parameter_declaration"
+            "parameter_declaration", "cplus_parameter_declaration", "cplus_comptime_parameter"
         )
         val GENERIC_PARAMETER_NODES = setOf("cplus_generic_type_parameter", "cplus_legacy_generic_type_parameter")
         val NON_MODULE_SCOPE_NODES = setOf(

@@ -150,6 +150,24 @@ class TreeSitterAllocationIntentAnalyzer {
             scope[name] = current.copy(provenance = provenance)
         }
 
+        fun lvalueName(node: CPlusAstNode): String? = node.descendantsAndSelf()
+            .firstOrNull { it.syntaxKind == "identifier" }
+            ?.let { text(source, it) }
+
+        fun invalidateLvalue(
+            node: CPlusAstNode,
+            scope: MutableMap<String, VariableState>
+        ) {
+            // Compound assignments and updates produce a value from the previous
+            // lvalue, so an allocator domain cannot be propagated through them.
+            // Keep the declaration intent/ownership metadata, but discard only the
+            // runtime provenance. For complex lvalues, the first identifier is the
+            // storage root (for example `buffer[index]` or `*out`).
+            lvalueName(node)?.let { name ->
+                scope[name]?.let { state -> scope[name] = state.copy(provenance = null) }
+            }
+        }
+
         fun outputTargetName(argument: CPlusAstNode): String? {
             var expression = argument
             while (expression.syntaxKind == "parenthesized_expression") {
@@ -163,6 +181,15 @@ class TreeSitterAllocationIntentAnalyzer {
             return expression.children.firstOrNull { it.fieldName == "argument" }
                 ?.takeIf { it.syntaxKind == "identifier" }
                 ?.let { text(source, it) }
+        }
+
+        fun invalidateOutputTarget(
+            argument: CPlusAstNode,
+            scope: MutableMap<String, VariableState>
+        ) {
+            outputTargetName(argument)?.let { name ->
+                scope[name]?.let { state -> scope[name] = state.copy(provenance = null) }
+            }
         }
 
         fun applyOutputCallEffect(
@@ -182,6 +209,22 @@ class TreeSitterAllocationIntentAnalyzer {
                     current.provenance ?: Provenance(it, "output from '${parameter.name}'")
                 }
             )
+        }
+
+        fun applyPotentialPointerWrite(
+            argument: CPlusAstNode,
+            parameter: ParameterContract,
+            scope: MutableMap<String, VariableState>
+        ) {
+            if (parameter.pointerDepth < 2) return
+            if (parameter.isOutputPointer) {
+                applyOutputCallEffect(argument, parameter, scope)
+            } else {
+                // A double-pointer parameter can replace the caller's pointer even
+                // without an ownership annotation. Ownership remains advisory; the
+                // flow analysis must not retain a stale allocator domain.
+                invalidateOutputTarget(argument, scope)
+            }
         }
 
         fun checkCall(node: CPlusAstNode, scope: MutableMap<String, VariableState>) {
@@ -214,12 +257,18 @@ class TreeSitterAllocationIntentAnalyzer {
                     }
                 }
                 contracts.zip(checkedArguments).forEach { (parameter, argument) ->
-                    applyOutputCallEffect(argument, parameter, scope)
+                    applyPotentialPointerWrite(argument, parameter, scope)
                 }
                 return
             }
             val functionNode = node.children.firstOrNull { it.fieldName == "function" } ?: return
-            val signature = functionContracts[text(source, functionNode)] ?: return
+            val signature = functionContracts[text(source, functionNode)]
+            if (signature == null) {
+                // An unresolved/external call may write through an address supplied
+                // by the caller. Only tracked `&variable` arguments are affected.
+                arguments.forEach { invalidateOutputTarget(it, scope) }
+                return
+            }
             signature.parameters.zip(arguments).forEach { (parameter, argument) ->
                 if (!parameter.isOutputPointer && parameter.intent != AllocationIntent.NONE) {
                     val actual = infer(argument, scope, source, functionContracts, methodContractsByDeclaration, resolvedMethodCalls)
@@ -230,7 +279,7 @@ class TreeSitterAllocationIntentAnalyzer {
                         )
                     }
                 }
-                applyOutputCallEffect(argument, parameter, scope)
+                applyPotentialPointerWrite(argument, parameter, scope)
             }
         }
 
@@ -269,7 +318,7 @@ class TreeSitterAllocationIntentAnalyzer {
                         val arguments = expression.children.firstOrNull { it.fieldName == "arguments" }
                             ?.children.orEmpty().filter { it.named }
                         val methodCall = resolvedMethodCalls[expression.span.startOffset]
-                        val contractAndArguments = if (methodCall != null) {
+                        if (methodCall != null) {
                             val method = methodCall.declaration
                             val contract = methodContractsByDeclaration[method.span.startOffset]
                             val hasReceiverParameter = !methodCall.staticCall && method.parameters.firstOrNull()?.receiver == true
@@ -279,19 +328,22 @@ class TreeSitterAllocationIntentAnalyzer {
                             val callArguments = if (methodCall.explicitReceiver && !methodCall.staticCall) {
                                 arguments.drop(1)
                             } else arguments
-                            contracts to callArguments
+                            contracts.zip(callArguments).asSequence()
+                                .filter { (parameter, _) -> parameter.pointerDepth >= 2 }
+                                .mapNotNull { (_, argument) -> outputTargetName(argument) }
                         } else {
                             val functionNode = expression.children.firstOrNull { it.fieldName == "function" }
                             val contract = functionNode?.let { functionContracts[text(source, it)] }
-                            contract?.parameters.orEmpty() to arguments
-                        }
-                        contractAndArguments.first.zip(contractAndArguments.second).asSequence()
-                            .filter { (parameter, _) -> parameter.isOutputPointer }
-                            .mapNotNull { (parameter, argument) ->
-                                // Reuse the regular call-effect logic so aliases and unknown
-                                // prior values are treated identically inside and outside branches.
-                                outputTargetName(argument)
+                            if (contract == null) {
+                                // An unresolved call has no declaration metadata. Any
+                                // tracked address argument may be a pointer-output write.
+                                arguments.asSequence().mapNotNull(::outputTargetName)
+                            } else {
+                                contract.parameters.zip(arguments).asSequence()
+                                    .filter { (parameter, _) -> parameter.pointerDepth >= 2 }
+                                    .mapNotNull { (_, argument) -> outputTargetName(argument) }
                             }
+                        }
                     }
                     else -> emptySequence()
                 }
@@ -328,9 +380,36 @@ class TreeSitterAllocationIntentAnalyzer {
                     }
                 }
                 "assignment_expression" -> {
-                    node.children.firstOrNull { it.fieldName == "right" }
+                    val left = node.children.firstOrNull { it.fieldName == "left" }
+                    val right = node.children.firstOrNull { it.fieldName == "right" }
+                    if (left != null && right != null) {
+                        // The left and right operands of an assignment are not a
+                        // sequencing boundary in C. Analyze their side effects
+                        // independently before applying the assignment itself.
+                        val incoming = scope.toMap()
+                        val paths = listOf(left, right).map { operand ->
+                            scope.toMutableMap().also { visit(operand, it, currentFunction) }
+                        }
+                        mergePossibleScopes(scope, incoming, listOf(incoming) + paths)
+                    }
+                    val operator = node.children.firstOrNull { it.fieldName == "operator" }
+                        ?.let { text(source, it) }
+                    if (operator == null || operator == "=") {
+                        applySimpleAssignment(node, scope, currentFunction)
+                    } else {
+                        invalidateLvalue(
+                            node.children.firstOrNull { it.fieldName == "left" } ?: node,
+                            scope
+                        )
+                    }
+                }
+                "update_expression" -> {
+                    node.children.firstOrNull { it.fieldName == "argument" }
                         ?.let { visit(it, scope, currentFunction) }
-                    applySimpleAssignment(node, scope, currentFunction)
+                    invalidateLvalue(
+                        node.children.firstOrNull { it.fieldName == "argument" } ?: node,
+                        scope
+                    )
                 }
                 "comma_expression" -> {
                     // The comma operator sequences its operands left-to-right.
@@ -358,6 +437,33 @@ class TreeSitterAllocationIntentAnalyzer {
                             scope.toMutableMap().also { visit(operand, it, currentFunction) }
                         }
                         mergePossibleScopes(scope, incoming, listOf(incoming) + paths)
+                    }
+                }
+                "subscript_expression" -> {
+                    val operands = node.children.filter { it.named }
+                    if (operands.size > 1) {
+                        val incoming = scope.toMap()
+                        val paths = operands.map { operand ->
+                            scope.toMutableMap().also { visit(operand, it, currentFunction) }
+                        }
+                        mergePossibleScopes(scope, incoming, listOf(incoming) + paths)
+                    } else {
+                        operands.forEach { visit(it, scope, currentFunction) }
+                    }
+                }
+                "initializer_list" -> {
+                    val elements = node.children.filter { it.named }
+                    if (elements.size > 1) {
+                        // C does not specify a left-to-right order for initializer
+                        // element evaluation. Keep only provenance shared by every
+                        // possible single-element effect.
+                        val incoming = scope.toMap()
+                        val paths = elements.map { element ->
+                            scope.toMutableMap().also { visit(element, it, currentFunction) }
+                        }
+                        mergePossibleScopes(scope, incoming, listOf(incoming) + paths)
+                    } else {
+                        elements.forEach { visit(it, scope, currentFunction) }
                     }
                 }
                 "conditional_expression" -> {
@@ -600,13 +706,7 @@ class TreeSitterAllocationIntentAnalyzer {
             .filter { it.syntaxKind in setOf("declaration", "function_definition") }
             .mapNotNull { declaration ->
                 val declarationNode = declaration.children.firstOrNull { it.fieldName == "declarator" } ?: return@mapNotNull null
-                val functionDeclarator = declarationNode.descendantsAndSelf()
-                    .filter { it.syntaxKind == "function_declarator" }
-                    .firstOrNull { candidate ->
-                        candidate.children.firstOrNull { it.fieldName == "declarator" }
-                            ?.descendantsAndSelf()
-                            ?.any { it.syntaxKind == "identifier" } == true
-                    } ?: return@mapNotNull null
+                val functionDeclarator = declarationNode.namedFunctionDeclarator() ?: return@mapNotNull null
                 val nameNode = functionDeclarator.children.firstOrNull { it.fieldName == "declarator" }
                     ?.descendantsAndSelf()
                     ?.firstOrNull { it.syntaxKind == "identifier" }
@@ -641,7 +741,7 @@ class TreeSitterAllocationIntentAnalyzer {
                     ?: AllocationIntent.NONE
                 val returnOwnership = resultAnnotations.map(::allocationOwnership).firstOrNull { it != AllocationOwnership.NONE }
                     ?: AllocationOwnership.NONE
-                if (parameters.none { it.intent != AllocationIntent.NONE } && returnIntent == AllocationIntent.NONE &&
+                if (parameters.none { it.intent != AllocationIntent.NONE || it.pointerDepth >= 2 } && returnIntent == AllocationIntent.NONE &&
                     returnOwnership == AllocationOwnership.NONE
                 ) return@mapNotNull null
                 val name = source.substring(nameNode.span.startOffset, nameNode.span.endOffset)
@@ -672,8 +772,7 @@ class TreeSitterAllocationIntentAnalyzer {
         ast.root.descendantsAndSelf()
             .filter { it.syntaxKind == "cplus_method_definition" }
             .mapNotNull { method ->
-                val functionDeclarator = method.descendantsAndSelf()
-                    .firstOrNull { it.syntaxKind == "function_declarator" } ?: return@mapNotNull null
+                val functionDeclarator = method.namedFunctionDeclarator() ?: return@mapNotNull null
                 val nameNode = functionDeclarator.children.firstOrNull { it.fieldName == "declarator" }
                     ?.descendantsAndSelf()?.firstOrNull { it.syntaxKind == "identifier" }
                     ?: return@mapNotNull null
@@ -708,7 +807,9 @@ class TreeSitterAllocationIntentAnalyzer {
                     .firstOrNull { it != AllocationIntent.NONE } ?: AllocationIntent.NONE
                 val returnOwnership = resultAnnotations.map(::allocationOwnership)
                     .firstOrNull { it != AllocationOwnership.NONE } ?: AllocationOwnership.NONE
-                if (returnIntent == AllocationIntent.NONE && returnOwnership == AllocationOwnership.NONE) {
+                if (parameters.none { it.intent != AllocationIntent.NONE || it.pointerDepth >= 2 } &&
+                    returnIntent == AllocationIntent.NONE && returnOwnership == AllocationOwnership.NONE
+                ) {
                     return@mapNotNull null
                 }
                 method.span.startOffset to FunctionContract(
@@ -815,4 +916,9 @@ class TreeSitterAllocationIntentAnalyzer {
 
     private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =
         sequenceOf(this) + children.asSequence().flatMap { it.descendantsAndSelf() }
+
+    private fun CPlusAstNode.namedFunctionDeclarator(): CPlusAstNode? =
+        descendantsAndSelf()
+            .filter { it.syntaxKind == "function_declarator" }
+            .firstOrNull { candidate -> candidate.children.any { it.syntaxKind == "identifier" } }
 }

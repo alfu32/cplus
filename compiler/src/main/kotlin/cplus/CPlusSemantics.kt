@@ -2,6 +2,9 @@ package cplus
 
 enum class CPlusSymbolKind { STRUCT, TYPE_ALIAS, FIELD, INSTANCE_METHOD, STATIC_METHOD, FUNCTION }
 
+/** Ordered C declarator binding layers, from the declared base outward. */
+enum class CPlusDeclaratorLayer { POINTER, ARRAY, FUNCTION }
+
 enum class CPlusThrowsConvention { ERROR_RETURN, ERROR_OUT_PARAMETER }
 
 data class CPlusThrowsMetadata(
@@ -24,7 +27,9 @@ data class CPlusSymbol(
     /** Original declaration spelling, retained for declarator forms not yet normalized semantically. */
     val declarationText: String? = null,
     /** Pointer indirection introduced by this declaration, excluding any aliased target type. */
-    val pointerDepth: Int = 0
+    val pointerDepth: Int = 0,
+    /** Complete declarator binding shape, retained for later semantic/lowering consumers. */
+    val declaratorLayers: List<CPlusDeclaratorLayer> = emptyList()
 )
 
 /** Callable signature attached to a C function-pointer typedef, kept distinct from its return type. */
@@ -46,7 +51,9 @@ data class CPlusParameterSymbol(
     /** Original declaration spelling, retaining pointer depth and qualifiers beyond [typeName]. */
     val declarationText: String? = null,
     /** Callable signature when this parameter is itself a function pointer/function parameter. */
-    val functionType: CPlusFunctionType? = null
+    val functionType: CPlusFunctionType? = null,
+    /** Complete declarator binding shape, including pointer/array/function layers. */
+    val declaratorLayers: List<CPlusDeclaratorLayer> = emptyList()
 )
 
 data class CPlusResolvedCall(
@@ -91,10 +98,13 @@ data class CPlusSemanticDiagnostic(
 
 /** Conservative declaration index. It resolves only method calls whose receiver type is explicit. */
 class CPlusSemanticAnalyzer {
-    private enum class CDeclaratorLayer { POINTER, ARRAY, FUNCTION }
-    private data class TypeAliasTarget(val name: String, val layers: List<CDeclaratorLayer>)
-    private data class ResolvedCType(val name: String, val layers: List<CDeclaratorLayer>) {
-        val pointerDepth: Int get() = layers.count { it == CDeclaratorLayer.POINTER }
+    private data class TypeAliasTarget(val name: String, val layers: List<CPlusDeclaratorLayer>)
+    private data class ResolvedCType(
+        val name: String,
+        val layers: List<CPlusDeclaratorLayer>,
+        val callableReturn: ResolvedCType? = null
+    ) {
+        val pointerDepth: Int get() = layers.count { it == CPlusDeclaratorLayer.POINTER }
     }
 
     private val comptimeOnlySyntax = setOf(
@@ -105,6 +115,7 @@ class CPlusSemanticAnalyzer {
         "cplus_comptime_block",
         "cplus_comptime_conditional",
         "cplus_comptime_invocation",
+        "cplus_legacy_comptime_invocation",
         "cplus_comptime_value",
         "cplus_comptime_import",
         "cplus_at_import",
@@ -124,9 +135,35 @@ class CPlusSemanticAnalyzer {
         val symbols = mutableListOf<CPlusSymbol>()
         val methodsByType = LinkedHashMap<String, MutableList<CPlusSymbol>>()
         val typeAliases = LinkedHashMap<String, TypeAliasTarget>()
-        val fieldDeclaratorLayers = LinkedHashMap<Pair<String, String>, List<CDeclaratorLayer>>()
+        val fieldDeclaratorLayers = LinkedHashMap<Pair<String, String>, List<CPlusDeclaratorLayer>>()
         val anonymousStructNames = LinkedHashMap<Int, String>()
+        data class CallableReturn(val typeName: String, val declaratorLayers: List<CPlusDeclaratorLayer>)
+        val functionReturns = LinkedHashMap<String, MutableSet<CallableReturn>>()
+        val methodReturns = LinkedHashMap<Pair<String, String>, MutableSet<CallableReturn>>()
         val diagnostics = mutableListOf<CPlusSemanticDiagnostic>()
+
+        fun declaredReturn(node: CPlusAstNode): CallableReturn? {
+            val typeNode = node.children.firstOrNull { it.fieldName == "type" } ?: return null
+            val baseType = typeNode.descendantsAndSelf()
+                .firstOrNull { it.syntaxKind in setOf("type_identifier", "primitive_type") }
+                ?.text(ast.source.text)
+                ?: return null
+            val declarator = node.children.firstOrNull { it.fieldName == "declarator" } ?: return null
+            val layers = declarator.declaratorLayers()
+            if (layers.firstOrNull() != CPlusDeclaratorLayer.FUNCTION) return null
+            val nameStart = declarator.cplusNamedFunctionDeclarator()
+                ?.children?.firstOrNull { it.syntaxKind == "identifier" }
+                ?.span?.startOffset
+                ?: return null
+            val sourcePointerCount = ast.source.text
+                .substring(typeNode.span.endOffset, nameStart)
+                .count { it == '*' }
+            val returnLayers = layers.drop(1).toMutableList()
+            repeat((sourcePointerCount - returnLayers.count { it == CPlusDeclaratorLayer.POINTER }).coerceAtLeast(0)) {
+                returnLayers.add(0, CPlusDeclaratorLayer.POINTER)
+            }
+            return CallableReturn(baseType, returnLayers)
+        }
 
         runtimeNodes.asSequence()
             .filter { it.syntaxKind == "type_definition" }
@@ -183,7 +220,7 @@ class CPlusSemanticAnalyzer {
                             else primitiveTarget
                         if (resolvedTarget != null) {
                             val layers = declarator.declaratorLayers()
-                            val pointerDepth = layers.count { it == CDeclaratorLayer.POINTER }
+                            val pointerDepth = layers.count { it == CPlusDeclaratorLayer.POINTER }
                             if (functionType == null && resolvedTarget != alias) {
                                 typeAliases[alias] = TypeAliasTarget(resolvedTarget, layers)
                             }
@@ -198,7 +235,8 @@ class CPlusSemanticAnalyzer {
                                 declarator.span,
                                 functionType = functionType,
                                 declarationText = node.text(ast.source.text),
-                                pointerDepth = pointerDepth
+                                pointerDepth = pointerDepth,
+                                declaratorLayers = layers
                             )
                         }
                     }
@@ -225,14 +263,15 @@ class CPlusSemanticAnalyzer {
                                 symbols += CPlusSymbol(
                                     name, CPlusSymbolKind.FIELD, typeName, type, null,
                                     emptySet(), emptyList(), member.span,
-                                    pointerDepth = layers.count { it == CDeclaratorLayer.POINTER }
+                                    pointerDepth = layers.count { it == CPlusDeclaratorLayer.POINTER },
+                                    declaratorLayers = layers
                                 )
                             }
                             "cplus_method_definition", "cplus_throws_annotated_method" -> {
                                 val methodNode = if (member.syntaxKind == "cplus_throws_annotated_method") {
                                     member.descendants().firstOrNull { it.syntaxKind == "cplus_method_definition" } ?: member
                                 } else member
-                                val nameNode = methodNode.descendants().firstOrNull { it.syntaxKind == "function_declarator" }
+                                val nameNode = methodNode.cplusNamedFunctionDeclarator()
                                     ?.children?.firstOrNull { it.syntaxKind == "identifier" }
                                 val name = nameNode?.text(ast.source.text) ?: return@forEach
                                 val isStatic = methodNode.children.any { it.syntaxKind == "cplus_static_modifier" }
@@ -261,7 +300,17 @@ class CPlusSemanticAnalyzer {
                                             .map { it.text(ast.source.text) }
                                             .toSet(),
                                         receiver = index == 0 && nameNode?.text(ast.source.text) == "self",
-                                        span = parameter.span
+                                        span = parameter.span,
+                                        declarationText = parameter.text(ast.source.text),
+                                        functionType = declarator?.let {
+                                            functionTypeOf(
+                                                it,
+                                                parameter.children.firstOrNull { child -> child.fieldName == "type" },
+                                                ast.source.text,
+                                                nameNode?.text(ast.source.text)
+                                            )
+                                        },
+                                        declaratorLayers = declarator?.declaratorLayers().orEmpty()
                                     )
                                 }
                                 val throwsAnnotation = member.descendants()
@@ -280,16 +329,22 @@ class CPlusSemanticAnalyzer {
                                     parameters,
                                     member.span,
                                     throwsParameter,
-                                    throwsAnnotation?.toThrowsMetadata(throwsParameterName)
+                                    throwsAnnotation?.toThrowsMetadata(throwsParameterName),
+                                    declaratorLayers = methodNode.children
+                                        .firstOrNull { it.fieldName == "declarator" }
+                                        ?.declaratorLayers().orEmpty()
                                 )
                                 symbols += symbol
                                 methodsByType.getOrPut(typeName, ::mutableListOf) += symbol
+                                declaredReturn(methodNode)?.let { result ->
+                                    methodReturns.getOrPut(typeName to name, ::linkedSetOf) += result
+                                }
                             }
                         }
                     }
                 }
             } else if (node.syntaxKind in setOf("function_definition", "cplus_function_declaration")) {
-                val functionDeclarator = node.descendants().firstOrNull { it.syntaxKind == "function_declarator" }
+                val functionDeclarator = node.cplusNamedFunctionDeclarator()
                 val name = functionDeclarator?.children?.firstOrNull { it.syntaxKind == "identifier" }
                     ?.text(ast.source.text)
                 val parameterNodes = functionDeclarator?.descendantsAndSelf()
@@ -313,7 +368,17 @@ class CPlusSemanticAnalyzer {
                             .map { it.text(ast.source.text) }
                             .toSet(),
                         receiver = false,
-                        span = parameter.span
+                        span = parameter.span,
+                        declarationText = parameter.text(ast.source.text),
+                        functionType = declarator?.let {
+                            functionTypeOf(
+                                it,
+                                parameter.children.firstOrNull { child -> child.fieldName == "type" },
+                                ast.source.text,
+                                parameterName
+                            )
+                        },
+                        declaratorLayers = declarator?.declaratorLayers().orEmpty()
                     )
                 }
                 val throwsAnnotation = node.descendants().firstOrNull { it.syntaxKind == "cplus_throws_annotation" }
@@ -321,19 +386,27 @@ class CPlusSemanticAnalyzer {
                     ?.firstOrNull { it.syntaxKind == "identifier" }
                     ?.text(ast.source.text)
                 val throwsParameter = throwsAnnotation?.let { throwsParameterName.orEmpty() }
-                if (name != null) symbols += CPlusSymbol(
-                    name, CPlusSymbolKind.FUNCTION, null, null,
-                    node.descendants().firstOrNull { it.syntaxKind == "cplus_access_modifier" }?.text(ast.source.text),
-                    emptySet(), parameters, node.span,
-                    throwsParameter,
-                    throwsAnnotation?.toThrowsMetadata(throwsParameterName)
-                )
+                if (name != null) {
+                    symbols += CPlusSymbol(
+                        name, CPlusSymbolKind.FUNCTION, null, null,
+                        node.descendants().firstOrNull { it.syntaxKind == "cplus_access_modifier" }?.text(ast.source.text),
+                        emptySet(), parameters, node.span,
+                        throwsParameter,
+                        throwsAnnotation?.toThrowsMetadata(throwsParameterName),
+                        declaratorLayers = node.children
+                            .firstOrNull { it.fieldName == "declarator" }
+                            ?.declaratorLayers().orEmpty()
+                    )
+                    declaredReturn(node)?.let { result ->
+                        functionReturns.getOrPut(name, ::linkedSetOf) += result
+                    }
+                }
             }
             node.children.forEach(::collectDeclarations)
         }
         collectDeclarations(ast.root)
 
-        fun canonicalType(type: String, declaredLayers: List<CDeclaratorLayer> = emptyList()): ResolvedCType? {
+        fun canonicalType(type: String, declaredLayers: List<CPlusDeclaratorLayer> = emptyList()): ResolvedCType? {
             var current = type
             var layers = declaredLayers
             val visited = mutableSetOf<String>()
@@ -348,6 +421,19 @@ class CPlusSemanticAnalyzer {
         fun operatorText(node: CPlusAstNode): String? =
             node.children.firstOrNull { it.fieldName == "operator" }?.text(ast.source.text)
                 ?: node.children.firstOrNull { !it.named }?.text(ast.source.text)
+
+        fun isNullPointerConstant(expression: CPlusAstNode): Boolean {
+            val text = expression.text(ast.source.text).trim()
+            return text == "NULL" || text == "0" || text == "((void *)0)" || text == "((void*)0)"
+        }
+
+        fun uniqueFunctionReturn(name: String): ResolvedCType? = functionReturns[name]
+            ?.singleOrNull()
+            ?.let { result -> canonicalType(result.typeName, result.declaratorLayers) }
+
+        fun uniqueMethodReturn(owner: String, name: String): ResolvedCType? = methodReturns[owner to name]
+            ?.singleOrNull()
+            ?.let { result -> canonicalType(result.typeName, result.declaratorLayers) }
 
         fun receiverType(expression: CPlusAstNode, variables: Map<String, ResolvedCType?>): ResolvedCType? = when (expression.syntaxKind) {
             "identifier" -> variables[expression.text(ast.source.text)]
@@ -379,17 +465,68 @@ class CPlusSemanticAnalyzer {
                     ?: expression.children.firstOrNull { it.named }
                 val baseType = argument?.let { receiverType(it, variables) }
                 if (baseType == null) null else when (baseType.layers.firstOrNull()) {
-                    CDeclaratorLayer.ARRAY, CDeclaratorLayer.POINTER -> baseType.copy(layers = baseType.layers.drop(1))
+                    CPlusDeclaratorLayer.ARRAY, CPlusDeclaratorLayer.POINTER -> baseType.copy(layers = baseType.layers.drop(1))
                     else -> null
                 }
             }
+            "call_expression" -> {
+                val function = expression.children.firstOrNull { it.fieldName == "function" }
+                val directName = function?.takeIf { it.syntaxKind == "identifier" }
+                    ?.text(ast.source.text)
+                val directReturn = directName?.let(::uniqueFunctionReturn)
+                val variableReturn = directName?.let { variables[it]?.callableReturn }
+                if (directReturn != null) {
+                    directReturn
+                } else if (variableReturn != null) {
+                    variableReturn
+                } else {
+                    val memberAccess = function?.descendantsAndSelf()
+                        ?.firstOrNull { it.syntaxKind == "field_expression" }
+                    val receiver = memberAccess?.children?.firstOrNull { it.named }
+                    val memberName = memberAccess?.children?.lastOrNull { it.syntaxKind == "field_identifier" }
+                        ?.text(ast.source.text)
+                    val staticOwner = receiver?.takeIf {
+                        it.syntaxKind == "identifier" && it.text(ast.source.text) !in variables
+                    }?.text(ast.source.text)?.takeIf { it in methodsByType }
+                    val instanceOwner = receiver?.let { receiverType(it, variables) }
+                        ?.name?.takeIf { it in methodsByType }
+                    val owner = staticOwner ?: instanceOwner
+                    if (owner != null && memberName != null) uniqueMethodReturn(owner, memberName) else null
+                }
+            }
+            "cast_expression", "compound_literal_expression" -> expression.children
+                .firstOrNull { it.fieldName == "type" }
+                ?.let { typeDescriptor ->
+                    val typeName = typeDescriptor.descendantsAndSelf()
+                        .firstOrNull { it.syntaxKind in setOf("type_identifier", "primitive_type") }
+                        ?.text(ast.source.text)
+                    val abstractDeclarator = typeDescriptor.children.firstOrNull { it.fieldName == "declarator" }
+                    typeName?.let {
+                        canonicalType(it, abstractDeclarator?.declaratorLayers().orEmpty())
+                    }
+                }
+            "conditional_expression" -> {
+                val consequenceNode = expression.children.firstOrNull { it.fieldName == "consequence" }
+                val alternativeNode = expression.children.firstOrNull { it.fieldName == "alternative" }
+                val consequence = consequenceNode?.let { receiverType(it, variables) }
+                val alternative = alternativeNode?.let { receiverType(it, variables) }
+                when {
+                    consequence != null && consequence == alternative -> consequence
+                    consequence != null && alternativeNode != null && isNullPointerConstant(alternativeNode) -> consequence
+                    alternative != null && consequenceNode != null && isNullPointerConstant(consequenceNode) -> alternative
+                    else -> null
+                }
+            }
+            "comma_expression" -> expression.children
+                .lastOrNull { it.named }
+                ?.let { receiverType(it, variables) }
             "unary_expression", "pointer_expression" -> {
                 val argument = expression.children.firstOrNull { it.fieldName == "argument" }
                     ?: expression.children.lastOrNull { it.named }
                 val operandType = argument?.let { receiverType(it, variables) }
                 when (operatorText(expression)) {
-                    "&" -> operandType?.copy(layers = listOf(CDeclaratorLayer.POINTER) + operandType.layers)
-                    "*" -> operandType?.takeIf { it.layers.firstOrNull() == CDeclaratorLayer.POINTER }
+                    "&" -> operandType?.copy(layers = listOf(CPlusDeclaratorLayer.POINTER) + operandType.layers)
+                    "*" -> operandType?.takeIf { it.layers.firstOrNull() == CPlusDeclaratorLayer.POINTER }
                         ?.copy(layers = operandType.layers.drop(1))
                     else -> null
                 }
@@ -446,13 +583,37 @@ class CPlusSemanticAnalyzer {
                         .orEmpty().filter { it.name == memberName }
                     val matchingStatic = typeQualifiedMethods.firstOrNull { it.kind == CPlusSymbolKind.STATIC_METHOD }
                     val matchingInstance = typeQualifiedMethods.firstOrNull { it.kind == CPlusSymbolKind.INSTANCE_METHOD }
+                    val explicitReceiverArgument = argumentExpressions.firstOrNull()
                     val explicitReceiver = matchingStatic == null && matchingInstance != null &&
-                        explicitReceiverType?.let {
-                            it.name == staticType && it.layers == listOf(CDeclaratorLayer.POINTER)
-                        } == true
+                        explicitReceiverArgument != null && (
+                            explicitReceiverType?.let {
+                                it.name == staticType && it.layers == listOf(CPlusDeclaratorLayer.POINTER)
+                            } == true || isNullPointerConstant(explicitReceiverArgument)
+                        )
                     val knownInstanceOwner = instanceType?.name?.takeIf { it in methodsByType }
                     val owner = instanceType?.takeIf { it.name in methodsByType && it.pointerDepth <= 1 }?.name ?: staticType
-                    val method = when {
+                    val callableField = instanceType?.let { receiverType ->
+                        memberName?.let { fieldName ->
+                            val field = symbols.firstOrNull {
+                                it.kind == CPlusSymbolKind.FIELD &&
+                                    it.ownerType == receiverType.name &&
+                                    it.name == fieldName
+                            }
+                            fieldDeclaratorLayers[receiverType.name to fieldName]
+                                ?.contains(CPlusDeclaratorLayer.FUNCTION) == true ||
+                                field?.typeName?.let { fieldType ->
+                                    symbols.firstOrNull {
+                                        it.kind == CPlusSymbolKind.TYPE_ALIAS &&
+                                            it.name == fieldType &&
+                                            it.functionType != null
+                                    } != null
+                                } == true
+                        }
+                    } == true
+                    // A function-pointer field is a normal C callable expression, not a C-plus
+                    // method. This distinction matters after generic struct materialization,
+                    // where a field and method can share a spelling across specializations.
+                    val method = if (callableField) null else when {
                         staticType != null -> matchingStatic ?: matchingInstance
                         else -> knownInstanceOwner?.let { ownerType ->
                             methodsByType[ownerType]?.firstOrNull { it.name == memberName }
@@ -482,14 +643,14 @@ class CPlusSemanticAnalyzer {
                             val layers = instanceType.layers
                             val pointerDepth = instanceType.pointerDepth
                             val explicitAddressDot = operator.syntaxKind == "." && isAddressExpression(receiver) &&
-                                layers == listOf(CDeclaratorLayer.POINTER)
+                                layers == listOf(CPlusDeclaratorLayer.POINTER)
                             val validReceiverShape = when (operator.syntaxKind) {
                                 "." -> layers.isEmpty() || explicitAddressDot
                                 // A C array expression decays to a pointer to its first element. This is
                                 // valid for an array of structs, but not for an array of pointers or a
                                 // pointer to an array; those shapes must be indexed/dereferenced first.
-                                "->" -> layers == listOf(CDeclaratorLayer.POINTER) ||
-                                    layers == listOf(CDeclaratorLayer.ARRAY)
+                                "->" -> layers == listOf(CPlusDeclaratorLayer.POINTER) ||
+                                    layers == listOf(CPlusDeclaratorLayer.ARRAY)
                                 else -> false
                             }
                             if (!validReceiverShape) {
@@ -507,7 +668,6 @@ class CPlusSemanticAnalyzer {
                                 }
                                 diagnostics += CPlusSemanticDiagnostic(code, message, node.span)
                             } else {
-                                val innerArguments = ast.source.text.substring(openingParen.span.endOffset, closingParen.span.startOffset)
                                 val callReceiver = if (explicitReceiver) argumentExpressions.first() else receiver
                                 resolvedCalls += CPlusResolvedCall(
                                     method.name, owner!!, isStatic, node.span, method,
@@ -515,12 +675,13 @@ class CPlusSemanticAnalyzer {
                                     if (explicitReceiver) false else operator.syntaxKind == "->",
                                     if (explicitReceiver) true else receiver.let(::isAddressExpression),
                                     openingParen.span.endOffset,
-                                    SourceMasker.mask(innerArguments).trim().isNotEmpty(),
+                                    // Masking erases string and character literal contents, so
+                                    // it cannot determine whether a literal-only argument exists.
+                                    argumentExpressions.isNotEmpty(),
                                     explicitReceiver
                                 )
                             }
                         } else {
-                            val innerArguments = ast.source.text.substring(openingParen.span.endOffset, closingParen.span.startOffset)
                             val callReceiver = if (explicitReceiver) argumentExpressions.first() else receiver
                             resolvedCalls += CPlusResolvedCall(
                                 method.name, owner!!, isStatic, node.span, method,
@@ -528,7 +689,7 @@ class CPlusSemanticAnalyzer {
                                 if (explicitReceiver) false else operator.syntaxKind == "->",
                                 if (explicitReceiver) true else receiver.let(::isAddressExpression),
                                 openingParen.span.endOffset,
-                                SourceMasker.mask(innerArguments).trim().isNotEmpty(),
+                                argumentExpressions.isNotEmpty(),
                                 explicitReceiver
                             )
                         }
@@ -575,7 +736,7 @@ class CPlusSemanticAnalyzer {
                         val resolvedParameterType = parameterType?.let {
                             canonicalType(it, declarator?.declaratorLayers().orEmpty())
                         } ?: ownerType.takeIf { parameterName == "self" }
-                            ?.let { ResolvedCType(it, listOf(CDeclaratorLayer.POINTER)) }
+                            ?.let { ResolvedCType(it, listOf(CPlusDeclaratorLayer.POINTER)) }
                         if (parameterName != null) {
                             // Keep unresolved declarations in the scope so they still shadow type names.
                             visibleVariables[parameterName] = resolvedParameterType
@@ -640,7 +801,8 @@ class CPlusSemanticAnalyzer {
                     receiver = false,
                     span = parameter.span,
                     declarationText = parameter.text(source),
-                    functionType = nestedFunctionType
+                    functionType = nestedFunctionType,
+                    declaratorLayers = parameterDeclarator?.declaratorLayers().orEmpty()
                 )
             }
             val returnedFunctionDeclarator = functionDeclarators
@@ -674,13 +836,14 @@ class CPlusSemanticAnalyzer {
         node: CPlusAstNode,
         source: String,
         variables: MutableMap<String, ResolvedCType?>,
-        canonicalType: (String, List<CDeclaratorLayer>) -> ResolvedCType?
+        canonicalType: (String, List<CPlusDeclaratorLayer>) -> ResolvedCType?
     ) {
         if (node.syntaxKind != "declaration") return
         if (node.descendantsAndSelf().any {
                 it.syntaxKind == "storage_class_specifier" && it.text(source).trim() == "typedef"
             }) return
-        val type = node.children.firstOrNull { it.fieldName == "type" }
+        val typeNode = node.children.firstOrNull { it.fieldName == "type" }
+        val type = typeNode
             ?.descendantsAndSelf()?.firstOrNull { it.syntaxKind in setOf("type_identifier", "primitive_type") }
             ?.text(source)
             ?: node.children.firstOrNull { it.syntaxKind in setOf("type_identifier", "primitive_type") }?.text(source)
@@ -695,8 +858,16 @@ class CPlusSemanticAnalyzer {
             // A plain function declaration introduces a function, not an object in value scope.
             // Function-pointer declarators do declare objects and retain their pointer indirection.
             val layers = declarator.declaratorLayers()
-            if (layers.firstOrNull() == CDeclaratorLayer.FUNCTION) return@forEach
-            val resolved = canonicalType(type, layers)
+            if (layers.firstOrNull() == CPlusDeclaratorLayer.FUNCTION) return@forEach
+            val callableReturn = if (CPlusDeclaratorLayer.FUNCTION in layers && typeNode != null) {
+                val sourcePointerCount = source
+                    .substring(typeNode.span.endOffset, declarator.span.endOffset)
+                    .count { it == '*' }
+                val returnPointerCount = (sourcePointerCount - layers.count { it == CPlusDeclaratorLayer.POINTER })
+                    .coerceAtLeast(0)
+                canonicalType(type, List(returnPointerCount) { CPlusDeclaratorLayer.POINTER })
+            } else null
+            val resolved = canonicalType(type, layers)?.copy(callableReturn = callableReturn)
             variables[variable] = resolved
         }
     }
@@ -707,19 +878,22 @@ class CPlusSemanticAnalyzer {
     private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =
         sequenceOf(this) + descendants()
 
-    private fun CPlusAstNode.declaratorLayers(): List<CDeclaratorLayer> {
-        val layers = mutableListOf<CDeclaratorLayer>()
+private fun CPlusAstNode.declaratorLayers(): List<CPlusDeclaratorLayer> {
+        val layers = mutableListOf<CPlusDeclaratorLayer>()
         var current = this
         while (true) {
             when (current.syntaxKind) {
-                "pointer_declarator" -> layers += CDeclaratorLayer.POINTER
-                "array_declarator" -> layers += CDeclaratorLayer.ARRAY
-                "function_declarator" -> layers += CDeclaratorLayer.FUNCTION
+                "pointer_declarator" -> layers += CPlusDeclaratorLayer.POINTER
+                "array_declarator" -> layers += CPlusDeclaratorLayer.ARRAY
+                "function_declarator" -> layers += CPlusDeclaratorLayer.FUNCTION
+                "abstract_pointer_declarator" -> layers += CPlusDeclaratorLayer.POINTER
+                "abstract_array_declarator" -> layers += CPlusDeclaratorLayer.ARRAY
+                "abstract_function_declarator" -> layers += CPlusDeclaratorLayer.FUNCTION
             }
             if (current.syntaxKind in setOf("identifier", "field_identifier", "type_identifier")) {
                 return layers.asReversed()
             }
-            current = current.nextDeclaratorChild() ?: return emptyList()
+            current = current.nextDeclaratorChild() ?: return layers.asReversed()
         }
     }
 
@@ -736,9 +910,29 @@ class CPlusSemanticAnalyzer {
     private fun CPlusAstNode.nextDeclaratorChild(): CPlusAstNode? {
         val declaratorKinds = setOf(
             "identifier", "field_identifier", "type_identifier", "pointer_declarator", "array_declarator", "parenthesized_declarator",
-            "function_declarator", "attributed_declarator", "cplus_interpolated_identifier"
+            "function_declarator", "attributed_declarator", "cplus_interpolated_identifier",
+            "abstract_pointer_declarator", "abstract_array_declarator", "abstract_function_declarator",
+            "abstract_parenthesized_declarator", "_abstract_declarator", "_declarator"
         )
         return children.firstOrNull { it.fieldName == "declarator" && it.syntaxKind in declaratorKinds }
             ?: children.firstOrNull { it.syntaxKind in declaratorKinds }
     }
+}
+
+/**
+ * Select the function declarator that binds a declaration's name.
+ *
+ * An ordinary function has one function declarator. A function-pointer
+ * return, such as `int (*select(...))(int)`, has an outer declarator for the
+ * returned callable type and a nested declarator that actually binds
+ * `select`; semantic indexing must use the latter.
+ */
+internal fun CPlusAstNode.cplusNamedFunctionDeclarator(): CPlusAstNode? {
+    fun descendantsAndSelf(node: CPlusAstNode): Sequence<CPlusAstNode> =
+        sequenceOf(node) + node.children.asSequence().flatMap(::descendantsAndSelf)
+    return descendantsAndSelf(this)
+        .filter { it.syntaxKind == "function_declarator" }
+        .firstOrNull { candidate ->
+            candidate.children.any { it.syntaxKind == "identifier" }
+        }
 }

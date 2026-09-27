@@ -125,6 +125,7 @@ module.exports = grammar({
       $.cplus_comptime_declaration,
       $.cplus_comptime_block,
       $.cplus_comptime_conditional,
+      $.cplus_comptime_for,
       $.cplus_at_import,
       $.cplus_test_declaration,
       $.cplus_function_declaration,
@@ -149,6 +150,7 @@ module.exports = grammar({
       $.cplus_comptime_declaration,
       $.cplus_comptime_block,
       $.cplus_comptime_conditional,
+      $.cplus_comptime_for,
       $.cplus_at_import,
       $.cplus_test_declaration,
     ),
@@ -811,7 +813,7 @@ module.exports = grammar({
 
     field_declaration: $ => seq(
       $._declaration_specifiers,
-      optional($._field_declaration_declarator),
+      optional(choice($._field_declaration_declarator, $.bitfield_clause)),
       optional($.attribute_specifier),
       ';',
     ),
@@ -972,6 +974,11 @@ module.exports = grammar({
     cplus_comptime_marked_identifier: _ => token(prec(2, seq('@', /[A-Za-z_][A-Za-z0-9_]*/))),
 
     cplus_comptime_block: $ => seq('comptime', $.compound_statement),
+
+    cplus_comptime_for: $ => seq(
+      '@', 'for', field('variable', $.identifier), 'in',
+      field('iterable', $.expression), field('body', $.compound_statement),
+    ),
 
     cplus_comptime_conditional: $ => prec.right(seq(
       '@', 'if', '(', field('condition', $.expression), ')', field('body', $.compound_statement),

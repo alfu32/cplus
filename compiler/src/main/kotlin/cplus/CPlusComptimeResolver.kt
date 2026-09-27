@@ -94,6 +94,6 @@ class CPlusComptimeResolver {
             "cplus_legacy_type_generator",
             "cplus_legacy_function_generator"
         )
-        val INVOCATION_KINDS = setOf("cplus_comptime_invocation", "cplus_comptime_type_definition")
+        val INVOCATION_KINDS = setOf("cplus_comptime_invocation", "cplus_comptime_type_definition", "cplus_legacy_comptime_invocation")
     }
 }

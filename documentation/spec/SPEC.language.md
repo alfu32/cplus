@@ -64,7 +64,7 @@ counter_t.alloc_init(0);    // counter__alloc_init(0), no receiver argument
 
 ## `defer`
 
-`defer` is a compiler-lowered statement valid inside a function or method body. It accepts either one C/C-plus statement or a braced group. The compiler removes each occurrence and appends its payload immediately before the enclosing function's closing brace, reversing the order in which the occurrences appeared. Statements within one deferred group keep their written order; the group remains braced so its local declarations stay scoped.
+`defer` is a compiler-lowered statement valid inside a function or method body. It accepts either one C/C-plus statement or a braced group. The compiler registers an occurrence only when execution reaches that `defer`, then runs registered payloads immediately before the enclosing function's closing brace, in reverse occurrence order. A defer nested in a conditional therefore does not run when its branch is skipped. Statements within one deferred group keep their written order; the group remains braced so its local declarations stay scoped.
 
 ```c
 void close_example(void) {
@@ -76,6 +76,17 @@ void close_example(void) {
     work();
 }
 ```
+
+Conditional registration is preserved:
+
+```c
+void maybe_close(int window_is_open) {
+    if (window_is_open)
+        defer CloseWindow();
+}
+```
+
+`CloseWindow()` runs at the function tail only if `window_is_open` was true and control reached the defer statement.
 
 The generated C-plus body ends conceptually as:
 

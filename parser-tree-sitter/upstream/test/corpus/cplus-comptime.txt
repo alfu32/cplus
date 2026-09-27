@@ -308,3 +308,49 @@ comptime outer();
   (cplus_comptime_declaration
     (cplus_comptime_invocation
       (identifier))))
+
+================================================================================
+C-plus comptime reflected-field loop
+================================================================================
+
+typedef struct user_t {
+  int id;
+  borrowed char* name;
+} user_t;
+comptime {
+  @for field in user_t.fields {
+    @emit_field(field.name);
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (type_definition
+    (struct_specifier
+      (type_identifier)
+      (field_declaration_list
+        (field_declaration
+          (primitive_type)
+          (field_identifier))
+        (field_declaration
+          (cplus_result_annotation)
+          (primitive_type)
+          (pointer_declarator
+            (field_identifier)))))
+    (type_identifier))
+  (cplus_comptime_block
+    (compound_statement
+      (cplus_comptime_for
+        (identifier)
+        (field_expression
+          (identifier)
+          (field_identifier))
+        (compound_statement
+          (cplus_comptime_declaration
+            (cplus_legacy_comptime_invocation
+              (identifier)
+              (argument_list
+                (field_expression
+                  (identifier)
+                  (field_identifier))))))))))

@@ -92,6 +92,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "cplus_comptime_for"
+        },
+        {
+          "type": "SYMBOL",
           "name": "cplus_at_import"
         },
         {
@@ -183,6 +187,10 @@
         {
           "type": "SYMBOL",
           "name": "cplus_comptime_conditional"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "cplus_comptime_for"
         },
         {
           "type": "SYMBOL",
@@ -5892,8 +5900,17 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "SYMBOL",
-              "name": "_field_declaration_declarator"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "_field_declaration_declarator"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "bitfield_clause"
+                }
+              ]
             },
             {
               "type": "BLANK"
@@ -7212,6 +7229,47 @@
         {
           "type": "SYMBOL",
           "name": "compound_statement"
+        }
+      ]
+    },
+    "cplus_comptime_for": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "@"
+        },
+        {
+          "type": "STRING",
+          "value": "for"
+        },
+        {
+          "type": "FIELD",
+          "name": "variable",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "in"
+        },
+        {
+          "type": "FIELD",
+          "name": "iterable",
+          "content": {
+            "type": "SYMBOL",
+            "name": "expression"
+          }
+        },
+        {
+          "type": "FIELD",
+          "name": "body",
+          "content": {
+            "type": "SYMBOL",
+            "name": "compound_statement"
+          }
         }
       ]
     },

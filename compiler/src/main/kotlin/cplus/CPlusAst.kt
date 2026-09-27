@@ -133,9 +133,9 @@ class CPlusAstAdapter {
                 }
             }
             "cplus_comptime_declaration", "cplus_comptime_function_definition", "cplus_comptime_value",
-            "cplus_comptime_flags", "cplus_comptime_block", "cplus_comptime_conditional",
+            "cplus_comptime_flags", "cplus_comptime_block", "cplus_comptime_conditional", "cplus_comptime_for",
             "cplus_legacy_type_generator", "cplus_legacy_function_generator" -> CPlusAstKind.COMPTIME_DECLARATION
-            "cplus_comptime_invocation", "cplus_comptime_type_definition" -> CPlusAstKind.COMPTIME_INVOCATION
+            "cplus_comptime_invocation", "cplus_comptime_type_definition", "cplus_legacy_comptime_invocation" -> CPlusAstKind.COMPTIME_INVOCATION
             "cplus_legacy_returned_function" -> CPlusAstKind.FUNCTION_DECLARATION
             "cplus_comptime_expression" -> CPlusAstKind.COMPTIME_EXPRESSION
             "cplus_code_fragment" -> CPlusAstKind.CODE_FRAGMENT
@@ -148,11 +148,12 @@ class CPlusAstAdapter {
             "cplus_try_statement" -> CPlusAstKind.TRY
             "cplus_catch_clause" -> CPlusAstKind.CATCH
             "cplus_throws_annotation" -> CPlusAstKind.THROWS_ANNOTATION
-            "parameter_declaration", "cplus_parameter_declaration", "variadic_parameter" -> CPlusAstKind.PARAMETER
+            "parameter_declaration", "cplus_parameter_declaration", "cplus_comptime_parameter",
+            "variadic_parameter" -> CPlusAstKind.PARAMETER
             "cplus_generic_type_parameter", "cplus_legacy_generic_type_parameter" -> CPlusAstKind.TYPE_PARAMETER
             "cplus_access_modifier", "cplus_parameter_annotation", "cplus_result_annotation",
             "cplus_static_modifier" -> CPlusAstKind.ANNOTATION
-            "cplus_type_reference" -> CPlusAstKind.TYPE
+            "cplus_type_reference", "cplus_type_argument" -> CPlusAstKind.TYPE
             "parameter_list" -> CPlusAstKind.PARAMETER_LIST
             "argument_list" -> CPlusAstKind.ARGUMENT_LIST
             "compound_statement" -> CPlusAstKind.BLOCK

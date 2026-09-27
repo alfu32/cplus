@@ -1,6 +1,7 @@
 #ifndef CPLUS_STDLIB_ENCODINGS_WCTYPE_CP
 #define CPLUS_STDLIB_ENCODINGS_WCTYPE_CP
 
+#include <stddef.h>
 #include <wctype.h>
 
 typedef struct wide_ctype_t {

@@ -38,7 +38,7 @@ Comptime modules can therefore be written in C-plus and imported as compiler plu
 
 The compiler parses active declarations at module scope, registers their comptime definitions, expands their invocations, and reparses the resulting mapped C-plus. A returned fragment stays opaque while it is part of a generator body. Once a call emits that fragment into the module, its declarations become active on the next pass. Expansion repeats until no active comptime syntax remains; C-plus lowering starts afterward.
 
-After comptime materialization (and after optional test-harness generation), the compiler runs its internal `defer` lowering pass before method-call and struct-method lowering. `defer statement` and `defer { statements }` are runtime-source constructs, not comptime evaluator expressions: each is moved to the closing brace of its containing function/method, in reverse occurrence order, with mapped origins preserved. See the [`defer` language section](SPEC.language.md#defer) for syntax, examples, and the early-return limitation.
+After comptime materialization (and after optional test-harness generation), the compiler runs its internal `defer` lowering pass before method-call and struct-method lowering. `defer statement` and `defer { statements }` are runtime-source constructs, not comptime evaluator expressions: each is registered at its execution site and conditionally emitted at the closing brace of its containing function/method, in reverse occurrence order, with mapped origins preserved. See the [`defer` language section](SPEC.language.md#defer) for syntax, examples, and the early-return limitation.
 
 Each pass carries source origins forward. Diagnostics in generated declarations resolve through every expansion to the source location that contributed the text. Imports and comptime definitions remain available to later passes. Repeated source states, passes that make no progress, more than 128 passes, and unresolved comptime or `@` forms produce source-mapped diagnostics.
 
@@ -88,7 +88,7 @@ comptime make_helpers(int_t, string_t);
 int count = comptime item_count;
 ```
 
-`comptime` declarations and invocations are active in module scope or an explicit comptime block. A comptime function name is declared with `@`; an invocation introduced by `comptime` uses the plain symbol name. In ordinary C-plus expressions, `@name` remains an explicit comptime reference, while `comptime expression` evaluates a scalar expression. Therefore `int answer = answer;` is runtime C-plus, `comptime int answer = 21;` declares a comptime-only value, and `int runtime_answer = comptime answer;` materializes it in runtime source. The marker applies through the surrounding C expression delimiter (such as `;`, `,`, `)`, or `]`).
+Comptime imports and generator declarations are declared at file scope. Comptime invocations may also appear in a top-level `comptime { ... }` expansion block. The experimental Tree-sitter frontend additionally accepts scalar value declarations there; this prototype treats the block as a translation-unit expansion group, not a runtime C block, so its comptime names enter the translation-unit comptime environment and runtime declarations returned by invocations are inserted at the invocation position. This block-scalar extension is not yet supported by the production legacy evaluator. A comptime declaration inside a runtime function is not a supported local binding and is diagnosed. A comptime function name is declared with `@`; an invocation introduced by `comptime` uses the plain symbol name. In ordinary C-plus expressions, `@name` remains an explicit comptime reference, while `comptime expression` evaluates a scalar expression. Therefore `int answer = answer;` is runtime C-plus, `comptime int answer = 21;` declares a comptime-only value, and `int runtime_answer = comptime answer;` materializes it in runtime source. The marker applies through the surrounding C expression delimiter (such as `;`, `,`, `)`, or `]`).
 
 ### Runtime test declarations
 
@@ -111,9 +111,34 @@ The test command runs all test blocks by default. Exact names after the source p
 
 `comptime type` functions return exactly one `@code` fragment containing one named `struct` definition. A `comptime typedef generator(args) alias;` invocation turns it into `typedef struct tag { ... } alias;`. Other comptime invocations materialize the runtime entity returned by the function. Previous `@type`, `@fn`, `@var`, and scalar sigil-led forms remain accepted.
 
-Inside source materialized by a `comptime type` or `comptime function` generator, a comptime scalar call embedded in an identifier, such as `list_of_@typename(T)` or `mapper__@name(T)__to__@name(R)`, is an identifier splice. The called comptime function must return a string containing one valid C identifier token; it is inserted without quotes. Other `@code` fragments do not eagerly evaluate nested declarations or embedded names; those declarations remain opaque until a later expansion pass. Outside identifier splices, strings keep their normal quoted C representation. Strings are not parsed as source by themselves; source is introduced explicitly by `@code`.
+Inside source materialized by a `comptime type` or `comptime function` generator, a comptime scalar call embedded in an identifier, such as `list_of_@typename(T)` or `mapper__@name(T)__to__@name(R)`, is an identifier splice. The called comptime function must return a string made only from ASCII identifier characters (`A-Z`, `a-z`, `0-9`, `_`); it is inserted without quotes. The combined name after all splices must be one valid C identifier and not a C keyword. This permits type-name fragments such as `int` when combined with a prefix (`list_of_int`). Materialized output is reparsed; C keyword misuse and ordinary/tag namespace collisions are diagnosed by the C compiler during compilation and mapped to the original C-plus file and line. Other `@code` fragments do not eagerly evaluate nested declarations or embedded names; those declarations remain opaque until a later expansion pass. Outside identifier splices, strings keep their normal quoted C representation. Strings are not parsed as source by themselves; source is introduced explicitly by `@code`.
 
-The Tree-sitter shadow grammar represents these generated names as interpolated-identifier nodes, including when used as a type or declarator name. This is syntax recognition only: evaluation, identifier validation, and source materialization remain in the existing comptime implementation until the evaluator migration is complete.
+The Tree-sitter grammar represents these generated names as interpolated-identifier nodes, including when used as a type or declarator name. Its opt-in prototype materializer supports identifier splices that call string-returning comptime functions with generic primitive or named type parameters, including `T.name`. The scalar evaluator also accepts ordinary quoted C string literals and concatenates string operands with comptime `+`; it handles simple escapes (`\\`, `\"`, `\'`, `\?`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`) and maps unsupported escapes to diagnostics. Hex/octal and universal-character escapes, prefixed wide/UTF string literals, and general string operations remain unsupported in this prototype. Splice fragments outside the identifier alphabet are rejected, and materialized output is reparsed. Compile tests verify that C ordinary-name and tag-name collisions are rejected at the original source line; these semantic checks remain the downstream C compiler's responsibility. Integer-returning generic functions can also query `T.size` and `T.align` for primitive C types, primitive typedef aliases, and pointer aliases on the supported x86_64/arm64 Linux, Windows, and macOS ABI combinations. Unknown properties, unsupported ABI targets, and unsupported type layouts receive mapped diagnostics. Aggregate layouts and structured field-annotation metadata remain unsupported in that prototype; production continues through the established evaluator.
+
+For example, a type generator and a code generator can both defer splices until their generated code has been materialized:
+
+```c
+comptime string @typename(type T) { return T.name; }
+
+comptime type @make_list(type T) {
+    return @code { struct list_of_@typename(T) { T value; }; };
+}
+comptime typedef make_list(int) list_of_int_t;
+
+comptime code @emit_mapper(type T) {
+    return @code { int mapper__@typename(T)(int value) { return value + 1; } };
+}
+comptime emit_mapper(int);
+```
+
+The AST prototype lowers the relevant declarations to C equivalent to:
+
+```c
+typedef struct list_of_int__list_of_int_t { int value; } list_of_int_t;
+int mapper__int(int value) { return value + 1; }
+```
+
+The type parameter in `@typename(T)` is substituted when the enclosing generator expands; the nested scalar call then resolves on a later lowering pass. The generated identifier characters map back to the splice call's source.
 
 Parameters of a comptime function are compile-time values by context. `type T` declares a type-valued parameter. Legacy parameters such as `int @value` and `@type T` remain accepted.
 
@@ -137,9 +162,11 @@ comptime int @twice(int value) {
 int runtime_answer = comptime twice(answer);
 ```
 
-The declaration and its parameters are comptime-only. `comptime expression` evaluates a scalar reference or scalar function call in a runtime expression; `@name` remains an explicit comptime reference spelling. The result must be a literal or another materializable value.
+The declaration and its parameters are comptime-only. `comptime expression` evaluates a supported scalar expression in a runtime expression; `@name` remains an explicit comptime reference spelling. The result must be a literal or another materializable value.
 
-In the current implementation, an inline `comptime` expression must begin with a comptime identifier or scalar function call; evaluator operators may follow it. Literal-leading and parenthesized-leading forms are not yet accepted.
+An inline `comptime` marker consumes the surrounding C expression up to its enclosing delimiter. It may begin with a scalar literal, a comptime name/function call, a unary operator, or a parenthesized expression. Both the production scanner and the experimental AST path accept literal-leading and parenthesized-leading forms; evaluator support remains limited to the documented scalar subset below. The shared regression compiles and runs both frontends' output for these forms.
+
+The opt-in Tree-sitter scalar prototype uses a signed 64-bit evaluation domain. It accepts integer literals whose value fits `Long`, validates C integer suffix spelling, and reports out-of-range values instead of wrapping. Addition, subtraction, multiplication, and negation detect signed overflow. Division and remainder reject zero divisors and the `LONG_MIN / -1` overflow case. Signed left shift requires a nonnegative operand, a count from 0 through 62, and a representable result; signed right shift rejects negative operands and counts outside that range. Logical `&&` and `||` short-circuit, and the conditional operator (`condition ? consequence : alternative`) evaluates only the selected branch. Conditional/logical operands must evaluate to supported integer or boolean scalar values; unsupported operands produce a source-mapped diagnostic instead of being coerced to false. Unsupported operations fail with a source-mapped diagnostic. This is intentionally narrower than C's target-dependent integer promotions and conversion rules; it does not define the language-wide comptime integer model or replace the production evaluator.
 
 ### Comptime blocks
 
@@ -151,7 +178,7 @@ comptime {
 }
 ```
 
-Scalar expression statements are discarded unless returned by a comptime function and used by another expression. Blocks cannot contain runtime control flow that executes after compilation.
+Scalar expression statements are evaluated and discarded; to use a scalar result, return it from a comptime function and consume it in another comptime expression. Invalid or unsupported scalar expressions produce a mapped diagnostic rather than being emitted as runtime C. Blocks cannot contain runtime control flow that executes after compilation.
 
 Comptime control flow uses the `@` forms and operates only on comptime values. `@if` supports `@else if` chains and an optional final `@else`; `@for name in value` visits `T.fields` in declaration order. Conditional branches can return comptime entities, and can materialize `comptime flags` declarations for the selected target OS. A comptime loop must have a statically bounded iterable or hit the implementation expansion limit.
 
@@ -161,7 +188,7 @@ Comptime control flow uses the `@` forms and operates only on comptime values. `
 comptime import "math.cp";
 ```
 
-Ordinary paths are relative to the importing file. Stable `stdlib:/path` prefixes search the standard-library root selected by the CLI/project. `module:/path` and its `project:/path` alias search project module roots. `.cp` or `.c+` may be omitted and is resolved in that order. Paths are canonicalized, constrained to their configured root for prefixed imports, and loaded once per compilation graph. Imported comptime declarations become available to the importer; materialized runtime declarations are emitted once in dependency order. Comptime imports are not C `#include`s and do not reach the C preprocessor. The legacy `@import` spelling remains accepted.
+Comptime imports are declared at module scope. An import inside a top-level C preprocessor guard (`#if`, `#ifdef`, or an alternative branch) remains at module scope; the same syntax inside a function or runtime compound statement is invalid. Ordinary paths are relative to the importing file. Stable `stdlib:/path` prefixes search the standard-library root selected by the CLI/project. `module:/path` and its `project:/path` alias search project module roots. `.cp` or `.c+` may be omitted and is resolved in that order. Paths are canonicalized, constrained to their configured root for prefixed imports, and loaded once per compilation graph. Imported comptime declarations become available to the importer; materialized runtime declarations are emitted once in dependency order. Comptime imports are not C `#include`s and do not reach the C preprocessor. The legacy `@import` spelling remains accepted.
 
 For unchanged C implementation files, `@import("fixture.c")` instead resolves the path and emits an absolute `#include` directive. The C file is processed by the C preprocessor/compiler rather than the comptime evaluator. `#include "fixture.c"` remains equally valid and is the direct C spelling.
 
@@ -217,7 +244,55 @@ T.align      // alignment of T, when the target ABI is known
 T.fields     // ordered field metadata for a known struct
 ```
 
-Reflection cannot inspect a runtime value or call a generated function. Field metadata includes names, types, and annotations; declaration order is preserved.
+Reflection cannot inspect a runtime value or call a generated function. The language-level design is ordered field metadata with structured annotations. In the current AST prototype, `.annotations` is available in field loops as a space-separated comptime string of recognized annotations (`borrowed`, `owned`, `mut`, `scratch`, `hot`, `warm`, `cold`); it is the empty string when none are present. A structured annotation collection is not implemented yet.
+
+The opt-in Tree-sitter prototype currently implements this bounded field-loop form at module scope:
+
+```c
+typedef struct user_t {
+    int id;
+    borrowed char* name;
+} user_t;
+
+comptime code @emit_field(type T, string @name, string @annotations) {
+    return @code {
+        _Static_assert(sizeof(T) > 0, @name);
+        _Static_assert(sizeof(@annotations) > 0, "annotation metadata materialized");
+    };
+}
+
+comptime {
+    @for field in user_t.fields {
+        comptime emit_field(field.type, field.name, field.annotations);
+    }
+}
+```
+
+For this prototype, `.name` materializes as a quoted C string, `.type` as a C type token, and `.annotations` as the space-separated string described above. A field loop may contain nested loops over independent reflected type fields and over the annotations of a bound field:
+
+```c
+comptime {
+    @for field in user_t.fields {
+        @for annotation in field.annotations {
+            comptime emit_annotation(field.name, annotation);
+        }
+    }
+}
+```
+
+For example, independent loop variables compose without sharing or overwriting bindings:
+
+```c
+comptime {
+    @for left in left_t.fields {
+        @for right in right_t.fields {
+            comptime emit_pair(left.name, right.name);
+        }
+    }
+}
+```
+
+Each nested loop resolves its iterable from the current lexical bindings. An annotation loop runs once for each recognized annotation in source order; its variable is a quoted string value, and an empty annotation list produces no iterations. Generated field and annotation values retain their original source origins. The implementation bounds each field loop and the total expanded items in one root loop, so reflected Cartesian products fail with a mapped diagnostic instead of expanding without limit. Only type `.fields` and a bound field's `.annotations` are supported as nested iterables; arbitrary expressions, dynamic collections, and structured annotation values fail closed. Simple fields, pointer fields, fixed-size array fields (including multidimensional arrays and arrays of pointers), function-pointer fields, and named or unnamed bitfields are supported. An unnamed bitfield participates in `.fields` and has an empty `.name`. The prototype also provides `.flag` as `0` or `1`, and `.width` as the original C integer-constant-expression tokens; ordinary fields report width `0`. Width tokens preserve their source origins and can be passed as entity-generator scalar arguments when they form an expression supported by the bounded integer/bool evaluator. C target-width and integer-promotion equivalence remain open. For named fields, the identifier is removed from the parsed C declarator to form its abstract type. Generic type arguments accept C abstract pointer, array, and function declarators when structurally valid in the AST. The loop may be inside a dormant comptime generator and is evaluated only after that generator materializes. Field definitions must be complete and visible in the active source after imports. These restrictions describe the prototype, not a claim that the language feature is complete; the production evaluator remains authoritative.
 
 ### Comptime struct declarations
 
@@ -630,10 +705,10 @@ Useful applications include serializers, generic equality and hashing, debuggers
 - **Dependency safety:** imports are canonicalized, evaluated once, and rejected on cycles. Duplicate generated declarations with incompatible definitions are errors.
 - **Hygiene:** generated identifiers are collision-checked and derived from the generator and type arguments. A future explicit hygienic name escape must not silently capture user declarations.
 - **Bounded evaluation:** the current implementation limits the import graph to 256 modules, comptime calls to 10,000, expansion to 128 passes, and materialized output to 8 MiB. Repeated source states and passes that make no progress are diagnosed; exceeding a limit is a source-mapped comptime error.
-- **Target dependence:** `T.size` and `T.align` currently support the built-in scalar C types. Target-specific struct layout reflection remains reserved until the evaluator receives an explicit target ABI.
+- **Target dependence:** the experimental AST prototype evaluates `T.size` and `T.align` for supported primitive scalar types and primitive/pointer typedef aliases on x86_64/arm64 Linux, Windows, and macOS ABI combinations. It rejects other OS/architectures instead of guessing. Aggregate/struct layout is not yet available, and ABI reflection remains confined to the opt-in prototype; the production evaluator remains authoritative.
 - **No runtime reflection yet:** `@type`, field metadata, and comptime values disappear before C compilation. Runtime inspection currently requires ordinary C-plus data and code.
 - **Explicit source fragments:** strings remain values. Only a typed `@code { ... }` fragment is interpreted as C-plus source, and the fragment is reparsed on a later pass.
 - **No general AST API yet:** typed fragments, decorators, quote/unquote, and AST visitors are proposed, not implemented.
 - **Source mapping:** generated entities retain both their generator span and instantiation span. Diagnostics in generated code point to the instantiation first and can explain the generator origin.
-- **Current implementation limits:** scalar comptime functions currently require a single `return` expression; variable/function entity functions return one declaration; `@code` returns one explicitly delimited module fragment; `comptime type` returns one named struct; identifier splices must produce one valid C identifier token; `@for` currently iterates reflected fields and emits one entity expression per iteration; comptime declarations and imports must occur at file scope, while comptime invocations may also occur inside an explicit comptime block. Unsupported forms produce source-mapped diagnostics rather than being passed to C.
-- **Experimental Tree-sitter prototype:** its opt-in transpiler currently materializes `os == "..."` / `os != "..."` conditionals, a smaller module-scope integer/bool scalar subset (integer literals, forward scalar references, and supported unary/binary operators), and active module-scope `comptime flags` (returned as an ordered compiler-options list). Inline scalar expressions support only values produced by that subset. It does not yet replace the production evaluator, evaluate comptime functions/generators, or support strings, reflection, and imports. Unsupported AST forms fail closed; this subset is a migration milestone, not a change to the language-wide implementation contract.
+- **Current implementation limits:** scalar comptime functions currently require a single `return` expression; variable/function entity functions return one declaration; `@code` returns one explicitly delimited module fragment; `comptime type` returns one named struct; identifier splices must produce one valid C identifier token; `@for` currently iterates reflected fields and emits one entity expression per iteration. In the experimental AST frontend, imports and generator declarations must occur at file scope; scalar values and invocations may also occur in a top-level comptime expansion block, which does not introduce a separate compile-time symbol scope. Comptime declarations inside runtime functions are unsupported. Unsupported forms produce source-mapped diagnostics rather than being passed to C.
+- **Experimental Tree-sitter prototype:** its opt-in transpiler materializes OS equality/inequality conditionals, supported module-scope `comptime` blocks, flags, integer/bool scalar declarations and expressions, returned runtime function/variable/type entities, and returned `comptime code` fragments. Entity generators accept integer/bool expressions supported by the scalar evaluator, including references to earlier comptime values and pure scalar functions; generic function entities and `comptime type` also support primitive or named type-token arguments, qualified pointers such as `const char*` and `struct payload_t*`, multiword types such as `unsigned long`, and AST-validated abstract pointer/array/function type arguments, with mixed scalar/type parameters. Invocation indexing takes arguments from the invocation's own argument list, not nested calls inside expressions. The implemented `comptime type` subset accepts one `@code` fragment containing one named struct and emits its requested typedef alias; multiple specializations receive deterministic distinct C tags, including tags containing identifier splices. Fixed-size, multidimensional, and pointer-array fields, plus function-pointer fields, are reflected through `.type` and covered by generated-C compile/run tests. Comma-separated declarators in generated variable declarations are all included in ordinary-name collision checks. Entity declaration/body text maps to its template; substituted scalar/type tokens and generated typedef wrappers map to their originating arguments/invocation. Unsupported parameter and argument shapes produce mapped diagnostics. Common ordinary-name collisions and file-scope tag collisions across `struct`, `union`, and `enum` are diagnosed; prototype- and block-scope tags do not falsely collide, and a generated struct definition may complete a compatible same-kind forward declaration. Scalar functions may have supported integer/bool result and named parameter types and exactly one return expression; calls can appear inline or in scalar initializers. String-returning scalar functions may be used in parsed identifier splices; fragments are limited to identifier characters and materialized output is reparsed. Compile-failure tests verify ordinary-name and tag-name collisions are reported by the C compiler at the original C-plus file and line. Returned code fragments are reparsed after materialization, so emitted comptime declarations become active on later passes and scalar resolution follows the entity fixed point. Three-stage expansion tests check template/substitution source origins; nested unresolved and recursive generated-invocation tests check mapped diagnostics and termination; generated C-import tests check include behavior. Generated C-plus module imports are also re-expanded: tests cover imports emitted by root code and by an imported module, relative resolution from the originating file, dependency-first order, generator activation from the newly imported module, and mapped cycle diagnostics. A resolvable entity invocation that cannot be materialized fails with a mapped no-progress diagnostic. The prototype enforces a 128-pass bound, has a defensive repeated-source-state guard, caps materialized source at 8 MiB, and has tests for downstream C compiler diagnostics mapped to the originating fragment. A malformed C-plus module imported by generated `@code` produces a parser diagnostic mapped to the dependency and stops emission. Fragment syntax itself is validated while parsing its containing template; structurally valid but invalid-at-file-scope output is diagnosed by the downstream C compiler with mapped origins. This path remains opt-in and does not replace the production evaluator. Raw arbitrary C declarators, broader reflection, structured annotation reflection, and general comptime string expressions remain incomplete. The repeated-state guard is not directly exercised: current recursive generator expansion consumes the invoked declaration and terminates earlier with a mapped unresolved-generator diagnostic. This is a migration milestone, not a change to the language-wide implementation contract.

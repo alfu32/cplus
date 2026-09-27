@@ -57,7 +57,8 @@ class TreeSitterCPlusPrototypeTranspiler(
     private val backend: CPlusParserBackend = TreeSitterCPlusParserBackend(),
     private val sourceManager: SourceManager = SourceManager(),
     private val targetOs: String = cplus.CPlusTarget.hostOs(),
-    private val importPaths: CPlusImportPaths = CPlusImportPaths()
+    private val importPaths: CPlusImportPaths = CPlusImportPaths(),
+    private val targetArch: String = cplus.CPlusTarget.hostArch()
 ) {
     fun transpile(source: SourceSnapshot): TreeSitterPrototypeResult {
         var revision = 0
@@ -120,9 +121,55 @@ class TreeSitterCPlusPrototypeTranspiler(
             )
         }
 
+        val imports = TreeSitterComptimeImportLowering(backend, sourceManager, importPaths, targetOs)
+            .lower(parsed, mapped)
+        if (imports.parserDiagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, imports.parserDiagnostics, emptyList(), emptyList())
+        }
+        if (imports.loweringDiagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, emptyList(), imports.loweringDiagnostics, emptyList())
+        }
+        mapped = imports.source ?: error("successful import expansion must produce mapped source")
+        sourceOrder = imports.sourceOrder
+        sourceImports = imports.sourceImports
+        snapshot = snapshotFor(mapped.text)
+        parsed = backend.parse(snapshot)
+        if (parsed.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
+        }
+
+        // Expand imports first so reflected metadata can refer to declarations from imported modules.
         val comptimeBlockPass = TreeSitterComptimeBlockLowering()
+        val reflectedFieldPass = TreeSitterComptimeFieldLoopLowering()
         var comptimeBlockPassCount = 0
         while (comptimeBlockPassCount < MAX_COMPTIME_CONDITIONAL_PASSES) {
+            val reflectedFields = reflectedFieldPass.lower(parsed, mapped)
+            if (reflectedFields.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    emptyList(),
+                    reflectedFields.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    testFixtures = testFixtures
+                )
+            }
+            if (reflectedFields.source.text != mapped.text) {
+                comptimeBlockPassCount++
+                mapped = reflectedFields.source
+                snapshot = snapshotFor(mapped.text)
+                parsed = backend.parse(snapshot)
+                if (parsed.diagnostics.isNotEmpty()) {
+                    return TreeSitterPrototypeResult(
+                        null,
+                        parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                        emptyList(),
+                        emptyList(),
+                        testFixtures = testFixtures
+                    )
+                }
+                continue
+            }
+
             val materialized = comptimeBlockPass.lower(parsed, mapped)
             if (materialized.diagnostics.isNotEmpty()) {
                 return TreeSitterPrototypeResult(
@@ -148,7 +195,11 @@ class TreeSitterCPlusPrototypeTranspiler(
                 )
             }
         }
-        val remainingComptimeBlock = descendants(parsed.root).firstOrNull { it.kind == "cplus_comptime_block" }
+        val activeComptimeBlocks = CPlusComptimeIndexer().index(CPlusAstAdapter().adapt(parsed)).constructs
+            .filter { it.syntaxKind == "cplus_comptime_block" && it.activeThisPass }
+        val remainingComptimeBlock = activeComptimeBlocks.firstOrNull()?.span?.let { span ->
+            descendants(parsed.root).firstOrNull { it.kind == "cplus_comptime_block" && it.span == span }
+        }
         if (remainingComptimeBlock != null) {
             return TreeSitterPrototypeResult(
                 null,
@@ -163,43 +214,68 @@ class TreeSitterCPlusPrototypeTranspiler(
             )
         }
 
-        val imports = TreeSitterComptimeImportLowering(backend, sourceManager, importPaths, targetOs)
-            .lower(parsed, mapped)
-        if (imports.parserDiagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, imports.parserDiagnostics, emptyList(), emptyList())
-        }
-        if (imports.loweringDiagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), imports.loweringDiagnostics, emptyList())
-        }
-        mapped = imports.source ?: error("successful import expansion must produce mapped source")
-        sourceOrder = imports.sourceOrder
-        sourceImports = imports.sourceImports
-        snapshot = snapshotFor(mapped.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
-        }
-
         ast = CPlusAstAdapter().adapt(parsed)
-        val cImports = TreeSitterCImportLowering(importPaths).lower(ast, mapped)
-        if (cImports.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), cImports.diagnostics, emptyList())
-        }
-        if (cImports.source.text != mapped.text) {
-            mapped = cImports.source
-            snapshot = snapshotFor(mapped.text)
-            parsed = backend.parse(snapshot)
-            if (parsed.diagnostics.isNotEmpty()) {
-                return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
-            }
-            ast = CPlusAstAdapter().adapt(parsed)
-        }
 
-        // Entity generators materialize from AST nodes and may reveal another top-level
-        // generator/invocation layer. Reparse each changed revision before binding the next one.
+        // Entity/code materialization can reveal new generators and C-plus module imports.
+        // Resolve imports after each expansion layer, then reparse before binding declarations
+        // from the newly imported dependency on the next iteration.
         var entityPassCount = 0
+        val seenEntityStates = mutableSetOf(mapped.text)
         while (entityPassCount < MAX_COMPTIME_CONDITIONAL_PASSES) {
-            val entities = TreeSitterComptimeEntityLowering().lower(parsed, mapped)
+            var changedThisPass = false
+            val generatedFieldLoops = reflectedFieldPass.lower(parsed, mapped)
+            if (generatedFieldLoops.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    emptyList(),
+                    generatedFieldLoops.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    testFixtures = testFixtures
+                )
+            }
+            if (generatedFieldLoops.source.text != mapped.text) {
+                mapped = generatedFieldLoops.source
+                snapshot = snapshotFor(mapped.text)
+                parsed = backend.parse(snapshot)
+                if (parsed.diagnostics.isNotEmpty()) {
+                    return TreeSitterPrototypeResult(
+                        null,
+                        parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                        emptyList(),
+                        emptyList(),
+                        testFixtures = testFixtures
+                    )
+                }
+                ast = CPlusAstAdapter().adapt(parsed)
+                changedThisPass = true
+            }
+            val generatedBlocks = comptimeBlockPass.lower(parsed, mapped)
+            if (generatedBlocks.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    emptyList(),
+                    generatedBlocks.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    testFixtures = testFixtures
+                )
+            }
+            if (generatedBlocks.source.text != mapped.text) {
+                mapped = generatedBlocks.source
+                snapshot = snapshotFor(mapped.text)
+                parsed = backend.parse(snapshot)
+                if (parsed.diagnostics.isNotEmpty()) {
+                    return TreeSitterPrototypeResult(
+                        null,
+                        parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                        emptyList(),
+                        emptyList(),
+                        testFixtures = testFixtures
+                    )
+                }
+                ast = CPlusAstAdapter().adapt(parsed)
+                changedThisPass = true
+            }
+            val entities = TreeSitterComptimeEntityLowering(targetOs = targetOs, targetArch = targetArch).lower(parsed, mapped)
             if (entities.diagnostics.isNotEmpty()) {
                 return TreeSitterPrototypeResult(
                     null,
@@ -209,29 +285,134 @@ class TreeSitterCPlusPrototypeTranspiler(
                     testFixtures = testFixtures
                 )
             }
-            if (entities.source.text == mapped.text) break
-            entityPassCount++
-            mapped = entities.source
-            snapshot = snapshotFor(mapped.text)
-            parsed = backend.parse(snapshot)
-            if (parsed.diagnostics.isNotEmpty()) {
-                return TreeSitterPrototypeResult(
-                    null,
-                    parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
-                    emptyList(),
-                    emptyList(),
-                    testFixtures = testFixtures
-                )
+            if (entities.source.text != mapped.text) {
+                if (!seenEntityStates.add(entities.source.text)) {
+                    val activeInvocation = descendants(parsed.root).firstOrNull {
+                        it.kind in setOf("cplus_comptime_invocation", "cplus_comptime_type_definition", "cplus_legacy_comptime_invocation")
+                    }
+                    return TreeSitterPrototypeResult(
+                        null,
+                        emptyList(),
+                        listOf(CPlusLoweringDiagnostic(
+                            "CPLUS_COMPTIME_ENTITY_CYCLE",
+                            "comptime entity expansion repeated a previous source state",
+                            activeInvocation?.span?.let(mapped::toOriginalSpan) ?: mapped.toOriginalSpan(parsed.source.sourceFile.span(0, 0))
+                        )),
+                        emptyList(),
+                        testFixtures = testFixtures
+                    )
+                }
+                mapped = entities.source
+                snapshot = snapshotFor(mapped.text)
+                parsed = backend.parse(snapshot)
+                if (parsed.diagnostics.isNotEmpty()) {
+                    return TreeSitterPrototypeResult(
+                        null,
+                        parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                        emptyList(),
+                        emptyList(),
+                        testFixtures = testFixtures
+                    )
+                }
+                ast = CPlusAstAdapter().adapt(parsed)
+                changedThisPass = true
             }
-            ast = CPlusAstAdapter().adapt(parsed)
+
+            if (descendants(parsed.root).any { it.kind in CPLUS_MODULE_IMPORT_NODES }) {
+                val expandedImports = TreeSitterComptimeImportLowering(backend, sourceManager, importPaths, targetOs)
+                    .lower(parsed, mapped, source.sourceFile, sourceOrder.toSet())
+                if (expandedImports.parserDiagnostics.isNotEmpty()) {
+                    return TreeSitterPrototypeResult(null, expandedImports.parserDiagnostics, emptyList(), emptyList())
+                }
+                if (expandedImports.loweringDiagnostics.isNotEmpty()) {
+                    return TreeSitterPrototypeResult(null, emptyList(), expandedImports.loweringDiagnostics, emptyList())
+                }
+                val expandedSource = expandedImports.source ?: error("successful generated import expansion must produce mapped source")
+                if (expandedSource.text != mapped.text) {
+                    if (!seenEntityStates.add(expandedSource.text)) {
+                        val importNode = descendants(parsed.root).firstOrNull { it.kind in CPLUS_MODULE_IMPORT_NODES }
+                        return TreeSitterPrototypeResult(
+                            null,
+                            emptyList(),
+                            listOf(CPlusLoweringDiagnostic(
+                                "CPLUS_COMPTIME_ENTITY_CYCLE",
+                                "comptime import expansion repeated a previous source state",
+                                importNode?.span?.let(mapped::toOriginalSpan) ?: mapped.toOriginalSpan(parsed.source.sourceFile.span(0, 0))
+                            )),
+                            emptyList(),
+                            testFixtures = testFixtures
+                        )
+                    }
+                    val newDependencies = expandedImports.sourceOrder.dropLast(1)
+                    sourceOrder = (newDependencies + sourceOrder).distinct()
+                    sourceImports = (sourceImports + expandedImports.sourceImports).distinct()
+                    mapped = expandedSource
+                    snapshot = snapshotFor(mapped.text)
+                    parsed = backend.parse(snapshot)
+                    if (parsed.diagnostics.isNotEmpty()) {
+                        return TreeSitterPrototypeResult(
+                            null,
+                            parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                            emptyList(),
+                            emptyList(),
+                            testFixtures = testFixtures
+                        )
+                    }
+                    ast = CPlusAstAdapter().adapt(parsed)
+                    changedThisPass = true
+                }
+            }
+
+            if (!changedThisPass) {
+                val index = CPlusComptimeIndexer().index(ast)
+                val activeInvocation = index.constructs.firstOrNull {
+                    it.activeThisPass && it.moduleScope && it.syntaxKind in setOf(
+                        "cplus_comptime_invocation", "cplus_comptime_type_definition", "cplus_legacy_comptime_invocation"
+                    )
+                }
+                if (activeInvocation != null && cplus.CPlusComptimeResolver().resolve(index).diagnostics.isEmpty()) {
+                    return TreeSitterPrototypeResult(
+                        null,
+                        emptyList(),
+                        listOf(CPlusLoweringDiagnostic(
+                            "CPLUS_COMPTIME_ENTITY_NO_PROGRESS",
+                            "bound comptime entity invocation '${activeInvocation.symbol}' did not materialize any source",
+                            mapped.toOriginalSpan(activeInvocation.span)
+                        )),
+                        emptyList(),
+                        testFixtures = testFixtures
+                    )
+                }
+                break
+            }
+            entityPassCount++
+        }
+        val finalEntityIndex = CPlusComptimeIndexer().index(ast)
+        val remainingModuleImport = descendants(parsed.root).firstOrNull { it.kind in CPLUS_MODULE_IMPORT_NODES }
+        if (remainingModuleImport != null && entityPassCount >= MAX_COMPTIME_CONDITIONAL_PASSES) {
+            return TreeSitterPrototypeResult(
+                null,
+                emptyList(),
+                listOf(CPlusLoweringDiagnostic(
+                    "CPLUS_COMPTIME_IMPORT_LIMIT",
+                    "generated C-plus imports exceeded the materialization pass limit",
+                    mapped.toOriginalSpan(remainingModuleImport.span)
+                )),
+                emptyList(),
+                testFixtures = testFixtures
+            )
         }
         val remainingEntityInvocation = descendants(parsed.root).firstOrNull {
-            it.kind in setOf("cplus_comptime_invocation", "cplus_legacy_comptime_invocation") && it.children.firstOrNull { child -> child.fieldName == "generator" }
+            it.kind in setOf("cplus_comptime_invocation", "cplus_comptime_type_definition", "cplus_legacy_comptime_invocation") && it.children.firstOrNull { child -> child.fieldName == "generator" }
                 ?.let { generator -> mapped.text.substring(generator.span.startOffset, generator.span.endOffset) }
                 ?.let { name ->
-                    CPlusComptimeIndexer().index(ast).constructs.any { construct ->
-                        construct.syntaxKind in setOf("cplus_comptime_function_definition", "cplus_legacy_function_generator") &&
-                            (construct.resultKind in setOf("function", "variable") || construct.syntaxKind == "cplus_legacy_function_generator") &&
+                    finalEntityIndex.constructs.any { construct ->
+                        construct.activeThisPass && construct.moduleScope &&
+                            construct.syntaxKind in setOf(
+                                "cplus_comptime_function_definition", "cplus_legacy_type_generator", "cplus_legacy_function_generator"
+                            ) &&
+                            (construct.resultKind in setOf("function", "variable", "type", "code") ||
+                                construct.syntaxKind in setOf("cplus_legacy_type_generator", "cplus_legacy_function_generator")) &&
                             construct.symbol == name
                     }
                 } == true
@@ -248,6 +429,23 @@ class TreeSitterCPlusPrototypeTranspiler(
                 emptyList(),
                 testFixtures = testFixtures
             )
+        }
+
+        // Code fragments can introduce C imports. Resolve them only after entity expansion has
+        // reached a fixed point, then reparse because the mapped source and AST spans changed.
+        ast = CPlusAstAdapter().adapt(parsed)
+        val cImports = TreeSitterCImportLowering(importPaths).lower(ast, mapped)
+        if (cImports.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, emptyList(), cImports.diagnostics, emptyList())
+        }
+        if (cImports.source.text != mapped.text) {
+            mapped = cImports.source
+            snapshot = snapshotFor(mapped.text)
+            parsed = backend.parse(snapshot)
+            if (parsed.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
+            }
+            ast = CPlusAstAdapter().adapt(parsed)
         }
 
         val comptimeResolution = cplus.CPlusComptimeResolver().resolve(CPlusComptimeIndexer().index(ast))
@@ -267,7 +465,7 @@ class TreeSitterCPlusPrototypeTranspiler(
         }
 
         allocationAnalysis = TreeSitterAllocationIntentAnalyzer().analyze(ast)
-        val scalarMaterialized = TreeSitterComptimeScalarLowering().lower(parsed, mapped)
+        val scalarMaterialized = TreeSitterComptimeScalarLowering(targetOs, targetArch).lower(parsed, mapped)
         if (scalarMaterialized.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(
                 null,
@@ -292,17 +490,6 @@ class TreeSitterCPlusPrototypeTranspiler(
             }
         }
         ast = CPlusAstAdapter().adapt(parsed)
-        val extractedTests = CPlusTestExtractionPass().extract(ast, mapped)
-        if (extractedTests.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), extractedTests.diagnostics, emptyList())
-        }
-        testFixtures = extractedTests.fixtures
-        mapped = extractedTests.source
-        snapshot = snapshotFor(mapped.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
-        }
         val flagsMaterialized = TreeSitterComptimeFlagsLowering().lower(parsed, mapped)
         if (flagsMaterialized.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(
@@ -417,6 +604,32 @@ class TreeSitterCPlusPrototypeTranspiler(
         mapped = runtimeLowering.source
         ast = runtimeLowering.ast
 
+        // Lower fixture bodies through the same AST pipeline as the runtime source before
+        // extracting them.  The extracted-test bridge is intentionally retained for harness
+        // generation, but it must not be the first compiler pass that sees C-plus method calls,
+        // defer, or try/catch inside a fixture.  Extracting earlier made fixture code depend on
+        // the legacy textual lowerers and could move an unresolved receiver out of its scope.
+        val extractedTests = CPlusTestExtractionPass().extract(ast, mapped)
+        if (extractedTests.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, emptyList(), extractedTests.diagnostics, emptyList())
+        }
+        testFixtures = extractedTests.fixtures
+        mapped = extractedTests.source
+        snapshot = snapshotFor(mapped.text)
+        parsed = backend.parse(snapshot)
+        if (parsed.diagnostics.isNotEmpty()) {
+            return TreeSitterPrototypeResult(
+                null,
+                parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                emptyList(),
+                emptyList(),
+                throwingFunctions,
+                testFixtures,
+                allocationAnalysis = allocationAnalysis
+            )
+        }
+        ast = CPlusAstAdapter().adapt(parsed)
+
         val preamble = """
             #ifndef CPLUS_ANNOTATIONS_DEFINED
             #define CPLUS_ANNOTATIONS_DEFINED
@@ -515,6 +728,7 @@ class TreeSitterCPlusPrototypeTranspiler(
         copy(span = mapped.toOriginalSpan(span))
 
     private companion object {
-        const val MAX_COMPTIME_CONDITIONAL_PASSES = 64
+        const val MAX_COMPTIME_CONDITIONAL_PASSES = 128
+        val CPLUS_MODULE_IMPORT_NODES = setOf("cplus_comptime_import", "cplus_at_import")
     }
 }

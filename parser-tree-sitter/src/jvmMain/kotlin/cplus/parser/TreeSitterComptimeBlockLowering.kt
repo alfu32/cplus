@@ -47,12 +47,34 @@ class TreeSitterComptimeBlockLowering {
             val statements = body.children.filter { child ->
                 child.named && child.kind !in setOf("comment")
             }
+            val discardedScalarStatements = mutableListOf<CPlusSyntaxNode>()
+            statements.filter { it.kind == "expression_statement" }.forEach { statement ->
+                val expression = statement.children.singleOrNull {
+                    it.named && it.kind !in setOf("comment", ";")
+                }
+                if (expression == null) {
+                    diagnostics += CPlusLoweringDiagnostic(
+                        "CPLUS_COMPTIME_BLOCK_UNSUPPORTED",
+                        "comptime block expression statement must contain one scalar expression",
+                        statement.span
+                    )
+                } else {
+                    val expressionDiagnostics = TreeSitterComptimeScalarLowering()
+                        .validateDiscardedBlockExpression(parsed, expression)
+                    if (expressionDiagnostics.isNotEmpty()) diagnostics += expressionDiagnostics
+                    else discardedScalarStatements += statement
+                }
+            }
             val unsupported = statements.firstOrNull { statement ->
                 when (statement.kind) {
                     "cplus_comptime_flags", "cplus_comptime_value" -> false
-                    "cplus_comptime_declaration" -> statement.children.none {
+                    "expression_statement" -> false // Validation above owns scalar-expression diagnostics.
+                    "cplus_comptime_declaration" -> !(statement.children.all {
                         it.kind in setOf("cplus_comptime_flags", "cplus_comptime_value")
-                    }
+                    } || statement.children.singleOrNull()?.kind in setOf(
+                        "cplus_comptime_invocation", "cplus_legacy_comptime_invocation", "cplus_comptime_type_definition"
+                    ))
+                    "cplus_comptime_for" -> true // Expanded by the reflected-field pass before the block is unwrapped.
                     BLOCK_KIND -> false // Nested blocks are unwrapped on a later fixed-point pass.
                     else -> true
                 }
@@ -60,15 +82,25 @@ class TreeSitterComptimeBlockLowering {
             if (unsupported != null) {
                 diagnostics += CPlusLoweringDiagnostic(
                     "CPLUS_COMPTIME_BLOCK_UNSUPPORTED",
-                    "prototype comptime blocks currently materialize compiler flags, scalar values, and nested comptime blocks",
+                    "prototype comptime blocks do not yet materialize statement '${unsupported.kind}' " +
+                        "with children ${unsupported.children.map { it.kind }}",
                     unsupported.span
                 )
                 return@mapNotNull null
             }
+            val contentStart = body.span.startOffset + 1
+            val contentEnd = body.span.endOffset - 1
+            val content = MappedTextBuilder()
+            var contentCursor = contentStart
+            discardedScalarStatements.sortedBy { it.span.startOffset }.forEach { statement ->
+                content.append(source, contentCursor, statement.span.startOffset)
+                contentCursor = statement.span.endOffset
+            }
+            content.append(source, contentCursor, contentEnd)
             Replacement(
                 block.span.startOffset,
                 block.span.endOffset,
-                source.slice(body.span.startOffset + 1, body.span.endOffset - 1)
+                content.build()
             )
         }
         if (diagnostics.isNotEmpty()) return TreeSitterComptimeBlockLoweringResult(source, diagnostics)

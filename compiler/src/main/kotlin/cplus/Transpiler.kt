@@ -31,6 +31,52 @@ class CPlusTranspiler {
         fixtures: List<CPlusExtractedTestFixture>,
         logger: CompilationLogger = SilentCompilationLogger
     ): TranscodedTestSource {
+        val extracted = extractedTestProgram(runtime, fixtures, logger)
+        val sourceFile = extracted.first
+        val testProgram = extracted.second
+        val annotated = logger.pass("collect-error-annotations") { ErrorAnnotationCollector().collect(testProgram.source) }
+        // Fixture bodies may contain C-plus receiver calls inside defer payloads. Lower those
+        // while the declarations are still in their original lexical scope, then move the
+        // already-lowered payloads to the function cleanup tail.
+        val typeNames = logger.pass("collect-struct-types") { StructTypeCollector().collect(annotated.source.text) }
+        val calls = logger.pass("lower-method-calls") { MethodCallLowerer(typeNames).lower(annotated.source) }
+        val deferred = logger.pass("lower-defer-statements") { DeferLowerer().lower(calls) }
+        val structs = logger.pass("lower-struct-methods") { StructLowerer().lower(deferred) }
+        val errors = logger.pass("lower-try-catch") { TryCatchLowerer(annotated.functions).lower(structs) }
+        val allocationAnalysis = logger.pass("allocation-intent-analysis") { AllocationIntentAnalyzer().analyze(errors) }
+        val emitted = logger.pass("emit-mapped-c") {
+            MappedEmitter(sourceFile).emit(errors, CPlusPreamble.text, allocationAnalysis)
+        }
+        return TranscodedTestSource(emitted, testProgram.fixtures.map { it.name }, testProgram.fixtures)
+    }
+
+    /**
+     * Emits only the runnable harness around already-lowered fixture bodies.
+     *
+     * AST frontends use this entry point after their own mapped lowering pipeline. It retains
+     * the established assertion/reporting format without running the legacy textual lowerers.
+     * [transpileExtractedTests] remains available as a compatibility bridge for callers whose
+     * fixture bodies still contain legacy C-plus syntax.
+     */
+    fun emitExtractedTestHarness(
+        runtime: MappedText,
+        fixtures: List<CPlusExtractedTestFixture>,
+        logger: CompilationLogger = SilentCompilationLogger
+    ): TranscodedTestSource {
+        val extracted = extractedTestProgram(runtime, fixtures, logger)
+        val sourceFile = extracted.first
+        val testProgram = extracted.second
+        val emitted = logger.pass("emit-mapped-test-c") {
+            MappedEmitter(sourceFile).emit(testProgram.source, CPlusPreamble.text)
+        }
+        return TranscodedTestSource(emitted, testProgram.fixtures.map { it.name }, testProgram.fixtures)
+    }
+
+    private fun extractedTestProgram(
+        runtime: MappedText,
+        fixtures: List<CPlusExtractedTestFixture>,
+        logger: CompilationLogger
+    ): Pair<SourceFile, TestProgram> {
         val sourceFile = runtime.firstOrigin()?.file
             ?: fixtures.firstNotNullOfOrNull { it.body.firstOrigin()?.file }
             ?: SourceFile(runtime.text)
@@ -50,18 +96,7 @@ class CPlusTranspiler {
                 }
             )
         }
-        val testProgram = logger.pass("emit-extracted-test-harness") { testProgram(runtime, testBlocks) }
-        val annotated = logger.pass("collect-error-annotations") { ErrorAnnotationCollector().collect(testProgram.source) }
-        val deferred = logger.pass("lower-defer-statements") { DeferLowerer().lower(annotated.source) }
-        val typeNames = logger.pass("collect-struct-types") { StructTypeCollector().collect(deferred.text) }
-        val calls = logger.pass("lower-method-calls") { MethodCallLowerer(typeNames).lower(deferred) }
-        val structs = logger.pass("lower-struct-methods") { StructLowerer().lower(calls) }
-        val errors = logger.pass("lower-try-catch") { TryCatchLowerer(annotated.functions).lower(structs) }
-        val allocationAnalysis = logger.pass("allocation-intent-analysis") { AllocationIntentAnalyzer().analyze(errors) }
-        val emitted = logger.pass("emit-mapped-c") {
-            MappedEmitter(sourceFile).emit(errors, CPlusPreamble.text, allocationAnalysis)
-        }
-        return TranscodedTestSource(emitted, testProgram.fixtures.map { it.name }, testProgram.fixtures)
+        return sourceFile to logger.pass("emit-extracted-test-harness") { testProgram(runtime, testBlocks) }
     }
 
     private fun transpileInternal(
@@ -720,11 +755,71 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
 
     private var scopes: List<Scope> = emptyList()
     private var variableTypes: List<VariableType> = emptyList()
+    private var callableFields: Set<Pair<String, String>> = emptySet()
 
     fun lower(source: MappedText): MappedText {
         if (structTypes.isEmpty()) return source
         collectVariableTypes(source.text)
+        callableFields = collectCallableFields(source.text)
         return lowerCalls(source, 0)
+    }
+
+    /**
+     * The legacy fixture bridge can receive C that has already gone through the AST method
+     * pass. Keep ordinary function-pointer field calls intact when its textual compatibility
+     * lowerer makes a second pass over that generated C.
+     */
+    private fun collectCallableFields(source: String): Set<Pair<String, String>> {
+        val masked = SourceMasker.mask(source)
+        val aliases = Regex("\\btypedef\\s+[^;{}]*\\(\\s*\\*\\s*([A-Za-z_]\\w*)\\s*\\)")
+            .findAll(masked)
+            .map { it.groupValues[1] }
+            .toSet()
+        val fields = linkedSetOf<Pair<String, String>>()
+        val structStart = Regex("\\btypedef\\s+struct(?:\\s+[A-Za-z_]\\w*)?\\s*\\{")
+        val aliasAfterStruct = Regex("\\s*([A-Za-z_]\\w*)\\s*;")
+        var search = 0
+        while (true) {
+            val match = structStart.find(masked, search) ?: break
+            val openBrace = masked.indexOf('{', match.range.first)
+            val closeBrace = Delimiters.match(masked, openBrace, '{', '}')
+            if (openBrace < 0 || closeBrace < 0) break
+            val alias = aliasAfterStruct.find(masked, closeBrace + 1)?.groupValues?.get(1)
+            if (alias != null) {
+                val body = masked.substring(openBrace + 1, closeBrace)
+                var statementStart = 0
+                var nestedBraces = 0
+                fun collectField(statement: String) {
+                    // C-plus method definitions and their local declarations are not fields.
+                    if ('{' in statement || '}' in statement) return
+                    Regex("\\(\\s*\\*\\s*([A-Za-z_]\\w*)\\s*\\)")
+                        .findAll(statement)
+                        .map { it.groupValues[1] }
+                        .forEach { fields += alias to it }
+                    aliases.forEach { fieldType ->
+                        Regex("\\b${Regex.escape(fieldType)}\\s+([A-Za-z_]\\w*)\\s*;")
+                            .findAll(statement)
+                            .map { it.groupValues[1] }
+                            .forEach { fields += alias to it }
+                    }
+                }
+                body.forEachIndexed { index, character ->
+                    when (character) {
+                        '{' -> nestedBraces++
+                        '}' -> {
+                            nestedBraces--
+                            if (nestedBraces == 0) statementStart = index + 1
+                        }
+                        ';' -> if (nestedBraces == 0) {
+                            collectField(body.substring(statementStart, index + 1))
+                            statementStart = index + 1
+                        }
+                    }
+                }
+            }
+            search = closeBrace + 1
+        }
+        return fields
     }
 
     private fun collectVariableTypes(source: String) {
@@ -798,6 +893,10 @@ private class MethodCallLowerer(private val structTypes: Set<String>) {
             val typeName = left.takeIf { !isPointerAccess && it in structTypes } ?: receiver?.type
             if (typeName == null) {
                 index++
+                continue
+            }
+            if (receiver != null && callableFields.contains(receiver.type to methodMatch.value)) {
+                index = close + 1
                 continue
             }
 

@@ -12,6 +12,10 @@
 comptime {
     @if (os == "windows") {
         comptime flags -lws2_32;
+    } @else {
+        // The public POSIX resolver declarations must be enabled before any system header
+        // is parsed, including headers included by a consumer before this module.
+        comptime flags -D_POSIX_C_SOURCE=200112L;
     }
 }
 

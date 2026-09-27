@@ -1200,6 +1200,10 @@
           "named": true
         },
         {
+          "type": "cplus_comptime_for",
+          "named": true
+        },
+        {
           "type": "cplus_comptime_type_definition",
           "named": true
         },
@@ -1446,6 +1450,10 @@
           "named": true
         },
         {
+          "type": "cplus_comptime_for",
+          "named": true
+        },
+        {
           "type": "cplus_comptime_return_declaration",
           "named": true
         },
@@ -1617,6 +1625,42 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "cplus_comptime_for",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "compound_statement",
+            "named": true
+          }
+        ]
+      },
+      "iterable": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      },
+      "variable": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -2598,6 +2642,10 @@
         },
         {
           "type": "cplus_comptime_declaration",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_for",
           "named": true
         },
         {
@@ -4134,6 +4182,10 @@
           "named": true
         },
         {
+          "type": "cplus_comptime_for",
+          "named": true
+        },
+        {
           "type": "cplus_comptime_type_definition",
           "named": true
         },
@@ -4262,6 +4314,10 @@
           "named": true
         },
         {
+          "type": "cplus_comptime_for",
+          "named": true
+        },
+        {
           "type": "cplus_comptime_type_definition",
           "named": true
         },
@@ -4358,6 +4414,10 @@
         },
         {
           "type": "cplus_comptime_declaration",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_for",
           "named": true
         },
         {
@@ -4553,6 +4613,10 @@
           "named": true
         },
         {
+          "type": "cplus_comptime_for",
+          "named": true
+        },
+        {
           "type": "cplus_comptime_type_definition",
           "named": true
         },
@@ -4678,6 +4742,10 @@
         },
         {
           "type": "cplus_comptime_declaration",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_for",
           "named": true
         },
         {
@@ -5162,6 +5230,10 @@
         },
         {
           "type": "cplus_comptime_declaration",
+          "named": true
+        },
+        {
+          "type": "cplus_comptime_for",
           "named": true
         },
         {
@@ -6040,6 +6112,10 @@
   },
   {
     "type": "import",
+    "named": false
+  },
+  {
+    "type": "in",
     "named": false
   },
   {

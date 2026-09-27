@@ -24,6 +24,8 @@ typedef struct value_t {
 //     })
 // } wrapper_t);
 
+enum { FLAG = 0 };
+
 int main(void) {
     value_t value = {0};
     value.increment();

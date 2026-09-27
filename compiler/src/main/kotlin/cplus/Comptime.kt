@@ -626,9 +626,7 @@ internal class ComptimeCompiler(
     }
 
     private fun inlineExpressionEnd(masked: String, start: Int): Int? {
-        var expressionStart = start
-        if (expressionStart < masked.length && masked[expressionStart] == '@') expressionStart++
-        if (expressionStart >= masked.length || !masked[expressionStart].isIdentifierStart()) return null
+        if (start >= masked.length || masked[start] in ";,)}]") return null
         var parentheses = 0
         var brackets = 0
         var cursor = start
@@ -2016,7 +2014,24 @@ private data class CtBool(val value: Boolean) : CtScalar {
 }
 
 private data class CtString(val value: String) : CtScalar {
-    override fun render(): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+    override fun render(): String = buildString {
+        append('"')
+        value.forEach { character ->
+            append(when (character) {
+                '\\' -> "\\\\"
+                '"' -> "\\\""
+                '\n' -> "\\n"
+                '\r' -> "\\r"
+                '\t' -> "\\t"
+                '\u0007' -> "\\a"
+                '\b' -> "\\b"
+                '\u000c' -> "\\f"
+                '\u000b' -> "\\v"
+                else -> character.toString()
+            })
+        }
+        append('"')
+    }
 }
 
 private data class CtTypeValue(

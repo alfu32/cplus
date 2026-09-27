@@ -415,6 +415,7 @@ class TranspilerTest {
                         defer record_deferred_value(1);
                         defer { record_deferred_value(2); record_deferred_value(3); }
                         if (1) defer record_deferred_value(4);
+                        if (0) defer record_deferred_value(5);
                     }
                     typedef struct deferred_value_t {
                         int value;

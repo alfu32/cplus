@@ -1,0 +1,23 @@
+================================================================================
+Unnamed bitfields
+================================================================================
+
+struct flags_t {
+  unsigned int : 1;
+  int value;
+};
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (struct_specifier
+    (type_identifier)
+    (field_declaration_list
+      (field_declaration
+        (sized_type_specifier
+          (primitive_type))
+        (bitfield_clause
+          (number_literal)))
+      (field_declaration
+        (primitive_type)
+        (field_identifier)))))

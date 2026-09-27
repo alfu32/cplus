@@ -5,6 +5,25 @@ object CPlusTarget {
     @JvmStatic
     fun hostOs(): String = normalizeOs(System.getProperty("os.name"))
 
+    /** Normalize the host architecture for compile-time ABI reflection. */
+    @JvmStatic
+    fun hostArch(): String = normalizeArch(System.getProperty("os.arch"))
+
+    /** Normalize an architecture name or target triple to a stable spelling. */
+    @JvmStatic
+    fun normalizeArch(value: String?): String {
+        val normalized = value.orEmpty().lowercase()
+        val architecture = normalized.substringBefore('-')
+        return when (architecture) {
+            "x86_64", "amd64", "x64" -> "x86_64"
+            "aarch64", "arm64" -> "arm64"
+            "i386", "i486", "i586", "i686", "x86" -> "x86"
+            "arm", "armv6", "armv7", "armv7l" -> "arm"
+            "riscv64" -> "riscv64"
+            else -> "unknown"
+        }
+    }
+
     /** Resolve `os` from TinyCC target arguments, falling back to the JVM host when absent. */
     @JvmStatic
     fun osFromCompilerOptions(options: List<String>): String {

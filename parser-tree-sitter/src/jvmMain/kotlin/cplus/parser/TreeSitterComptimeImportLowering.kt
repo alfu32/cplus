@@ -35,11 +35,16 @@ class TreeSitterComptimeImportLowering(
     private val importPaths: CPlusImportPaths = CPlusImportPaths(),
     private val targetOs: String = cplus.CPlusTarget.hostOs()
 ) {
-    fun lower(rootParse: CPlusParseResult, rootSource: MappedText): TreeSitterComptimeImportResult {
-        val session = Session()
-        val rootFile = rootSource.firstOrigin()?.file ?: rootParse.source.sourceFile
+    fun lower(
+        rootParse: CPlusParseResult,
+        rootSource: MappedText,
+        rootSourceFile: SourceFile? = null,
+        alreadyIncludedSourceIds: Set<SourceId> = emptySet()
+    ): TreeSitterComptimeImportResult {
+        val rootFile = rootSourceFile ?: rootSource.firstOrigin()?.file ?: rootParse.source.sourceFile
+        val rootId = sourceId(rootFile)
+        val session = Session(alreadyIncludedSourceIds - rootId, rootSource)
         session.visit(rootFile, rootSource, rootParse)?.let { return it }
-        val rootId = session.sourceId(rootFile)
         val order = try {
             session.graph.dependencyOrder(listOf(rootId))
         } catch (error: IllegalStateException) {
@@ -50,7 +55,7 @@ class TreeSitterComptimeImportLowering(
                     error.message ?: "comptime import cycle",
                     rootFile.span(0, 0)
                 )),
-                sourceImports = session.graph.edges()
+                sourceImports = session.reportedEdges.toList()
             )
         }
         val output = MappedTextBuilder()
@@ -62,16 +67,24 @@ class TreeSitterComptimeImportLowering(
         return TreeSitterComptimeImportResult(
             output.build(),
             sourceOrder = order,
-            sourceImports = session.graph.edges()
+            sourceImports = session.reportedEdges.toList()
         )
     }
 
-    private inner class Session {
+    private inner class Session(alreadyIncludedSourceIds: Set<SourceId>, rootSource: MappedText) {
         val graph = SourceImportGraph()
         val moduleTexts = linkedMapOf<SourceId, MappedText>()
+        val reportedEdges = linkedSetOf<SourceImportEdge>()
         private val active = linkedSetOf<SourceId>()
         private val resolver = CPlusImportResolver(importPaths)
         private var importedByteCount = 0L
+
+        init {
+            val emptyOrigin = rootSource.firstOrigin()
+            alreadyIncludedSourceIds.forEach { sourceId ->
+                moduleTexts[sourceId] = MappedText.generated("", emptyOrigin)
+            }
+        }
 
         fun visit(sourceFile: SourceFile, mapped: MappedText, parsed: CPlusParseResult): TreeSitterComptimeImportResult? {
             val id = sourceId(sourceFile)
@@ -96,6 +109,8 @@ class TreeSitterComptimeImportLowering(
                 // keep their specified C-file meaning. Every explicit C-plus suffix is a module edge.
                 if (!declaration.isComptime && extension !in setOf("cp", "c+")) continue
 
+                val importOriginFile = mapped.originAt(declaration.span.startOffset)?.file ?: sourceFile
+                val importOriginId = sourceId(importOriginFile)
                 val importLocation = mapped.toOriginalSpan(declaration.span)
                 if (!declaration.moduleScope) {
                     active.remove(id)
@@ -106,7 +121,7 @@ class TreeSitterComptimeImportLowering(
                     )
                 }
                 val target = try {
-                    resolver.resolve(sourceFile, pathText, listOf("cp", "c+"))
+                    resolver.resolve(importOriginFile, pathText, listOf("cp", "c+"))
                 } catch (error: IllegalArgumentException) {
                     active.remove(id)
                     return loweringFailure(
@@ -125,7 +140,14 @@ class TreeSitterComptimeImportLowering(
                 }
 
                 val targetId = SourceId.fromPath(target)
-                val cycle = graph.add(SourceImportEdge(id, targetId, importLocation))
+                val sourceEdge = SourceImportEdge(importOriginId, targetId, importLocation)
+                var cycle = graph.add(sourceEdge)
+                if (cycle == null && importOriginId != id) {
+                    // The current root snapshot may already contain several imported modules.
+                    // Add a root ordering edge so the newly imported dependency is emitted before
+                    // that snapshot, while retaining the real importer edge for cycle checks.
+                    cycle = graph.add(SourceImportEdge(id, targetId, importLocation))
+                }
                 if (cycle != null) {
                     active.remove(id)
                     return loweringFailure(
@@ -133,6 +155,9 @@ class TreeSitterComptimeImportLowering(
                         "comptime import cycle: ${cycle.joinToString(" -> ") { it.value }}",
                         importLocation
                     )
+                }
+                if (reportedEdges.none { it.importer == sourceEdge.importer && it.imported == sourceEdge.imported }) {
+                    reportedEdges += sourceEdge
                 }
 
                 if (targetId !in moduleTexts) {
@@ -186,7 +211,7 @@ class TreeSitterComptimeImportLowering(
                 TreeSitterComptimeImportResult(
                     null,
                     parserDiagnostics = parsed.diagnostics.map { it.copy(span = mapSpan(mapped, it.span)) },
-                    sourceImports = graph.edges()
+                    sourceImports = reportedEdges.toList()
                 )
             )
 
@@ -199,7 +224,7 @@ class TreeSitterComptimeImportLowering(
                     TreeSitterComptimeImportResult(
                         null,
                         loweringDiagnostics = selected.diagnostics.map { it.copy(span = mapSpan(mapped, it.span)) },
-                        sourceImports = graph.edges()
+                        sourceImports = reportedEdges.toList()
                     )
                 )
                 if (selected.source.text == mapped.text) break
@@ -213,7 +238,7 @@ class TreeSitterComptimeImportLowering(
                     TreeSitterComptimeImportResult(
                         null,
                         parserDiagnostics = parsed.diagnostics.map { it.copy(span = mapSpan(mapped, it.span)) },
-                        sourceImports = graph.edges()
+                        sourceImports = reportedEdges.toList()
                     )
                 )
             }
@@ -227,23 +252,17 @@ class TreeSitterComptimeImportLowering(
                         "nested comptime conditionals exceeded the materialization pass limit",
                         mapSpan(mapped, descendants(parsed.root).first { it.kind == "cplus_comptime_conditional" }.span)
                     )),
-                    sourceImports = graph.edges()
+                    sourceImports = reportedEdges.toList()
                 )
             )
             return ParsedModule(mapped, parsed, null)
-        }
-
-        fun sourceId(source: SourceFile): SourceId = try {
-            source.name?.let { SourceId.fromPath(Paths.get(it)) } ?: SourceId.named("<anonymous-source>")
-        } catch (_: Exception) {
-            SourceId.named(source.name ?: "<anonymous-source>")
         }
 
         private fun loweringFailure(code: String, message: String, span: cplus.SourceSpan) =
             TreeSitterComptimeImportResult(
                 null,
                 loweringDiagnostics = listOf(CPlusLoweringDiagnostic(code, message, span)),
-                sourceImports = graph.edges()
+                sourceImports = reportedEdges.toList()
             )
     }
 
@@ -294,6 +313,12 @@ class TreeSitterComptimeImportLowering(
         return result.toString()
     }
 
+    private fun sourceId(source: SourceFile): SourceId = try {
+        source.name?.let { SourceId.fromPath(Paths.get(it)) } ?: SourceId.named("<anonymous-source>")
+    } catch (_: Exception) {
+        SourceId.named(source.name ?: "<anonymous-source>")
+    }
+
     private fun mapSpan(mapped: MappedText, span: cplus.SourceSpan): cplus.SourceSpan {
         val start = mapped.originAt(span.startOffset)
             ?: (span.startOffset - 1).takeIf { it >= 0 }?.let(mapped::originAt)
@@ -327,8 +352,7 @@ class TreeSitterComptimeImportLowering(
         const val MAX_CONDITIONAL_PASSES = 64
         val NON_MODULE_IMPORT_CONTEXTS = setOf(
             "function_definition", "cplus_method_definition", "cplus_throws_annotated_method",
-            "compound_statement", "field_declaration_list", "linkage_specification",
-            "preproc_if", "preproc_ifdef", "preproc_else", "preproc_elif", "preproc_elifdef", "preproc_elifndef"
+            "compound_statement", "field_declaration_list", "linkage_specification"
         )
         val DORMANT_COMPTIME_CONTEXTS = setOf(
             "cplus_comptime_block", "cplus_comptime_function_definition", "cplus_comptime_body",

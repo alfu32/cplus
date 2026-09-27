@@ -12,6 +12,7 @@ import cplus.CPlusAstKind
 import cplus.CPlusImportPaths
 import cplus.CPlusSemanticAnalyzer
 import cplus.CPlusSymbolKind
+import cplus.CPlusDeclaratorLayer
 import cplus.CPlusThrowsConvention
 import cplus.CPlusDeferLoweringPass
 import cplus.CPlusComptimeIndexer
@@ -22,6 +23,11 @@ import cplus.CPlusTranspiler
 import cplus.CPlusParserShadowRunner
 import cplus.CPlusSyntaxNode
 import cplus.CPlusParseResult
+import cplus.CPlusParseOptions
+import cplus.CPlusParserBackend
+import cplus.ParserDiagnostic
+import cplus.ParserDiagnosticSeverity
+import cplus.SourceSnapshot
 import cplus.CPlusLoweringDiagnostic
 import cplus.CPlusLoweringResult
 import cplus.AllocationIntent
@@ -154,6 +160,370 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun prototypeTranscodesSnakeExampleAndExtractsItsModelFixture() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib")) && Files.isDirectory(it.resolve("examples")) }
+            ?: error("could not locate repository sources from ${Path.of("").toAbsolutePath()}")
+        val example = repository.resolve("stdlib/examples/raylib/snake.cp")
+        val stdlibRoot = repository.resolve("stdlib").toAbsolutePath().normalize()
+        val source = sources.open(SourceId.named(example.toRealPath().toString()), Files.readString(example))
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
+        ).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.cSource ?: error("Snake example should produce mapped C")
+        assertTrue("snake_app__step" in generated.text, generated.text)
+        assertFalse(".step(" in generated.text, "implicit receiver calls should be lowered")
+        assertEquals(listOf("-lraylib", "-lGL", "-lm", "-lpthread", "-ldl", "-lrt", "-lX11", "-lXrandr", "-lXinerama", "-lXcursor", "-lXi"), result.compilerOptions)
+        assertEquals(listOf("snake model and render"), result.testFixtures.map { it.name })
+        assertTrue(result.testFixtures.single().assertions.isNotEmpty(), "model behavior must remain testable as a fixture")
+        assertTrue(result.sourceOrder.first() != source.id, "Raylib modules should precede the importing example")
+        assertEquals(source.id, result.sourceOrder.last())
+        val facade = SourceId.fromPath(stdlibRoot.resolve("graphics/raylib.cp"))
+        val core = SourceId.fromPath(stdlibRoot.resolve("graphics/raylib/core.cp"))
+        val guardedFacadeEdge = result.sourceImports.singleOrNull {
+            it.importer == facade && it.imported == core
+        } ?: error("guarded Raylib facade import edge is missing: ${result.sourceImports}")
+        assertEquals(facade.value, guardedFacadeEdge.location.file)
+        result.sourceImports.forEach { edge ->
+            val importerIndex = result.sourceOrder.indexOf(edge.importer)
+            val importedIndex = result.sourceOrder.indexOf(edge.imported)
+            assertTrue(
+                importedIndex >= 0 && importerIndex > importedIndex,
+                "dependency must precede importer in source order: $edge; ${result.sourceOrder}"
+            )
+            assertEquals(edge.importer.value, edge.location.file, "import span should retain its requesting source")
+        }
+    }
+
+    @Test
+    fun prototypeTranscodesTheStandardLibraryAndRaylibFixtureCorpus() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib/tests")) && Files.isDirectory(it.resolve("stdlib/examples/raylib")) }
+            ?: error("could not locate repository acceptance sources from ${Path.of("").toAbsolutePath()}")
+        val stdlibRoot = repository.resolve("stdlib").toAbsolutePath().normalize()
+        val inputs = listOf(repository.resolve("stdlib/tests"), repository.resolve("stdlib/examples/raylib"))
+            .flatMap { directory ->
+                Files.walk(directory).use { paths ->
+                    paths.filter { it.toString().endsWith(".cp") || it.toString().endsWith(".c+") }
+                        .sorted()
+                        .toList()
+                }
+            }
+        val failures = mutableListOf<String>()
+
+        inputs.forEach { path ->
+            val source = sources.open(SourceId.named(path.toRealPath().toString()), Files.readString(path))
+            val result = TreeSitterCPlusPrototypeTranspiler(
+                backend = backend,
+                sourceManager = sources,
+                targetOs = "linux",
+                importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
+            ).transpile(source)
+            if (!result.successful) {
+                failures += buildString {
+                    append(path.toString().removePrefix(repository.toString()).trimStart('/'))
+                    append(": parser=").append(result.parserDiagnostics)
+                    append("; lowering=").append(result.loweringDiagnostics)
+                    append("; unsupported=").append(result.unsupportedNodes)
+                }
+            } else if (result.testFixtures.isEmpty()) {
+                failures += "${path.toString().removePrefix(repository.toString()).trimStart('/')} produced no AST @test fixtures"
+            } else {
+                val generatedC = result.cSource!!.text
+                validateCCompiles(
+                    generatedC,
+                    includeDirectories = listOf(path.parent),
+                    compilerOptions = result.compilerOptions,
+                    context = path.toString().removePrefix(repository.toString()).trimStart('/')
+                )
+                if (generatedC.contains("comptime function") || generatedC.contains("@name(")) {
+                    failures += "${path.toString().removePrefix(repository.toString()).trimStart('/')} retained unresolved comptime generator syntax"
+                }
+                if (path == repository.resolve("stdlib/tests/containers.cp")) {
+                    val expectedEntities = listOf(
+                        "list_map__named_value_t__to__int",
+                        "list_map__int__to__int",
+                        "list_fold__int__with__long",
+                        "list_group_by__named_value_t__by__int",
+                        "list_zip__named_value_t__with__int"
+                    )
+                    expectedEntities.filterNot(generatedC::contains).forEach { missing ->
+                        failures += "stdlib/tests/containers.cp did not materialize expected generic entity '$missing'"
+                    }
+                    if (expectedEntities.all(generatedC::contains)) {
+                        compileAndRunC(
+                            generatedC + "\n#undef main\nint main(void) { return 0; }\n",
+                            includeDirectories = listOf(path.parent),
+                            compilerOptions = listOf("-Dmain=cplus_ast_fixture_main")
+                        )
+                    }
+                }
+            }
+        }
+
+        assertTrue(
+            failures.isEmpty(),
+            "AST frontend did not transcode the legacy-accepted test/example corpus (${inputs.size} sources):\n" +
+                failures.joinToString("\n")
+        )
+    }
+
+    @Test
+    fun prototypeTranscodesEveryRepositoryCPlusSourceWithoutActiveComptimeSyntax() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib")) && Files.isDirectory(it.resolve("examples")) }
+            ?: error("could not locate repository C-plus sources from ${Path.of("").toAbsolutePath()}")
+        val stdlibRoot = repository.resolve("stdlib").toAbsolutePath().normalize()
+        val inputs = sequenceOf(repository.resolve("stdlib"), repository.resolve("examples"))
+            .flatMap { directory ->
+                Files.walk(directory).use { paths ->
+                    paths.filter { it.toString().endsWith(".cp") || it.toString().endsWith(".c+") }
+                        .sorted()
+                        .toList()
+                        .asSequence()
+                }
+            }
+            .toList()
+        assertTrue(inputs.isNotEmpty(), "repository C-plus corpus must not be empty")
+        val failures = mutableListOf<String>()
+
+        inputs.forEach { path ->
+            val relative = repository.relativize(path).toString()
+            try {
+                val source = sources.open(SourceId.named(path.toRealPath().toString()), Files.readString(path))
+                val result = TreeSitterCPlusPrototypeTranspiler(
+                    backend = backend,
+                    sourceManager = sources,
+                    targetOs = "linux",
+                    importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
+                ).transpile(source)
+                if (!result.successful) {
+                    failures += "$relative: parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+                } else if (result.cSource?.text.orEmpty().contains("comptime function") ||
+                    result.cSource?.text.orEmpty().contains("@name(")
+                ) {
+                    failures += "$relative retained active comptime generator syntax"
+                } else {
+                    validateCCompilesWithAvailableDrivers(
+                        code = result.cSource?.text ?: error("successful AST result has no C output for $relative"),
+                        includeDirectories = listOf(path.parent, stdlibRoot),
+                        compilerOptions = result.compilerOptions,
+                        context = relative
+                    )
+                }
+            } catch (failure: Throwable) {
+                failures += "$relative: ${failure.message ?: failure::class.simpleName}"
+            }
+        }
+
+        assertTrue(
+            failures.isEmpty(),
+            "AST frontend did not transcode the repository C-plus corpus (${inputs.size} sources):\n" +
+                failures.joinToString("\n")
+        )
+    }
+
+    @Test
+    fun prototypeExecutesStandardLibraryFixturesAfterAstRuntimeLowering() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib/tests")) }
+            ?: error("could not locate repository standard-library tests from ${Path.of("").toAbsolutePath()}")
+        val stdlibRoot = repository.resolve("stdlib").toAbsolutePath().normalize()
+        val inputs = Files.walk(repository.resolve("stdlib/tests")).use { paths ->
+            paths.filter { it.toString().endsWith(".cp") || it.toString().endsWith(".c+") }
+                .sorted()
+                .toList()
+        }
+        val failures = mutableListOf<String>()
+
+        inputs.forEach { path ->
+            val relative = repository.relativize(path).toString()
+            try {
+                val source = sources.open(SourceId.named(path.toRealPath().toString()), Files.readString(path))
+                val result = TreeSitterCPlusPrototypeTranspiler(
+                    backend = backend,
+                    sourceManager = sources,
+                    targetOs = "linux",
+                    importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
+                ).transpile(source)
+                if (!result.successful) {
+                    failures += "$relative: parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+                } else {
+                    val harness = CPlusTranspiler().emitExtractedTestHarness(
+                        result.cSource ?: error("successful AST result has no C output"),
+                        result.testFixtures
+                    )
+                    compileAndRunC(
+                        harness.source.code,
+                        includeDirectories = listOf(path.parent, stdlibRoot),
+                        compilerOptions = result.compilerOptions
+                    )
+                }
+            } catch (failure: Throwable) {
+                failures += "$relative: ${failure.message ?: failure::class.simpleName}"
+            }
+        }
+
+        assertTrue(
+            failures.isEmpty(),
+            "AST-lowered standard-library fixtures did not execute successfully:\n" +
+                failures.joinToString("\n")
+        )
+    }
+
+    @Test
+    fun prototypeExecutesFiniteRepositoryExamplesAfterAstLowering() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib")) && Files.isDirectory(it.resolve("examples")) }
+            ?: error("could not locate repository examples from ${Path.of("").toAbsolutePath()}")
+        val stdlibRoot = repository.resolve("stdlib").toAbsolutePath().normalize()
+        val relativeInputs = listOf(
+            "examples/basic.cp",
+            "examples/generic_list.cp",
+            "stdlib/examples/allocator_debug.cp",
+            "stdlib/examples/allocators.cp",
+            "stdlib/examples/containers.cp",
+            "stdlib/examples/thread_pool.cp"
+        )
+        val failures = mutableListOf<String>()
+
+        relativeInputs.forEach { relative ->
+            val path = repository.resolve(relative)
+            try {
+                val source = sources.open(SourceId.named(path.toRealPath().toString()), Files.readString(path))
+                val result = TreeSitterCPlusPrototypeTranspiler(
+                    backend = backend,
+                    sourceManager = sources,
+                    targetOs = "linux",
+                    importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
+                ).transpile(source)
+                if (!result.successful) {
+                    failures += "$relative: parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+                } else {
+                    compileAndRunC(
+                        result.cSource?.text ?: error("successful AST result has no C output for $relative"),
+                        includeDirectories = listOf(path.parent, stdlibRoot),
+                        compilerOptions = result.compilerOptions
+                    )
+                }
+            } catch (failure: Throwable) {
+                failures += "$relative: ${failure.message ?: failure::class.simpleName}"
+            }
+        }
+
+        assertTrue(
+            failures.isEmpty(),
+            "finite repository examples did not execute successfully through AST lowering:\n" +
+                failures.joinToString("\n")
+        )
+    }
+
+    @Test
+    fun prototypeLowersEveryRaylibFixtureBeforeAstHarnessGeneration() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib/examples/raylib")) }
+            ?: error("could not locate repository Raylib examples from ${Path.of("").toAbsolutePath()}")
+        val stdlibRoot = repository.resolve("stdlib").toAbsolutePath().normalize()
+        val inputs = Files.walk(repository.resolve("stdlib/examples/raylib")).use { paths ->
+            paths.filter { it.toString().endsWith(".cp") || it.toString().endsWith(".c+") }
+                .sorted()
+                .toList()
+        }
+        assertEquals(8, inputs.size, "the Raylib example fixture corpus should remain explicit")
+
+        inputs.forEach { path ->
+            val relative = repository.relativize(path).toString()
+            val sourceText = Files.readString(path)
+            val source = sources.open(SourceId.named(path.toRealPath().toString()), sourceText)
+            val result = TreeSitterCPlusPrototypeTranspiler(
+                backend = backend,
+                sourceManager = sources,
+                targetOs = "linux",
+                importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
+            ).transpile(source)
+
+            assertTrue(
+                result.successful,
+                "$relative: parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+            )
+            assertEquals(1, result.testFixtures.size, "$relative should expose exactly one model fixture")
+
+            val fixtureBody = result.testFixtures.single().body.text
+            assertFalse(
+                Regex("(?m)^(?!\\s*//).*\\bdefer\\b").containsMatchIn(fixtureBody),
+                "$relative fixture still contains a defer statement"
+            )
+            assertFalse("@try" in fixtureBody || "@catch" in fixtureBody, "$relative fixture still contains checked-error syntax")
+
+            val methodNames = Regex(
+                """(?m)^\s*(?:static\s+)?(?:pub|priv)\s+[^{;()]+\s+([A-Za-z_]\w*)\s*\("""
+            ).findAll(sourceText).map { it.groupValues[1] }.toSet()
+            methodNames.forEach { methodName ->
+                assertFalse(
+                    Regex("""(?m)^(?!\s*//)[^\n]*(?:\.|->)\s*${Regex.escape(methodName)}\s*\(""").containsMatchIn(fixtureBody),
+                    "$relative fixture still contains an implicit C-plus receiver call for $methodName"
+                )
+            }
+
+            // Exercise the same harness-only API used by the AST standard-library execution
+            // gate.  Do not link or launch Raylib here: the source-corpus test owns C syntax
+            // validation, while this test isolates the AST lowering/extraction boundary.
+            val harness = CPlusTranspiler().emitExtractedTestHarness(
+                result.cSource ?: error("successful AST result has no C output for $relative"),
+                result.testFixtures
+            )
+            assertTrue(harness.source.code.contains("cplus_test_0"), "$relative harness was not generated")
+            val harnessCodeWithoutLineComments = harness.source.code
+                .lineSequence()
+                .filterNot { it.trimStart().startsWith("//") }
+                .joinToString("\n")
+            val leftoverAssertions = Regex("@assert(?:Equals)?\\s*\\(")
+                .findAll(harnessCodeWithoutLineComments).map { it.range.first }.toList()
+            assertFalse(
+                leftoverAssertions.isNotEmpty(),
+                "$relative harness retained @assert annotations at $leftoverAssertions; extracted=${result.testFixtures.single().assertions.size}"
+            )
+            assertFalse("@test" in harness.source.code, "$relative harness retained a test declaration")
+        }
+    }
+
+    @Test
+    fun socketModuleSelectsPlatformAppropriateFeatureAndLinkFlags() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib/net")) }
+            ?: error("could not locate repository stdlib from ${Path.of("").toAbsolutePath()}")
+        val stdlibRoot = repository.resolve("stdlib").toAbsolutePath().normalize()
+        val text = "comptime import \"stdlib:/net/socket.cp\";\nint main(void) { return 0; }\n"
+
+        for ((targetOs, expectedFlags) in listOf(
+            "linux" to listOf("-D_POSIX_C_SOURCE=200112L"),
+            "windows" to listOf("-lws2_32")
+        )) {
+            val source = sources.open(SourceId.named("socket-flags-$targetOs.cp"), text)
+            val result = TreeSitterCPlusPrototypeTranspiler(
+                backend = backend,
+                sourceManager = sources,
+                targetOs = targetOs,
+                importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
+            ).transpile(source)
+            assertTrue(
+                result.successful,
+                "$targetOs parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+            )
+            assertEquals(expectedFlags, result.compilerOptions, "$targetOs socket options")
+        }
+    }
+
+    @Test
     fun prototypeLowersAstCImportsToMappedAbsoluteIncludes() {
         val directory = Files.createTempDirectory("cplus-ast-c-import")
         try {
@@ -182,6 +552,33 @@ class TreeSitterCPlusParserBackendTest {
             assertEquals(source.id.value, origin?.file?.name)
             assertEquals(text.indexOf("@import"), origin?.offset)
             compileAndRunC(generated.text)
+
+            val generatedImportText = """
+                comptime code @emit_c_import() {
+                    return @code { @import("helper.c"); };
+                }
+                comptime emit_c_import();
+                int main(void) { return imported_value() != 41; }
+            """.trimIndent()
+            val generatedImportSource = sources.open(SourceId.named(directory.resolve("generated.cp").toString()), generatedImportText)
+            val generatedImportResult = TreeSitterCPlusPrototypeTranspiler(
+                backend = backend,
+                sourceManager = sources,
+                importPaths = CPlusImportPaths()
+            ).transpile(generatedImportSource)
+            assertTrue(
+                generatedImportResult.successful,
+                "parser=${generatedImportResult.parserDiagnostics}; lowering=${generatedImportResult.loweringDiagnostics}"
+            )
+            val generatedImport = generatedImportResult.cSource ?: error("generated C import should lower")
+            val generatedInclude = "#include \"${cFile.toRealPath()}\""
+            assertTrue(generatedInclude in generatedImport.text, generatedImport.text)
+            assertFalse("@import" in generatedImport.text, generatedImport.text)
+            assertEquals(
+                generatedImportText.indexOf("@import"),
+                generatedImport.originAt(generatedImport.text.indexOf(generatedInclude))?.offset
+            )
+            compileAndRunC(generatedImport.text)
 
             val namespacedText = """
                 @import("stdlib:/helper.c");
@@ -232,6 +629,7 @@ class TreeSitterCPlusParserBackendTest {
             Files.writeString(
                 helper,
                 "comptime int imported_answer = 42;\n" +
+                    "comptime code @emit_value(int value) { return @code { int generated_from_block = @value; }; }\n" +
                     "int imported_value(void) { return comptime imported_answer; }\n" +
                     "@test \"helper fixture\" { int value = comptime imported_answer; @assertEquals(42, value); }\n"
             )
@@ -242,7 +640,11 @@ class TreeSitterCPlusParserBackendTest {
             val text = """
                 comptime import "child.cp";
                 @import("child.cp");
-                int main(void) { return child_value() != 42; }
+                comptime {
+                    comptime int @block_value = imported_answer + 1;
+                    comptime emit_value(block_value);
+                }
+                int main(void) { return child_value() != 42 || generated_from_block != 43; }
             """.trimIndent()
             val source = sources.open(SourceId.named(rootPath.toString()), text)
 
@@ -266,11 +668,15 @@ class TreeSitterCPlusParserBackendTest {
             val fixtureBody = result.testFixtures.single().body
             assertTrue("int value = 42;" in fixtureBody.text, fixtureBody.text)
             assertEquals(helper.toRealPath().toString(), fixtureBody.originAt(fixtureBody.text.indexOf("42"))?.file?.name)
+            val generatedValueOffset = generated.text.indexOf("generated_from_block = 43") + "generated_from_block = ".length
+            assertTrue(generatedValueOffset >= "generated_from_block = ".length, generated.text)
+            assertEquals(rootPath.toString(), generated.originAt(generatedValueOffset)?.file?.name)
+            assertEquals(text.indexOf("block_value);"), generated.originAt(generatedValueOffset)?.offset)
             assertEquals(3, result.sourceOrder.size)
             assertEquals(SourceId.fromPath(helper), result.sourceOrder[0])
             assertEquals(SourceId.fromPath(child), result.sourceOrder[1])
             assertEquals(SourceId.fromPath(rootPath), result.sourceOrder.last())
-            assertEquals(2, result.sourceImports.size)
+            assertEquals(2, result.sourceImports.size, result.sourceImports.toString())
             assertEquals(SourceId.fromPath(rootPath), result.sourceImports[0].importer)
             assertEquals(SourceId.fromPath(child), result.sourceImports[0].imported)
             assertEquals(SourceId.fromPath(child), result.sourceImports[1].importer)
@@ -281,6 +687,132 @@ class TreeSitterCPlusParserBackendTest {
             assertEquals(result.sourceImports, result.transcodedSource?.sourceImports)
             compileAndRunC(generated.text)
             compileAndRunC(CPlusTranspiler().transpileExtractedTests(generated, result.testFixtures).source.code)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun prototypeExpandsComptimeModuleImportEmittedByCodeBeforeResolvingImportedGenerator() {
+        val directory = Files.createTempDirectory("cplus-ast-generated-module-import")
+        try {
+            val helper = directory.resolve("generated_helper.cp")
+            val rootPath = directory.resolve("generated_root.cp")
+            Files.writeString(
+                helper,
+                """
+                    comptime function @make_imported_value() {
+                        return int generated_imported_value(void) { return 42; }
+                    }
+                    comptime make_imported_value();
+                """.trimIndent()
+            )
+            val text = """
+                comptime code @emit_import() {
+                    return @code { comptime import "generated_helper.cp"; };
+                }
+                comptime emit_import();
+                int main(void) { return generated_imported_value() == 42 ? 0 : 1; }
+            """.trimIndent()
+            val source = sources.open(SourceId.named(rootPath.toString()), text)
+
+            val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+            assertTrue(
+                result.successful,
+                "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+            )
+            val generated = result.cSource ?: error("generated module import should materialize before C emission")
+            assertTrue("int generated_imported_value(void)" in generated.text, generated.text)
+            assertFalse("comptime import" in generated.text, generated.text)
+            assertEquals(listOf(SourceId.fromPath(helper), SourceId.fromPath(rootPath)), result.sourceOrder)
+            assertEquals(SourceId.fromPath(rootPath), result.sourceImports.single().importer)
+            assertEquals(SourceId.fromPath(helper), result.sourceImports.single().imported)
+            val declarationOffset = generated.text.indexOf("generated_imported_value")
+            assertEquals(helper.toRealPath().toString(), generated.originAt(declarationOffset)?.file?.name)
+            compileAndRunC(generated.text)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun prototypeResolvesGeneratedModuleImportRelativeToItsImportedModuleOrigin() {
+        val directory = Files.createTempDirectory("cplus-ast-generated-nested-module-import")
+        try {
+            val modules = Files.createDirectories(directory.resolve("modules"))
+            val dependency = modules.resolve("dependency.cp")
+            val helper = modules.resolve("helper.cp")
+            val rootPath = directory.resolve("root.cp")
+            Files.writeString(dependency, "int dependency_value(void) { return 42; }\n")
+            Files.writeString(
+                helper,
+                """
+                    comptime code @emit_dependency_import() {
+                        return @code { comptime import "dependency.cp"; };
+                    }
+                    comptime emit_dependency_import();
+                    int imported_module_value(void) { return dependency_value(); }
+                """.trimIndent()
+            )
+            val text = """
+                comptime import "modules/helper.cp";
+                int main(void) { return imported_module_value() == 42 ? 0 : 1; }
+            """.trimIndent()
+            val source = sources.open(SourceId.named(rootPath.toString()), text)
+
+            val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+            assertTrue(
+                result.successful,
+                "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+            )
+            val generated = result.cSource ?: error("nested generated module import should materialize")
+            assertTrue("int dependency_value(void)" in generated.text, generated.text)
+            assertTrue("int imported_module_value(void)" in generated.text, generated.text)
+            assertEquals(
+                listOf(SourceId.fromPath(dependency), SourceId.fromPath(helper), SourceId.fromPath(rootPath)),
+                result.sourceOrder
+            )
+            assertEquals(
+                listOf(SourceId.fromPath(rootPath) to SourceId.fromPath(helper), SourceId.fromPath(helper) to SourceId.fromPath(dependency)),
+                result.sourceImports.map { it.importer to it.imported }
+            )
+            compileAndRunC(generated.text)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun prototypeDiagnosesCyclesCreatedByGeneratedModuleImportsAtTheOriginatingImport() {
+        val directory = Files.createTempDirectory("cplus-ast-generated-module-cycle")
+        try {
+            val modules = Files.createDirectories(directory.resolve("modules"))
+            val dependency = modules.resolve("dependency.cp")
+            val helper = modules.resolve("helper.cp")
+            val rootPath = directory.resolve("root.cp")
+            Files.writeString(dependency, "comptime import \"helper.cp\";\nint dependency_value(void) { return 42; }\n")
+            val helperText = """
+                comptime code @emit_dependency_import() {
+                    return @code { comptime import "dependency.cp"; };
+                }
+                comptime emit_dependency_import();
+                int imported_module_value(void) { return dependency_value(); }
+            """.trimIndent()
+            Files.writeString(helper, helperText)
+            val root = sources.open(
+                SourceId.named(rootPath.toString()),
+                "comptime import \"modules/helper.cp\";\nint main(void) { return imported_module_value(); }"
+            )
+
+            val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(root)
+
+            assertFalse(result.successful, "generated module-import cycles must fail closed")
+            val diagnostic = result.loweringDiagnostics.single()
+            assertEquals("CPLUS_IMPORT_CYCLE", diagnostic.code)
+            assertEquals(dependency.toRealPath().toString(), diagnostic.span.file)
+            assertEquals(Files.readString(dependency).indexOf("comptime import"), diagnostic.span.startOffset)
         } finally {
             Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
@@ -961,6 +1493,143 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun allocationFlowInvalidatesProvenanceAfterCompoundAssignmentsAndUpdates() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-compound-update-flow.cp"),
+            """
+                int main(void) {
+                    char* compound = alloc_warm(8);
+                    compound += 1;
+                    scratch char* after_compound = compound;
+
+                    char* prefix = alloc_cold(8);
+                    ++prefix;
+                    warm char* after_prefix = prefix;
+
+                    char* postfix = alloc_hot(8);
+                    postfix--;
+                    cold char* after_postfix = postfix;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
+        listOf("after_compound", "after_prefix", "after_postfix").forEach { name ->
+            assertEquals(
+                AllocationIntent.NONE,
+                result.symbols.single { it.name == name }.knownProvenance,
+                "provenance should be unknown after updating $name's source pointer"
+            )
+        }
+    }
+
+    @Test
+    fun allocationFlowDoesNotAssumeInitializerElementEvaluationOrder() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-initializer-order.cp"),
+            """
+                int main(void) {
+                    char* value = alloc_warm(8);
+                    char* values[2] = {
+                        (value = alloc_scratch(8)),
+                        (value = alloc_hot(8))
+                    };
+                    scratch char* after_initializer = value;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
+        assertEquals(
+            AllocationIntent.NONE,
+            result.symbols.single { it.name == "after_initializer" }.knownProvenance,
+            "initializer elements must not be treated as a deterministic left-to-right sequence"
+        )
+    }
+
+    @Test
+    fun allocationFlowDoesNotAssumeAssignmentOrSubscriptOperandOrder() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-unsequenced-operands.cp"),
+            """
+                int main(void) {
+                    char* value = alloc_warm(8);
+                    char* target = NULL;
+                    target = (value = alloc_scratch(8));
+                    scratch char* after_assignment = value;
+
+                    char* values[2] = { NULL, NULL };
+                    values[(value = alloc_cold(8), 0)] = alloc_hot(8);
+                    scratch char* after_subscript = value;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
+        listOf("after_assignment", "after_subscript").forEach { name ->
+            assertEquals(
+                AllocationIntent.NONE,
+                result.symbols.single { it.name == name }.knownProvenance,
+                "$name must not inherit a guessed operand evaluation order"
+            )
+        }
+    }
+
+    @Test
+    fun allocationFlowInvalidatesProvenanceForUnannotatedPointerOutputCalls() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-unannotated-pointer-output.cp"),
+            """
+                void replace_pointer(char **out);
+                int main(void) {
+                    char* value = alloc_warm(8);
+                    replace_pointer(&value);
+                    scratch char* after_known_unannotated_write = value;
+
+                    char* external_value = alloc_cold(8);
+                    external_call(&external_value);
+                    hot char* after_unknown_write = external_value;
+
+                    char* loop_value = alloc_warm(8);
+                    while (external_condition()) {
+                        external_call(&loop_value);
+                    }
+                    cold char* after_loop_write = loop_value;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
+        listOf("after_known_unannotated_write", "after_unknown_write", "after_loop_write").forEach { name ->
+            assertEquals(
+                AllocationIntent.NONE,
+                result.symbols.single { it.name == name }.knownProvenance,
+                "pointer output through $name should invalidate allocator provenance"
+            )
+        }
+    }
+
+    @Test
     fun allocationFlowInvalidatesOuterPointerProvenanceAfterLoopWrites() {
         val snapshot = sources.open(
             SourceId.named("allocation-loop-flow.cp"),
@@ -1508,6 +2177,49 @@ class TreeSitterCPlusParserBackendTest {
         val (exitCode, stdout) = compileAndCaptureC(compiler, generated)
         assertEquals(0, exitCode, stdout)
         assertTrue("mapped rank=1" in stdout, stdout)
+    }
+
+    @Test
+    fun prototypeErasesUnusedUniqueEntityGeneratorsBeforeCEmission() {
+        val text = """
+            comptime type @unused_box(type T) {
+                return @code { struct unused_box { T value; }; };
+            }
+            comptime function @unused_function() {
+                return int generated_but_unused(void) { return 42; }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-unused-entities.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("unused comptime entities should lower to C")
+        assertFalse("unused_box" in generated.code, generated.code)
+        assertFalse("generated_but_unused" in generated.code, generated.code)
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
+    }
+
+    @Test
+    fun unusedDuplicateEntityGeneratorsStillProduceDuplicateDiagnostic() {
+        val text = """
+            comptime type @box(type T) { return @code { struct box { T value; }; }; }
+            comptime type @box(type T) { return @code { struct box { T value; }; }; }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-duplicate-unused-generators.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertEquals("CPLUS_COMPTIME_DUPLICATE_GENERATOR", result.loweringDiagnostics.single().code)
     }
 
     @Test
@@ -2237,6 +2949,111 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun resolvesReceiverMethodsThroughQualifiedPointerAliases() {
+        val text = """
+            typedef struct widget_t {
+                pub int ping(borrowed *self) { return 1; }
+            } widget_t;
+            typedef const volatile widget_t qualified_widget_t;
+            typedef widget_t * restrict widget_pointer_t;
+            typedef const widget_t * const const_widget_pointer_t;
+
+            int use_qualified(
+                qualified_widget_t value,
+                widget_pointer_t pointer,
+                const_widget_pointer_t const_pointer
+            ) {
+                value.ping();
+                pointer->ping();
+                const_pointer->ping();
+                return 0;
+            }
+
+            int main(void) {
+                qualified_widget_t value = { 0 };
+                widget_t widget = { 0 };
+                return use_qualified(value, &widget, &widget);
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("qualified-pointer-aliases.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val index = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(index.diagnostics.isEmpty(), index.diagnostics.toString())
+        assertEquals(3, index.resolvedCalls.size, index.resolvedCalls.toString())
+        assertTrue(index.resolvedCalls.all { it.ownerType == "widget_t" }, index.resolvedCalls.toString())
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(
+            transpiled.successful,
+            "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}"
+        )
+        compileAndRunC(transpiled.cSource?.text ?: error("qualified-alias output is missing"))
+    }
+
+    @Test
+    fun retainsQualifiedMethodParameterDeclaratorsAndNestedCallbacks() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub const widget_t* transform(
+                    borrowed mut *self,
+                    borrowed const widget_t * restrict source,
+                    borrowed int (*callback)(const widget_t *value)
+                ) {
+                    return callback(source) == self->value ? self : source;
+                }
+            } widget_t;
+
+            int read_widget(const widget_t *value) {
+                return value->value;
+            }
+
+            int main(void) {
+                widget_t value = { 7 };
+                return value.transform(&value, read_widget) == &value ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("qualified-method-parameters.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+
+        val method = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "transform"
+        }
+        assertEquals(listOf("self", "source", "callback"), method.parameters.map { it.name })
+        assertEquals(
+            "borrowed const widget_t * restrict source",
+            method.parameters[1].declarationText
+        )
+        assertEquals(
+            listOf(CPlusDeclaratorLayer.POINTER),
+            method.parameters[1].declaratorLayers
+        )
+        val callback = method.parameters[2].functionType
+        assertTrue(callback != null, method.parameters.toString())
+        assertEquals("int", callback?.returnType)
+        assertEquals(listOf("value"), callback?.parameters?.map { it.name })
+        assertEquals("const widget_t *value", callback?.parameters?.single()?.declarationText)
+        assertEquals(
+            listOf(CPlusDeclaratorLayer.POINTER, CPlusDeclaratorLayer.FUNCTION),
+            method.parameters[2].declaratorLayers
+        )
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(
+            transpiled.successful,
+            "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}"
+        )
+        compileAndRunC(transpiled.cSource?.text ?: error("qualified method output is missing"))
+    }
+
+    @Test
     fun resolvesEveryObjectInCommaSeparatedFileAndBlockDeclarations() {
         val snapshot = sources.open(
             SourceId.named("multiple-declarators.cp"),
@@ -2386,6 +3203,243 @@ class TreeSitterCPlusParserBackendTest {
         assertFalse(invalidOutput.successful)
         assertEquals(invalidIndex.diagnostics.map { it.code }, invalidOutput.loweringDiagnostics.map { it.code })
         assertEquals(invalidIndex.diagnostics.map { it.span }, invalidOutput.loweringDiagnostics.map { it.span })
+    }
+
+    @Test
+    fun resolvesMethodReceiversIntroducedByCastsAndCompoundLiterals() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int read(borrowed *self) { return self->value; }
+            } widget_t;
+            int main(void) {
+                widget_t value = { 41 };
+                return ((widget_t *) &value)->read() + ((widget_t) { 1 }).read() == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("cast-and-compound-literal-receivers.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(2, semantic.resolvedCalls.size, semantic.resolvedCalls.toString())
+        assertTrue(semantic.resolvedCalls.first().pointerAccess)
+        assertFalse(semantic.resolvedCalls.last().pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("cast receiver output is missing")
+        assertTrue(
+            Regex("""widget__read\(\(\(widget_t\s*\*\)\s*&\s*value\)""").containsMatchIn(generated),
+            generated
+        )
+        assertTrue(
+            Regex("""widget__read\(\s*&\s*\(\(\(widget_t\)""").containsMatchIn(generated),
+            generated
+        )
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun lowersMethodsReturningFunctionPointersWithoutFlatteningTheirDeclarator() {
+        val text = """
+            #include <stdio.h>
+            static int increment(int value) { return value + 1; }
+            typedef struct selector_t {
+                pub int (*select(borrowed *self))(int) { return increment; }
+            } selector_t;
+            int main(void) {
+                selector_t selector;
+                int (*callback)(int) = selector.select();
+                printf("%d\\n", callback(41));
+                return callback(41) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("function-pointer-return-method.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val semantic = CPlusSemanticAnalyzer().analyze(ast)
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("select"), semantic.resolvedCalls.map { it.methodName })
+        val method = semantic.symbols.single { it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "select" }
+        assertEquals(2, method.declaratorLayers.count { it == CPlusDeclaratorLayer.FUNCTION })
+        assertEquals(1, method.declaratorLayers.count { it == CPlusDeclaratorLayer.POINTER })
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("function-pointer return method output is missing")
+        assertTrue("selector__select" in generated, generated)
+        assertTrue("(*selector__select" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromSameTypedConditionalAndCommaExpressions() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int read(borrowed *self) { return self->value; }
+            } widget_t;
+            int main(void) {
+                int flag = 0;
+                widget_t left = { 20 };
+                widget_t right = { 22 };
+                return (flag ? &left : &right)->read() + (0, &left)->read() == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("composite-receiver-expressions.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(2, semantic.resolvedCalls.size, semantic.resolvedCalls.toString())
+        assertTrue(semantic.resolvedCalls.all { it.pointerAccess })
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        compileAndRunC(transpiled.cSource?.text ?: error("composite receiver output is missing"))
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromConditionalsWithNullPointerConstants() {
+        val text = """
+            #include <stddef.h>
+            typedef struct widget_t {
+                int value;
+                pub int read(borrowed *self) { return self->value; }
+            } widget_t;
+            int main(void) {
+                widget_t value = { 42 };
+                int enabled = 1;
+                return (enabled ? &value : NULL)->read() == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("nullable-composite-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("read"), semantic.resolvedCalls.map { it.methodName })
+        assertTrue(semantic.resolvedCalls.single().pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        compileAndRunC(transpiled.cSource?.text ?: error("nullable composite receiver output is missing"))
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromKnownFunctionPointerResults() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            widget_t* make_widget(void) {
+                static widget_t value = { 20 };
+                return &value;
+            }
+            int main(void) {
+                return make_widget()->add(22) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("call-result-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("add"), semantic.resolvedCalls.map { it.methodName })
+        assertTrue(semantic.resolvedCalls.single().pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("call-result receiver output is missing")
+        assertTrue("widget__add" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromFunctionPointerVariables() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            widget_t* make_widget(void) {
+                static widget_t value = { 20 };
+                return &value;
+            }
+            int main(void) {
+                widget_t* (*factory)(void) = make_widget;
+                return factory()->add(22) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("function-pointer-variable-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(listOf("add"), semantic.resolvedCalls.map { it.methodName })
+        assertTrue(semantic.resolvedCalls.single().pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("function-pointer variable receiver output is missing")
+        assertTrue("widget__add" in generated, generated)
+        compileAndRunC(generated)
+    }
+
+    @Test
+    fun resolvesMethodReceiversFromKnownStaticMethodResults() {
+        val text = """
+            typedef struct widget_t {
+                int value;
+                static pub widget_t* create(void) {
+                    static widget_t value = { 20 };
+                    return &value;
+                }
+                pub int add(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } widget_t;
+            int main(void) {
+                return widget_t.create()->add(22) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("static-call-result-receiver.cp"), text)
+
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        assertEquals(setOf("create", "add"), semantic.resolvedCalls.map { it.methodName }.toSet())
+        assertTrue(semantic.resolvedCalls.single { it.methodName == "add" }.pointerAccess)
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
+        val generated = transpiled.cSource?.text ?: error("static call-result receiver output is missing")
+        assertTrue("widget__create" in generated, generated)
+        assertTrue("widget__add" in generated, generated)
+        compileAndRunC(generated)
     }
 
     @Test
@@ -3442,8 +4496,11 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         val treeSitterTests = CPlusTranspiler().transpileExtractedTests(treeSitterC, experimental.testFixtures)
         val firstFixture = experimental.testFixtures.first()
         val methodCallOffset = text.indexOf("score.add(2)")
+        val methodNameOffset = text.indexOf("add(2)", methodCallOffset)
         val assertionOffset = text.indexOf("@assertEquals(42, score.value)")
-        assertEquals(methodCallOffset, firstFixture.body.originAt(firstFixture.body.text.indexOf("score.add(2)"))?.offset)
+        val loweredMethodCallOffset = firstFixture.body.text.indexOf("score__add(&score, 2)")
+        assertTrue(loweredMethodCallOffset >= 0, firstFixture.body.text)
+        assertEquals(methodNameOffset, firstFixture.body.originAt(loweredMethodCallOffset)?.offset)
         assertEquals(name, firstFixture.assertions.first().span.file)
         assertEquals(assertionOffset, firstFixture.assertions.first().span.startOffset)
         val generatedTestCode = treeSitterTests.source.code
@@ -3631,7 +4688,8 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     private fun compileAndCaptureC(
         compiler: String,
         code: String,
-        compilerOptions: List<String> = emptyList()
+        compilerOptions: List<String> = emptyList(),
+        expectCompileSuccess: Boolean = true
     ): Pair<Int, String> {
         val temporaryDirectory = Files.createTempDirectory("cplus-frontend-differential")
         try {
@@ -3643,7 +4701,11 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             ).redirectErrorStream(true).start()
             compile.outputStream.bufferedWriter().use { it.write(code) }
             val compilerOutput = compile.inputStream.bufferedReader().use { it.readText() }
-            assertEquals(0, compile.waitFor(), "$compiler rejected differential C:\n$compilerOutput\n$code")
+            val compileStatus = compile.waitFor()
+            if (compileStatus != 0) {
+                if (expectCompileSuccess) assertEquals(0, compileStatus, "$compiler rejected differential C:\n$compilerOutput\n$code")
+                else return compileStatus to compilerOutput
+            }
 
             val run = ProcessBuilder(executable.toString()).redirectErrorStream(true).start()
             val runtimeOutput = run.inputStream.bufferedReader().use { it.readText() }
@@ -3689,7 +4751,11 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         }
     }
 
-    private fun compileAndRunC(code: String) {
+    private fun compileAndRunC(
+        code: String,
+        includeDirectories: List<Path> = emptyList(),
+        compilerOptions: List<String> = emptyList()
+    ) {
         val compilers = listOf("cc", "gcc", "clang").distinct().filter { compiler ->
             runCatching { ProcessBuilder(compiler, "--version").start().waitFor() == 0 }.getOrDefault(false)
         }
@@ -3700,18 +4766,65 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
                 val executableName = "compat-${compiler}" +
                     if (System.getProperty("os.name").startsWith("Windows", true)) ".exe" else ""
                 val executable = temporaryDirectory.resolve(executableName)
-                val compile = ProcessBuilder(
-                    compiler, "-std=c11", "-x", "c", "-", "-o", executable.toString()
-                ).redirectErrorStream(true).start()
+                val command = buildList {
+                    addAll(listOf(compiler, "-std=c11", "-x", "c", "-"))
+                    addAll(compilerOptions)
+                    includeDirectories.forEach { directory -> addAll(listOf("-I", directory.toString())) }
+                    addAll(listOf("-o", executable.toString()))
+                }
+                val compile = ProcessBuilder(command).redirectErrorStream(true).start()
                 compile.outputStream.bufferedWriter().use { it.write(code) }
                 val output = compile.inputStream.bufferedReader().use { it.readText() }
                 assertEquals(0, compile.waitFor(), "$compiler rejected C11 compatibility fixture:\n$output\n$code")
                 val run = ProcessBuilder(executable.toString()).redirectErrorStream(true).start()
                 val runtimeOutput = run.inputStream.bufferedReader().use { it.readText() }
-                assertEquals(0, run.waitFor(), "$compiler-built fixture failed:\n$runtimeOutput")
+                assertEquals(0, run.waitFor(), "$compiler-built fixture failed:\n$runtimeOutput\n$code")
             } finally {
                 Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
             }
+        }
+    }
+
+    private fun validateCCompiles(
+        code: String,
+        includeDirectories: List<Path>,
+        compilerOptions: List<String>,
+        context: String
+    ) {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val command = buildList {
+            addAll(listOf(compiler, "-std=c11", "-fsyntax-only", "-x", "c", "-"))
+            addAll(compilerOptions)
+            includeDirectories.forEach { directory -> addAll(listOf("-I", directory.toString())) }
+        }
+        val process = ProcessBuilder(command).redirectErrorStream(true).start()
+        process.outputStream.bufferedWriter().use { it.write(code) }
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        assertEquals(0, process.waitFor(), "$compiler rejected AST-generated C for $context:\n$output\n$code")
+    }
+
+    private fun validateCCompilesWithAvailableDrivers(
+        code: String,
+        includeDirectories: List<Path>,
+        compilerOptions: List<String>,
+        context: String
+    ) {
+        val compilers = listOf("cc", "gcc", "clang").distinct().filter { compiler ->
+            runCatching { ProcessBuilder(compiler, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        }
+        if (compilers.isEmpty()) return
+        compilers.forEach { compiler ->
+            val command = buildList {
+                addAll(listOf(compiler, "-std=c11", "-fsyntax-only", "-x", "c", "-"))
+                addAll(compilerOptions)
+                includeDirectories.forEach { directory -> addAll(listOf("-I", directory.toString())) }
+            }
+            val process = ProcessBuilder(command).redirectErrorStream(true).start()
+            process.outputStream.bufferedWriter().use { it.write(code) }
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            assertEquals(0, process.waitFor(), "$compiler rejected AST-generated C for $context:\n$output\n$code")
         }
     }
 
@@ -3872,6 +4985,39 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         val binding = resolution.bindings.single()
         assertEquals("dynamic_list", binding.symbol)
         assertEquals("type", binding.resultKind)
+    }
+
+    @Test
+    fun materializesComptimeGeneratorOverloadsUsingResolvedArity() {
+        val text = """
+            comptime function @make(type T) {
+                return int generated_one(void) { return 1; }
+            }
+            comptime function @make(type T, int @value) {
+                return int generated_two(void) { return @value; }
+            }
+            comptime make(int);
+            comptime make(int, 2);
+            int main(void) {
+                return generated_one() + generated_two() == 3 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("comptime-overloaded-generators.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("overloaded comptime generators should materialize")
+        assertTrue("int generated_one(void)" in generated.code, generated.code)
+        assertTrue("int generated_two(void)" in generated.code, generated.code)
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
     }
 
     @Test
@@ -4074,6 +5220,94 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun prototypeEvaluatesAndDiscardsScalarExpressionStatementsInsideComptimeBlocks() {
+        val text = """
+            comptime {
+                1 + 2;
+                true && false;
+                comptime int @block_value = 40;
+                block_value + 2;
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("comptime-block-scalar-statements.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("scalar-only block should materialize")
+        assertFalse("1 + 2" in generated.code, generated.code)
+        assertFalse("true && false" in generated.code, generated.code)
+        assertFalse("block_value + 2" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeReportsErrorsFromDiscardedComptimeBlockScalarExpressions() {
+        val text = "comptime { 1 / 0; }\nint main(void) { return 0; }"
+        val source = sources.open(SourceId.named("comptime-block-invalid-scalar-statement.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "discarded scalar expressions must still be evaluated")
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_SCALAR_ARITHMETIC", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("1 / 0"), diagnostic.span.startOffset)
+        assertTrue(result.transcodedSource == null, "invalid comptime block must not emit C")
+    }
+
+    @Test
+    fun prototypeResolvesScalarDeclarationsInsideTopLevelComptimeBlocks() {
+        val text = """
+            comptime int @base = 40;
+            comptime code @emit_value(int value) {
+                return @code { int block_generated = @value; };
+            }
+            comptime {
+                comptime int @inside = base + 2;
+                comptime emit_value(inside);
+            }
+            int main(void) { return block_generated == 42 ? 0 : 1; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("top-level-comptime-block-scalar.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("block-local comptime value should materialize")
+        assertTrue("int block_generated = 42" in generated.code, generated.code)
+        assertFalse("@inside" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeDoesNotTreatTypeNamesAsScalarComptimeValues() {
+        val text = """
+            typedef int scalar_t;
+            comptime int @identity(int value) { return value; }
+            comptime int @invalid = identity(scalar_t);
+        """.trimIndent()
+        val source = sources.open(SourceId.named("type-name-is-not-comptime-value.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful)
+        val diagnostic = result.loweringDiagnostics.single {
+            it.code == "CPLUS_COMPTIME_SCALAR_NAME"
+        }
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("scalar_t);"), diagnostic.span.startOffset)
+        assertTrue(result.transcodedSource == null, "a type-only symbol must not be materialized as a scalar value")
+    }
+
+    @Test
     fun prototypeMaterializesNestedAndNotEqualPlatformConditionsAcrossPasses() {
         val text = """
             @if (os != "windows") {
@@ -4162,6 +5396,158 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun prototypeAcceptsLiteralAndParenthesizedLeadingInlineScalarExpressions() {
+        val text = """
+            int literal_leading = comptime 5 + 2;
+            int parenthesized_leading = comptime (3 * 4);
+            int unary_leading = comptime -6;
+            int main(void) {
+                return literal_leading == 7 && parenthesized_leading == 12 && unary_leading == -6 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-inline-leading.cp"), text)
+
+        val legacy = CPlusTranspiler().transpile(text, source.id.value)
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("inline scalar expressions should materialize")
+        assertTrue("int literal_leading = 7;" in generated.code, generated.code)
+        assertTrue("int parenthesized_leading = 12;" in generated.code, generated.code)
+        assertTrue("int unary_leading = -6;" in generated.code, generated.code)
+        assertTrue("int literal_leading = 7;" in legacy.code, legacy.code)
+        assertTrue("int parenthesized_leading = 12;" in legacy.code, legacy.code)
+        assertTrue("int unary_leading = -6;" in legacy.code, legacy.code)
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val legacyRun = compileAndCaptureC(compiler, legacy.code)
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
+        assertEquals(0, legacyRun.first, legacyRun.second)
+        assertEquals(legacyRun, run)
+    }
+
+    @Test
+    fun prototypeEvaluatesComptimeStringLiteralsAndConcatenationInline() {
+        val text = """
+            comptime string @generated_name() {
+                return "generated_" + "answer\n";
+            }
+            int main(void) {
+                const char* actual = comptime generated_name();
+                return actual[0] != 'g' || actual[10] != 'a' || actual[16] != '\n' || actual[17] != '\0';
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-string-inline.cp"), text)
+
+        val legacy = CPlusTranspiler().transpile(text, source.id.value)
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("string expression should materialize")
+        assertTrue("const char *actual = \"generated_answer\\n\";" in generated.code, generated.code)
+        assertTrue(Regex("const char\\s*\\*\\s*actual = \\\"generated_answer\\\\n\\\";").containsMatchIn(legacy.code), legacy.code)
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val astRun = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        val legacyRun = compileAndCaptureC(compiler, legacy.code, legacy.compilerOptions)
+        assertEquals(0, astRun.first, astRun.second)
+        assertEquals(0, legacyRun.first, legacyRun.second)
+        assertEquals(legacyRun, astRun)
+    }
+
+    @Test
+    fun prototypeRejectsUnsupportedComptimeStringEscapesAtTheirSourceSpan() {
+        val text = """
+            comptime string @bad_name() { return "bad\x41"; }
+            const char* value = comptime bad_name();
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-string-escape.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_SCALAR_STRING", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("\"bad\\x41\""), diagnostic.span.startOffset)
+        assertTrue(result.transcodedSource == null, "unsupported escape must stop C emission")
+    }
+
+    @Test
+    fun prototypeScalarOperatorsMatchHostCResults() {
+        val text = """
+            comptime int @unary_plus = +5;
+            comptime int @unary_minus = -5;
+            comptime int @logical_not = !0;
+            comptime int @bitwise_not = ~0;
+            comptime int @add = 5 + 3;
+            comptime int @subtract = 5 - 3;
+            comptime int @multiply = 5 * 3;
+            comptime int @divide = 7 / 2;
+            comptime int @remainder = 7 % 4;
+            comptime bool @equal = 3 == 3;
+            comptime bool @not_equal = 3 != 4;
+            comptime bool @less = 3 < 4;
+            comptime bool @less_equal = 4 <= 4;
+            comptime bool @greater = 4 > 3;
+            comptime bool @greater_equal = 4 >= 4;
+            comptime int @logical_and = 1 && 2;
+            comptime int @logical_or = 0 || 2;
+            comptime int @bitwise_and = 6 & 3;
+            comptime int @bitwise_or = 6 | 3;
+            comptime int @bitwise_xor = 6 ^ 3;
+            comptime int @left_shift = 3 << 2;
+            comptime int @right_shift = 12 >> 2;
+            int main(void) {
+                int actual_unary_plus = comptime unary_plus;
+                int actual_unary_minus = comptime unary_minus;
+                int actual_logical_not = comptime logical_not;
+                int actual_bitwise_not = comptime bitwise_not;
+                int actual_add = comptime add;
+                int actual_subtract = comptime subtract;
+                int actual_multiply = comptime multiply;
+                int actual_divide = comptime divide;
+                int actual_remainder = comptime remainder;
+                int actual_equal = comptime equal;
+                int actual_not_equal = comptime not_equal;
+                int actual_less = comptime less;
+                int actual_less_equal = comptime less_equal;
+                int actual_greater = comptime greater;
+                int actual_greater_equal = comptime greater_equal;
+                int actual_logical_and = comptime logical_and;
+                int actual_logical_or = comptime logical_or;
+                int actual_bitwise_and = comptime bitwise_and;
+                int actual_bitwise_or = comptime bitwise_or;
+                int actual_bitwise_xor = comptime bitwise_xor;
+                int actual_left_shift = comptime left_shift;
+                int actual_right_shift = comptime right_shift;
+                return actual_unary_plus != +5 || actual_unary_minus != -5 || actual_logical_not != !0 || actual_bitwise_not != ~0 ||
+                    actual_add != 5 + 3 || actual_subtract != 5 - 3 || actual_multiply != 5 * 3 || actual_divide != 7 / 2 || actual_remainder != 7 % 4 ||
+                    actual_equal != (3 == 3) || actual_not_equal != (3 != 4) || actual_less != (3 < 4) || actual_less_equal != (4 <= 4) ||
+                    actual_greater != (4 > 3) || actual_greater_equal != (4 >= 4) || actual_logical_and != (1 && 2) || actual_logical_or != (0 || 2) ||
+                    actual_bitwise_and != (6 & 3) || actual_bitwise_or != (6 | 3) || actual_bitwise_xor != (6 ^ 3) ||
+                    actual_left_shift != (3 << 2) || actual_right_shift != (12 >> 2);
+            }
+        """.trimIndent()
+        val name = "scalar-operator-matrix.cp"
+        val source = sources.open(SourceId.named(name), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("scalar operator matrix should materialize")
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val astRun = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, astRun.first, "AST-generated C failed: ${astRun.second}")
+    }
+
+    @Test
     fun prototypeMaterializesNonGenericFunctionAndVariableEntitiesWithMappedOrigins() {
         val text = """
             comptime variable @make_limit(int @value) {
@@ -4191,7 +5577,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals(text.indexOf("generated_answer(void)"), mappedText.originAt(declarationOffset)?.offset)
         val substitutedOffset = mappedText.text.indexOf("generated_limit = 42") + "generated_limit = ".length
         assertEquals(source.sourceFile, mappedText.originAt(substitutedOffset)?.file)
-        assertEquals(text.indexOf("comptime make_limit(42)"), mappedText.originAt(substitutedOffset)?.offset)
+        assertEquals(text.indexOf("42", text.indexOf("comptime make_limit(42)")), mappedText.originAt(substitutedOffset)?.offset)
 
         val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
@@ -4201,6 +5587,29 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals(0, astRun.first, astRun.second)
         assertEquals(0, legacyRun.first, legacyRun.second)
         assertEquals(legacyRun, astRun)
+    }
+
+    @Test
+    fun prototypeIndexesEveryNameInGeneratedMultiDeclaratorEntities() {
+        val text = """
+            comptime variable @make_values() {
+                return int first_generated = 20, second_generated = 22;
+            }
+            comptime make_values();
+            int main(void) { return first_generated + second_generated == 42 ? 0 : 1; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-multiple-variable-entities.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("generated declaration should materialize")
+        assertTrue("first_generated = 20, second_generated = 22" in generated.code, generated.code)
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
     }
 
     @Test
@@ -4252,7 +5661,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals(text.indexOf("generated_identity"), mappedText.originAt(generatedNameOffset)?.offset)
         val substitutedTypeOffset = mappedText.text.indexOf("int generated_identity")
         assertEquals(source.sourceFile, mappedText.originAt(substitutedTypeOffset)?.file)
-        assertEquals(text.indexOf("comptime make_identity(int)"), mappedText.originAt(substitutedTypeOffset)?.offset)
+        assertEquals(text.indexOf("int", text.indexOf("comptime make_identity(int)")), mappedText.originAt(substitutedTypeOffset)?.offset)
 
         val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
@@ -4382,6 +5791,76 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun prototypeKeepsFunctionPointerFieldsAsCallableCExpressions() {
+        val text = """
+            typedef int (*callback_t)(int value);
+            typedef struct dispatch_t {
+                callback_t callback;
+                pub int invoke(borrowed *self, int value) {
+                    return self->callback(value);
+                }
+            } dispatch_t;
+
+            static int double_value(int value) { return value * 2; }
+
+            int main(void) {
+                dispatch_t value = { double_value };
+                return value.invoke(21) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-callable-function-field.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("callable-field fixture must expose mapped C output")
+        assertTrue("self->callback(value)" in generated.code, generated.code)
+        assertFalse("dispatch__callback" in generated.code, generated.code)
+        assertTrue("dispatch__invoke(&value, 21)" in generated.code, generated.code)
+
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
+    }
+
+    @Test
+    fun extractedFixtureBridgeDoesNotRelowerCallableFieldsInAstRuntime() {
+        val text = """
+            typedef int (*callback_t)(int value);
+            typedef struct dispatch_t {
+                callback_t callback;
+                pub int invoke(borrowed *self, int value) {
+                    return self->callback(value);
+                }
+            } dispatch_t;
+
+            static int double_value(int value) { return value * 2; }
+
+            @test "callable field fixture" {
+                dispatch_t value = { double_value };
+                @assert(value.invoke(21) == 42);
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-callable-field-fixture.cp"), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val testProgram = CPlusTranspiler().transpileExtractedTests(
+            result.cSource ?: error("callable-field fixture must expose mapped C output"),
+            result.testFixtures
+        )
+        compileAndRunC(testProgram.source.code)
+    }
+
+    @Test
     fun prototypeMaterializesMixedGenericTypeAndScalarParameters() {
         val text = """
             comptime variable @make_seed(type T, int @seed) {
@@ -4435,7 +5914,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         val mappedText = result.cSource ?: error("successful comptime type materialization must retain mapped source")
         val structureOffset = mappedText.text.indexOf("struct box__int_box_t")
         assertEquals(text.indexOf("struct box"), mappedText.originAt(structureOffset)?.offset)
-        val specializedTagOffset = mappedText.text.indexOf("box__int_box_t")
+        val specializedTagOffset = mappedText.text.indexOf("__int_box_t")
         assertEquals(text.indexOf("comptime typedef box(int)"), mappedText.originAt(specializedTagOffset)?.offset)
         val substitutedTypeOffset = mappedText.text.indexOf("int value;")
         assertEquals(text.indexOf("comptime typedef box(int)"), mappedText.originAt(substitutedTypeOffset)?.offset)
@@ -4509,6 +5988,1153 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun prototypeMaterializesPointerToTaggedGenericTypeArguments() {
+        val text = """
+            typedef struct payload_t { int value; } payload_t;
+            comptime type @box(type T) {
+                return @code { struct box { T value; }; };
+            }
+            comptime typedef box(struct payload_t*) payload_pointer_box_t;
+            int main(void) {
+                payload_t payload = { 42 };
+                payload_pointer_box_t box = { &payload };
+                return box.value->value == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-tagged-pointer-type.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("tagged pointer specialization should materialize")
+        assertTrue("struct payload_t *value" in generated.code || "struct payload_t* value" in generated.code, generated.code)
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
+    }
+
+    @Test
+    fun prototypeMaterializesNestedCodeFragmentsAcrossThreeMappedPasses() {
+        val text = """
+            comptime code @emit_stage() {
+                return @code {
+                    comptime code @emit_inner(type T) {
+                        return @code {
+                            comptime function @make_value(type U) {
+                                return U staged_value(void) { return sizeof(U); }
+                            }
+                            comptime make_value(T);
+                        };
+                    }
+                    comptime emit_inner(int);
+                    comptime int @generated_answer() { return 40 + 2; }
+                };
+            }
+            comptime emit_stage();
+            int main(void) { return staged_value() == sizeof(int) && comptime generated_answer() == 42 ? 0 : 1; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-code-mapped-passes.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("nested comptime materialization should emit C")
+        assertFalse("comptime " in generated.code, generated.code)
+        assertTrue("int staged_value(void)" in generated.code, generated.code)
+        val mapped = result.cSource ?: error("fixed-point output should preserve a source map")
+        val generatedNameOffset = mapped.text.indexOf("staged_value(void)")
+        assertEquals(source.sourceFile, mapped.originAt(generatedNameOffset)?.file)
+        assertEquals(text.indexOf("staged_value(void)"), mapped.originAt(generatedNameOffset)?.offset)
+        val substitutedTypeOffset = mapped.text.indexOf("int staged_value")
+        assertEquals(source.sourceFile, mapped.originAt(substitutedTypeOffset)?.file)
+        assertEquals(
+            text.indexOf("int", text.indexOf("comptime emit_inner(int)")),
+            mapped.originAt(substitutedTypeOffset)?.offset
+        )
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
+    }
+
+    @Test
+    fun prototypeMapsCompilerErrorsFromMaterializedCodeBackToFragmentSource() {
+        val text = """
+            comptime code @emit_invalid_top_level() {
+                return @code { return 1; };
+            }
+            comptime emit_invalid_top_level();
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-generated-parse-error.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "structurally valid code fragments should materialize: ${result.parserDiagnostics}; ${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("code fragment should be emitted")
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val compile = compileAndCaptureC(compiler, generated.code, generated.compilerOptions, expectCompileSuccess = false)
+        assertTrue(compile.first != 0, "module-scope return is invalid C")
+        assertTrue(source.id.value in compile.second, compile.second)
+        assertTrue(":2:" in compile.second, "compiler should report the original fragment line: ${compile.second}")
+    }
+
+    @Test
+    fun prototypeMapsUnresolvedGeneratorFromNestedMaterializedCodeToOriginalFragment() {
+        val text = """
+            comptime code @emit_outer() {
+                return @code {
+                    comptime code @emit_inner() {
+                        return @code { comptime missing_generator(); };
+                    }
+                    comptime emit_inner();
+                };
+            }
+            comptime emit_outer();
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-nested-unresolved.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "an unresolved generator emitted by materialized code must fail")
+        val diagnostic = result.loweringDiagnostics.singleOrNull()
+            ?: error("expected one mapped unresolved-generator diagnostic: ${result.loweringDiagnostics}")
+        assertEquals("CPLUS_COMPTIME_UNRESOLVED_GENERATOR", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        val originalInvocation = "comptime missing_generator();"
+        assertEquals(text.indexOf(originalInvocation), diagnostic.span.startOffset)
+        assertEquals(text.indexOf(originalInvocation) + originalInvocation.length, diagnostic.span.endOffset)
+    }
+
+    @Test
+    fun prototypeMapsParserDiagnosticsFromARejectedMaterializedRevisionToItsTemplate() {
+        val text = """
+            comptime code @emit() { return @code { int generated_marker = 42; }; }
+            comptime emit();
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-generated-parser-diagnostic.cp"), text)
+        val rejectingBackend = object : CPlusParserBackend {
+            override val id = ParserBackendId.TREE_SITTER
+
+            override fun parse(source: SourceSnapshot, options: CPlusParseOptions): CPlusParseResult {
+                val parsed = backend.parse(source, options)
+                if (source.text == text || "generated_marker" !in source.text) return parsed
+                val offset = source.text.indexOf("generated_marker")
+                return parsed.copy(diagnostics = listOf(ParserDiagnostic(
+                    code = "TEST_GENERATED_SYNTAX_ERROR",
+                    message = "injected rejection for materialized source-map verification",
+                    severity = ParserDiagnosticSeverity.ERROR,
+                    span = source.sourceFile.span(offset, offset + "generated_marker".length)
+                )))
+            }
+        }
+
+        val result = TreeSitterCPlusPrototypeTranspiler(rejectingBackend, sources).transpile(source)
+
+        assertFalse(result.successful, "a parser rejection in a materialized revision must stop transpilation")
+        val diagnostic = result.parserDiagnostics.singleOrNull()
+            ?: error("expected one mapped generated parser diagnostic: ${result.parserDiagnostics}")
+        assertEquals("TEST_GENERATED_SYNTAX_ERROR", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        val generatedTokenOffset = text.indexOf("generated_marker")
+        assertEquals(generatedTokenOffset, diagnostic.span.startOffset)
+        assertEquals(generatedTokenOffset + "generated_marker".length, diagnostic.span.endOffset)
+        assertTrue(result.transcodedSource == null, "invalid materialized revisions must not reach C emission")
+    }
+
+    @Test
+    fun prototypeReportsMalformedModuleImportedByGeneratedCodeAtTheDependencySpan() {
+        val directory = Files.createTempDirectory("cplus-ast-generated-malformed-import")
+        try {
+            val rootPath = directory.resolve("root.cp")
+            val brokenPath = directory.resolve("broken.cp")
+            val brokenText = "int broken( {\n"
+            Files.writeString(brokenPath, brokenText)
+            val text = """
+                comptime code @emit_import() {
+                    return @code { comptime import "broken.cp"; };
+                }
+                comptime emit_import();
+                int main(void) { return 0; }
+            """.trimIndent()
+            val source = sources.open(SourceId.named(rootPath.toString()), text)
+            assertTrue(
+                backend.parse(sources.open(SourceId.named(brokenPath.toString()), brokenText)).diagnostics.isNotEmpty(),
+                "the dependency fixture must genuinely contain malformed C-plus syntax"
+            )
+
+            val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+            assertFalse(result.successful, "a generated import of malformed C-plus must fail before emission")
+            val diagnostic = result.parserDiagnostics.singleOrNull()
+                ?: error("expected dependency parser diagnostics: ${result.parserDiagnostics}; ${result.loweringDiagnostics}")
+            assertEquals("TS_ERROR_NODE", diagnostic.code)
+            assertEquals(brokenPath.toRealPath().toString(), diagnostic.span.file)
+            assertEquals(brokenText.indexOf("int broken"), diagnostic.span.startOffset)
+            assertTrue(diagnostic.span.endOffset > diagnostic.span.startOffset)
+            assertTrue(result.transcodedSource == null, "malformed imported source must not reach C emission")
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun entityMaterializerEnforcesItsGeneratedSourceSizeLimitAtTheInvocation() {
+        val text = """
+            comptime code @emit() { return @code { int generated = 42; }; }
+            comptime emit();
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-output-limit.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterComptimeEntityLowering(maxMaterializedSourceChars = 8)
+            .lower(parsed, MappedText.identity(source.sourceFile))
+
+        val diagnostic = result.diagnostics.single()
+        assertEquals("CPLUS_COMPTIME_ENTITY_OUTPUT_LIMIT", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("comptime emit()"), diagnostic.span.startOffset)
+    }
+
+    @Test
+    fun prototypeDiagnosesBoundEntityInvocationWhenMaterializationMakesNoProgress() {
+        val text = """
+            comptime void @no_entity_result() { return; }
+            comptime no_entity_result();
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-entity-no-progress.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "a bound but unsupported entity result must not pass through silently")
+        val diagnostic = result.loweringDiagnostics.singleOrNull()
+            ?: error("expected a no-progress diagnostic: ${result.loweringDiagnostics}")
+        assertEquals("CPLUS_COMPTIME_ENTITY_NO_PROGRESS", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        val invocation = "comptime no_entity_result();"
+        assertEquals(text.indexOf(invocation), diagnostic.span.startOffset)
+        assertEquals(text.indexOf(invocation) + invocation.length, diagnostic.span.endOffset)
+    }
+
+    @Test
+    fun prototypeMaterializesTypeNameReflectionInStringComptimeFunctions() {
+        val text = """
+            #include <string.h>
+            typedef unsigned long word_t;
+            comptime string @type_name(type T) { return T.name; }
+            const char *primitive_name = comptime type_name(int);
+            const char *alias_name = comptime type_name(word_t);
+            int main(void) {
+                return strcmp(primitive_name, "int") != 0 || strcmp(alias_name, "word_t") != 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-type-name-reflection.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("type-name reflection should materialize before C emission")
+        assertTrue("const char *primitive_name = \"int\";" in generated.code, generated.code)
+        assertTrue("const char *alias_name = \"word_t\";" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeMaterializesStringComptimeCallsInsideTypeAndFunctionIdentifiers() {
+        val text = """
+            comptime string @typename(type T) { return T.name; }
+            comptime type @make_list(type T) {
+                return @code { struct list_of_@typename(T) { T value; }; };
+            }
+            comptime typedef make_list(int) list_of_int_t;
+            comptime code @emit_mapper(type T) {
+                return @code { int mapper__@typename(T)(int value) { return value + 1; } };
+            }
+            comptime emit_mapper(int);
+            int main(void) {
+                list_of_int_t list = { 41 };
+                return mapper__int(list.value) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-identifier-splice.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("identifier splices should be materialized before C emission")
+        assertTrue("struct list_of_int__list_of_int_t" in generated.code, generated.code)
+        assertTrue("int mapper__int(int value)" in generated.code, generated.code)
+        val mapped = result.cSource ?: error("identifier splice output should retain source mapping")
+        val generatedTagOffset = mapped.text.indexOf("list_of_int__list_of_int_t") + "list_of_".length
+        assertEquals(source.sourceFile, mapped.originAt(generatedTagOffset)?.file)
+        assertEquals(text.indexOf("@typename(T)"), mapped.originAt(generatedTagOffset)?.offset)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeRejectsIdentifierSplicesThatReturnNonStringValues() {
+        val text = """
+            comptime int @not_a_name(type T) { return 7; }
+            struct type_@not_a_name(int) { int value; };
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-invalid-identifier-splice.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "identifier splice functions must return strings")
+        val diagnostic = result.loweringDiagnostics.singleOrNull()
+            ?: error("expected one mapped identifier-splice diagnostic: ${result.loweringDiagnostics}")
+        assertEquals("CPLUS_COMPTIME_IDENTIFIER_SPLICE_TYPE", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("@not_a_name(int)"), diagnostic.span.startOffset)
+        assertEquals(text.indexOf("@not_a_name(int)") + "@not_a_name(int)".length, diagnostic.span.endOffset)
+    }
+
+    @Test
+    fun prototypeMapsSplicedOrdinaryAndTagNamespaceCollisionsThroughGeneratedC() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val fixtures = listOf(
+            "ast-comptime-splice-function-collision.cp" to """
+                comptime string @typename(type T) { return T.name; }
+                int mapper__int(int value) { return value; }
+                int mapper__@typename(int)(int value) { return value + 1; }
+                int main(void) { return 0; }
+            """.trimIndent(),
+            "ast-comptime-splice-tag-collision.cp" to """
+                comptime string @typename(type T) { return T.name; }
+                struct widget_int { int first; };
+                struct widget_@typename(int) { int second; };
+                int main(void) { return 0; }
+            """.trimIndent()
+        )
+
+        fixtures.forEach { (fileName, text) ->
+            val source = sources.open(SourceId.named(fileName), text)
+            val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+            assertTrue(
+                result.successful,
+                "$fileName parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+            )
+            val generated = result.transcodedSource ?: error("$fileName should produce C before C semantic diagnostics")
+            val compile = compileAndCaptureC(compiler, generated.code, expectCompileSuccess = false)
+            assertTrue(compile.first != 0, "$fileName collision should be rejected by the C compiler")
+            assertTrue(
+                compile.second.contains("$fileName:3:"),
+                "$fileName collision diagnostic should use the original splice location:\n${compile.second}"
+            )
+        }
+    }
+
+    @Test
+    fun prototypeMapsUnknownTypeReflectionPropertiesToTheirFieldName() {
+        val text = """
+            comptime string @invalid_name(type T) { return T.missing; }
+            const char *name = comptime invalid_name(int);
+            int main(void) { return name == 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-invalid-type-reflection.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "unknown reflection properties must be rejected")
+        val diagnostic = result.loweringDiagnostics.singleOrNull()
+            ?: error("expected one mapped reflection diagnostic: ${result.loweringDiagnostics}")
+        assertEquals("CPLUS_COMPTIME_REFLECTION_PROPERTY", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("missing"), diagnostic.span.startOffset)
+        assertEquals(text.indexOf("missing") + "missing".length, diagnostic.span.endOffset)
+    }
+
+    @Test
+    fun prototypeReflectsPrimitiveSizeAndAlignmentUsingExplicitTargetAbi() {
+        val text = """
+            typedef unsigned long word_t;
+            typedef const char *char_pointer_t;
+            comptime int @type_size(type T) { return T.size; }
+            comptime int @type_alignment(type T) { return T.align; }
+            int reflected_int_size = comptime type_size(int);
+            int reflected_long_size = comptime type_size(long);
+            int reflected_alias_size = comptime type_size(word_t);
+            int reflected_pointer_size = comptime type_size(char_pointer_t);
+            int reflected_pointer_alignment = comptime type_alignment(char_pointer_t);
+            int main(void) {
+                return reflected_int_size != sizeof(int) ||
+                    reflected_long_size != sizeof(long) ||
+                    reflected_alias_size != sizeof(word_t) ||
+                    reflected_pointer_size != sizeof(char_pointer_t) ||
+                    reflected_pointer_alignment != _Alignof(char_pointer_t);
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-size-alignment-reflection.cp"), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("target ABI reflection should materialize")
+        assertTrue("reflected_long_size = 8" in generated.code, generated.code)
+        assertTrue("reflected_pointer_size = 8" in generated.code, generated.code)
+        assertTrue("reflected_alias_size = 8" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+
+        val windowsSource = sources.open(SourceId.named("ast-comptime-size-alignment-windows.cp"), text)
+        val windows = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "windows",
+            targetArch = "x86_64"
+        ).transpile(windowsSource)
+        assertTrue(windows.successful, "parser=${windows.parserDiagnostics}; lowering=${windows.loweringDiagnostics}")
+        assertTrue("reflected_long_size = 4" in windows.transcodedSource?.code.orEmpty(), windows.transcodedSource?.code.orEmpty())
+        assertTrue("reflected_pointer_size = 8" in windows.transcodedSource?.code.orEmpty(), windows.transcodedSource?.code.orEmpty())
+    }
+
+    @Test
+    fun prototypeRejectsLayoutReflectionForUnknownTargetArchitecture() {
+        val text = """
+            comptime int @type_size(type T) { return T.size; }
+            int reflected_size = comptime type_size(int);
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-unknown-abi-reflection.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "mystery64"
+        ).transpile(source)
+
+        assertFalse(result.successful, "layout must not be guessed for an unknown architecture")
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_REFLECTION_LAYOUT", diagnostic.code)
+        assertEquals(text.indexOf("T.size") + 2, diagnostic.span.startOffset)
+    }
+
+    @Test
+    fun prototypeRejectsAggregateLayoutReflectionInsteadOfGuessing() {
+        val text = """
+            typedef struct point_t { int x; int y; } point_t;
+            comptime int @type_size(type T) { return T.size; }
+            int reflected_size = comptime type_size(point_t);
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-aggregate-layout-unsupported.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            targetOs = "linux",
+            targetArch = "x86_64"
+        ).transpile(source)
+
+        assertFalse(result.successful, "aggregate layout must not be guessed")
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_REFLECTION_LAYOUT", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("size", text.indexOf("T.size")), diagnostic.span.startOffset)
+        assertTrue(result.transcodedSource == null, "unknown aggregate size must stop C emission")
+    }
+
+    @Test
+    fun prototypeIteratesReflectedStructFieldsAndMaterializesTypedCodeEntities() {
+        val text = """
+            typedef struct user_t {
+                int id, age;
+                borrowed char* name;
+            } user_t;
+            comptime code @emit_field(type T, string @name) {
+                return @code { _Static_assert(sizeof(T) > 0, @name); };
+            }
+            comptime {
+                @for field in user_t.fields {
+                    comptime emit_field(field.type, field.name);
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-reflected-fields.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("reflected field output should be emitted")
+        assertTrue("_Static_assert(sizeof (int) > 0, \"id\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(sizeof (int) > 0, \"age\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(sizeof (char *) > 0, \"name\")" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeReflectsFieldAnnotationsInDeclarationOrder() {
+        val text = """
+            typedef struct ownership_t {
+                borrowed mut char* input;
+                owned char* output;
+                int count;
+            } ownership_t;
+            comptime code @emit_annotation(type T, string @annotations) {
+                return @code { _Static_assert(sizeof(T) > 0, @annotations); };
+            }
+            comptime {
+                @for field in ownership_t.fields {
+                    comptime emit_annotation(field.type, field.annotations);
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-field-annotations.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("field annotation metadata should be materialized")
+        assertTrue("_Static_assert(sizeof (char *) > 0, \"borrowed mut\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(sizeof (char *) > 0, \"owned\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(sizeof (int) > 0, \"\")" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeReflectsBitfieldStatusAndWidthWithMappedExpressionOrigins() {
+        val text = """
+            typedef struct flags_t {
+                unsigned int low:3;
+                unsigned int high:1 + 2;
+                unsigned int :1;
+                int ordinary;
+            } flags_t;
+            comptime code @assert_reflected_integer(int @value) {
+                return @code {
+                    _Static_assert(@value >= 0 && @value <= 3, "reflected bitfield integer");
+                };
+            }
+            comptime code @assert_bitfield_flag(int @value) {
+                return @code {
+                    _Static_assert(@value == 0 || @value == 1, "bitfield flag");
+                };
+            }
+            comptime {
+                @for field in flags_t.fields {
+                    comptime assert_bitfield_flag(field.flag);
+                    comptime assert_reflected_integer(field.width);
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-bitfield-width-reflection.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("bitfield metadata should be materialized")
+        assertTrue("3 >= 0 && 3 <= 3" in generated.code, generated.code)
+        assertTrue("0 >= 0 && 0 <= 3" in generated.code, generated.code)
+        assertTrue("1 >= 0 && 1 <= 3" in generated.code, generated.code)
+        assertTrue("0 == 0 || 0 == 1" in generated.code, generated.code)
+        assertTrue("1 == 0 || 1 == 1" in generated.code, generated.code)
+
+        val parsed = backend.parse(source)
+        val loopResult = TreeSitterComptimeFieldLoopLowering().lower(parsed, MappedText.identity(source.sourceFile))
+        assertTrue(loopResult.diagnostics.isEmpty(), loopResult.diagnostics.toString())
+        val afterLoop = backend.parse(sources.open(SourceId.named("ast-comptime-bitfield-width-loop.cp"), loopResult.source.text))
+        val entityResult = TreeSitterComptimeEntityLowering().lower(afterLoop, loopResult.source)
+        assertTrue(entityResult.diagnostics.isEmpty(), entityResult.diagnostics.toString())
+        val firstMaterializedWidth = entityResult.source.text.indexOf("_Static_assert(3 >= 0")
+        assertTrue(firstMaterializedWidth >= 0, entityResult.source.text)
+        val materializedWidth = entityResult.source.text.indexOf("_Static_assert(3 >= 0", firstMaterializedWidth + 1)
+        assertTrue(materializedWidth >= 0, entityResult.source.text)
+        assertEquals(text.indexOf("1 + 2"), entityResult.source.originAt(materializedWidth + "_Static_assert(".length)?.offset)
+        val expressionText = """
+            struct expression_width_t { unsigned int value:1 + 2; };
+            comptime { @for field in expression_width_t.fields { comptime consume(field.width); } }
+        """.trimIndent()
+        val expressionSource = sources.open(SourceId.named("ast-comptime-bitfield-expression-width.cp"), expressionText)
+        val expressionLowering = TreeSitterComptimeFieldLoopLowering().lower(
+            backend.parse(expressionSource),
+            MappedText.identity(expressionSource.sourceFile)
+        )
+        assertTrue(expressionLowering.diagnostics.isEmpty(), expressionLowering.diagnostics.toString())
+        assertTrue("comptime consume(1 + 2)" in expressionLowering.source.text, expressionLowering.source.text)
+        val loweredWidth = expressionLowering.source.text.lastIndexOf("1 + 2")
+        assertTrue(loweredWidth >= 0, expressionLowering.source.text)
+        assertEquals(expressionText.indexOf("1 + 2"), expressionLowering.source.originAt(loweredWidth)?.offset)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeRejectsOverflowInComptimeEntityScalarArgumentsAtTheExpression() {
+        val text = """
+            comptime function @make_value(int @value) {
+                return int generated_value(void) { return @value; }
+            }
+            comptime make_value(9223372036854775807 + 1);
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-entity-scalar-overflow.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "overflowing compile-time argument must fail closed")
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_SCALAR_ARITHMETIC", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("9223372036854775807 + 1"), diagnostic.span.startOffset)
+        assertEquals(text.indexOf("9223372036854775807 + 1") + "9223372036854775807 + 1".length, diagnostic.span.endOffset)
+    }
+
+    @Test
+    fun prototypeEvaluatesEntityArgumentsUsingEarlierComptimeValuesAndFunctions() {
+        val text = """
+            comptime int @base_value = 40;
+            comptime int @double_value(int @value) { return value * 2; }
+            comptime function @make_value(int @value) {
+                return int generated_value(void) { return @value; }
+            }
+            comptime make_value(double_value(base_value) + 2);
+            int main(void) { return generated_value() != 82; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-entity-scalar-environment.cp"), text)
+        val parsed = backend.parse(source)
+        val invocation = CPlusComptimeIndexer().index(CPlusAstAdapter().adapt(parsed)).constructs
+            .single { it.syntaxKind == "cplus_comptime_invocation" && it.symbol == "make_value" }
+        assertEquals("double_value(base_value) + 2", text.substring(
+            invocation.argumentSpans.single().startOffset,
+            invocation.argumentSpans.single().endOffset
+        ))
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.cSource ?: error("entity scalar environment should materialize")
+        assertTrue("return 82;" in generated.text, generated.text)
+        compileAndRunC(generated.text)
+    }
+
+    @Test
+    fun prototypeEvaluatesOnlyTheSelectedScalarConditionalBranch() {
+        val text = """
+            comptime variable @emit_first(int @value) {
+                return int generated_value = @value;
+            }
+            comptime variable @emit_second(int @value) {
+                return int generated_second = @value;
+            }
+            comptime emit_first(1 ? 40 + 2 : 1 / 0);
+            comptime emit_second(0 ? 1 / 0 : 40 + 3);
+            int main(void) { return generated_value == 42 && generated_second == 43 ? 0 : 1; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-scalar-conditional.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("conditional scalar arguments should materialize")
+        assertTrue("int generated_value = 42;" in generated.code, generated.code)
+        assertTrue("int generated_second = 43;" in generated.code, generated.code)
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
+    }
+
+    @Test
+    fun prototypeRejectsNonScalarConditionalConditions() {
+        val text = """
+            comptime string @type_name(type T) { return T.name; }
+            comptime variable @emit_value(int @value) {
+                return int generated_value = @value;
+            }
+            comptime emit_value(type_name(int) ? 1 : 2);
+            int main(void) { return generated_value; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-scalar-conditional-invalid.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_SCALAR_UNSUPPORTED", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("type_name(int)"), diagnostic.span.startOffset)
+        assertTrue(result.transcodedSource == null, "invalid scalar condition must stop C emission")
+    }
+
+    @Test
+    fun prototypeIteratesReflectedFieldAnnotationsAsMappedNestedComptimeLoop() {
+        val text = """
+            typedef struct ownership_t {
+                borrowed mut char* input;
+                owned char* output;
+                int count;
+            } ownership_t;
+            comptime code @check_annotation(string @annotation) {
+                return @code { _Static_assert(1, @annotation); };
+            }
+            comptime {
+                @for field in ownership_t.fields {
+                    @for annotation in field.annotations {
+                        comptime check_annotation(annotation);
+                    }
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-field-annotation-loop.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("annotation iteration should be materialized")
+        assertTrue("_Static_assert(1, \"borrowed\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(1, \"mut\")" in generated.code, generated.code)
+        assertTrue("_Static_assert(1, \"owned\")" in generated.code, generated.code)
+        assertFalse("_Static_assert(1, \"borrowed mut\")" in generated.code, generated.code)
+        val parsed = backend.parse(source)
+        val loopResult = TreeSitterComptimeFieldLoopLowering().lower(parsed, MappedText.identity(source.sourceFile))
+        assertTrue(loopResult.diagnostics.isEmpty(), loopResult.diagnostics.toString())
+        val loweredAnnotation = loopResult.source.text.indexOf("comptime check_annotation(\"mut\")") +
+            "comptime check_annotation(\"".length
+        assertEquals(text.indexOf("mut char"), loopResult.source.originAt(loweredAnnotation)?.offset)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeExpandsNestedReflectedFieldLoopsWithIndependentScopes() {
+        val text = """
+            typedef struct left_t {
+                int first;
+                int second;
+            } left_t;
+            typedef struct right_t {
+                int third;
+                int fourth;
+            } right_t;
+            comptime code @emit_pair(string @left, string @right) {
+                return @code { _Static_assert(sizeof(@left) > 0, @right); };
+            }
+            comptime {
+                @for left in left_t.fields {
+                    @for right in right_t.fields {
+                        comptime emit_pair(left.name, right.name);
+                    }
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-nested-field-loops.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("nested reflected-field loops should materialize")
+        assertEquals(
+            4,
+            Regex("""_Static_assert\s*\(\s*sizeof\s*\(\s*\"(first|second)\"\s*\)\s*>\s*0""")
+                .findAll(generated.code)
+                .count(),
+            generated.code
+        )
+        assertTrue("\"third\"" in generated.code, generated.code)
+        assertTrue("\"fourth\"" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+
+        val parsed = backend.parse(source)
+        val loopResult = TreeSitterComptimeFieldLoopLowering().lower(parsed, MappedText.identity(source.sourceFile))
+        assertTrue(loopResult.diagnostics.isEmpty(), loopResult.diagnostics.toString())
+        val generatedInvocation = loopResult.source.text.indexOf("comptime emit_pair(\"first\", \"third\")")
+        assertTrue(generatedInvocation >= 0, loopResult.source.text)
+        assertEquals(text.indexOf("first"), loopResult.source.originAt(generatedInvocation + "comptime emit_pair(\"".length)?.offset)
+    }
+
+    @Test
+    fun prototypeRejectsUnsupportedNestedFieldLoopIterableAtItsSourceSpan() {
+        val text = """
+            typedef struct ownership_t { borrowed char* input; } ownership_t;
+            comptime {
+                @for field in ownership_t.fields {
+                    @for part in field.name { comptime missing(part); }
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-field-loop-invalid-nested-iterable.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful)
+        val diagnostic = result.loweringDiagnostics.single {
+            it.code == "CPLUS_COMPTIME_FIELD_LOOP_NESTED_ITERABLE"
+        }
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("field.name"), diagnostic.span.startOffset)
+    }
+
+    @Test
+    fun prototypeBoundsNestedReflectedFieldExpansion() {
+        val leftFields = (0 until 257).joinToString("\n") { "int left_$it;" }
+        val rightFields = (0 until 257).joinToString("\n") { "int right_$it;" }
+        val text = """
+            typedef struct left_t {
+                $leftFields
+            } left_t;
+            typedef struct right_t {
+                $rightFields
+            } right_t;
+            comptime {
+                @for left in left_t.fields {
+                    @for right in right_t.fields {
+                        comptime emit_pair(left.name, right.name);
+                    }
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-field-loop-limit.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterComptimeFieldLoopLowering().lower(parsed, MappedText.identity(source.sourceFile))
+
+        val limitDiagnostics = result.diagnostics.filter { it.code == "CPLUS_COMPTIME_FIELD_LOOP_LIMIT" }
+        assertEquals(1, limitDiagnostics.size, result.diagnostics.toString())
+        val diagnostic = limitDiagnostics.single()
+        assertTrue(diagnostic.message.contains("65536-item limit"), diagnostic.message)
+        assertEquals(text.indexOf("@for right"), diagnostic.span.startOffset)
+        assertEquals(text, result.source.text, "a bounded expansion failure must not emit a partial source")
+    }
+
+    @Test
+    fun prototypeReflectsArrayAndPointerArrayFieldTypes() {
+        val text = """
+            typedef struct callbacks_t {
+                int samples[4];
+                int *pointers[4];
+            } callbacks_t;
+            comptime code @check_array(type T) {
+                return @code { _Static_assert(sizeof(T) >= sizeof(int) * 4, "array field type"); };
+            }
+            comptime {
+                @for field in callbacks_t.fields {
+                    comptime check_array(field.type);
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-array-field-types.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("complex field types should be reflected")
+        assertFalse("@for" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeAcceptsFunctionPointerAbstractTypeArguments() {
+        val text = """
+            comptime code @check_callback(type T) {
+                return @code {
+                    _Static_assert(_Generic((T)0, int (*)(int): 1, default: 0), "callback type");
+                };
+            }
+            comptime check_callback(int (*)(int));
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-function-pointer-type.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("function pointer type argument should materialize")
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeParsesFunctionPointerFieldsInOrdinaryCStructs() {
+        val text = """
+            typedef struct callbacks_t {
+                int (*transform)(int value);
+            } callbacks_t;
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-function-pointer-field-parse.cp"), text)
+
+        val parsed = backend.parse(source)
+
+        assertTrue(parsed.diagnostics.isEmpty(), "parser=${parsed.diagnostics}; root=${parsed.root}")
+    }
+
+    @Test
+    fun prototypeReflectsFunctionPointerFieldType() {
+        val text = """
+            typedef struct callbacks_t {
+                int (*transform)(int value);
+            } callbacks_t;
+            comptime code @check_callback(type T) {
+                return @code {
+                    _Static_assert(_Generic((T)0, int (*)(int): 1, default: 0), "callback type");
+                };
+            }
+            comptime {
+                @for field in callbacks_t.fields {
+                    comptime check_callback(field.type);
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-function-pointer-field.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("function-pointer field type should materialize")
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeReflectsNamedBitfieldType() {
+        val text = """
+            typedef struct flags_t {
+                unsigned int enabled:1;
+                signed int count:7;
+            } flags_t;
+            comptime code @check_bitfield(type T, string @name) {
+                return @code {
+                    _Static_assert(sizeof(T) == sizeof(int), @name);
+                };
+            }
+            comptime {
+                @for field in flags_t.fields {
+                    comptime check_bitfield(field.type, field.name);
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-named-bitfield.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("named bitfield types should be reflected")
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeReflectsUnnamedBitfieldAsAnEmptyNamedFieldEntry() {
+        val text = """
+            typedef struct flags_t {
+                unsigned int :1;
+                int value;
+            } flags_t;
+            comptime code @assert_field(type T, string @name) {
+                return @code { _Static_assert(sizeof(T) > 0, @name); };
+            }
+            comptime {
+                @for field in flags_t.fields {
+                    comptime assert_field(field.type, field.name);
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-unnamed-bitfield.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("unnamed bitfield metadata should be emitted")
+        assertTrue(", \"\")" in generated.code, generated.code)
+        assertTrue(", \"value\")" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeDefersReflectedFieldLoopsInsideGeneratorsUntilMaterialization() {
+        val text = """
+            typedef struct point_t { int x; } point_t;
+            comptime code @generate_field_checks() {
+                return @code {
+                    comptime code @assert_field(type T, string @name) {
+                        return @code { _Static_assert(sizeof(T) > 0, @name); };
+                    }
+                    comptime {
+                        @for field in point_t.fields {
+                            comptime assert_field(field.type, field.name);
+                        }
+                    }
+                };
+            }
+            comptime generate_field_checks();
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-generated-field-loop.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("generated reflected-field checks should be emitted")
+        assertTrue("_Static_assert(sizeof (int) > 0, \"x\")" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeRejectsReflectedFieldIterationOutsideComptimeBlock() {
+        val text = "@for field in user_t.fields { int value; }"
+        val source = sources.open(SourceId.named("ast-comptime-field-loop-scope.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful)
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_FIELD_LOOP_SCOPE", diagnostic.code)
+        assertEquals(text.indexOf("@for"), diagnostic.span.startOffset)
+    }
+
+    @Test
+    fun prototypeMapsUnknownReflectedFieldPropertyToItsToken() {
+        val text = """
+            typedef struct point_t { int x; } point_t;
+            comptime { @for field in point_t.fields { int value = field.missing; } }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-unknown-field-property.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful)
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_COMPTIME_REFLECTION_PROPERTY", diagnostic.code)
+        assertEquals(text.indexOf("missing"), diagnostic.span.startOffset)
+        assertEquals(source.id.value, diagnostic.span.file)
+    }
+
+    @Test
+    fun prototypeReflectsMultidimensionalArrayFieldType() {
+        val text = """
+            typedef struct point_t { int values[2][4]; } point_t;
+            comptime code @check_array(type T, string @name) {
+                return @code { _Static_assert(sizeof(T) == sizeof(int) * 8, @name); };
+            }
+            comptime {
+                @for field in point_t.fields {
+                    comptime check_array(field.type, field.name);
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-array-field.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("multidimensional array field should materialize")
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun prototypeMapsRecursiveGeneratedInvocationAfterItsGeneratorIsConsumed() {
+        val text = """
+            comptime code @stage_a() {
+                return @code {
+                    comptime code @stage_b() { return @code { comptime stage_a(); }; }
+                    comptime stage_b();
+                };
+            }
+            comptime stage_a();
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-repeated-source-state.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "recursive generated code must fail closed after its generator is consumed")
+        val diagnostic = result.loweringDiagnostics.singleOrNull()
+            ?: error("expected an unresolved generated invocation: ${result.parserDiagnostics}; ${result.loweringDiagnostics}")
+        assertEquals("CPLUS_COMPTIME_UNRESOLVED_GENERATOR", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        val invocation = "comptime stage_a();"
+        val generatedInvocationOffset = text.indexOf(invocation)
+        assertEquals(generatedInvocationOffset, diagnostic.span.startOffset)
+        assertEquals(generatedInvocationOffset + invocation.length, diagnostic.span.endOffset)
+    }
+
+    @Test
+    fun prototypeStopsNestedCodeExpansionAtTheConfiguredPassLimit() {
+        val lastStage = 130
+        fun generator(stage: Int): String {
+            val emitted = if (stage == lastStage) {
+                "int materialized_after_limit = 42;"
+            } else {
+                "${generator(stage + 1)} comptime step${stage + 1}();"
+            }
+            return "comptime code @step$stage() { return @code { $emitted }; }"
+        }
+        val text = "${generator(0)}\ncomptime step0();\nint main(void) { return 0; }"
+        val source = sources.open(SourceId.named("ast-comptime-pass-limit.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "a generated declaration chain beyond the pass bound must fail closed")
+        val diagnostic = result.loweringDiagnostics.singleOrNull()
+            ?: error("pass exhaustion should have one diagnostic: parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        assertEquals("CPLUS_COMPTIME_ENTITY_LIMIT", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+    }
+
+    @Test
     fun prototypeRejectsNonTypeExpressionForGenericStructParameterAtArgumentSpan() {
         val text = """
             comptime type @box(type T) {
@@ -4527,7 +7153,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
-    fun prototypeDiagnosesGenericStructTypedefAndTagCollisions() {
+    fun prototypeDiagnosesGenericStructTypedefAndSharedTagNamespaceCollisions() {
         val cases = listOf(
             """
                 typedef int int_box_t;
@@ -4536,6 +7162,16 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             """.trimIndent() to "comptime typedef box(int)",
             """
                 struct box__int_box_t { long existing; };
+                comptime type @box(type T) { return @code { struct box { T value; }; }; }
+                comptime typedef box(int) int_box_t;
+            """.trimIndent() to "comptime typedef box(int)",
+            """
+                union box__int_box_t { long existing; };
+                comptime type @box(type T) { return @code { struct box { T value; }; }; }
+                comptime typedef box(int) int_box_t;
+            """.trimIndent() to "comptime typedef box(int)",
+            """
+                enum box__int_box_t { EXISTING_TAG };
                 comptime type @box(type T) { return @code { struct box { T value; }; }; }
                 comptime typedef box(int) int_box_t;
             """.trimIndent() to "comptime typedef box(int)"
@@ -4550,6 +7186,112 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             assertEquals("CPLUS_COMPTIME_ENTITY_COLLISION", diagnostic.code)
             assertEquals(source.id.value, diagnostic.span.file)
             assertEquals(text.indexOf(collisionSite), diagnostic.span.startOffset)
+        }
+    }
+
+    @Test
+    fun prototypeDoesNotTreatBlockScopeTagsAsFileScopeGeneratorCollisions() {
+        val text = """
+            static void local_tag(void) {
+                union box__int_box_t { long local_value; };
+                enum local_kind { LOCAL_KIND };
+            }
+            comptime type @box(type T) { return @code { struct box { T value; }; }; }
+            comptime typedef box(int) int_box_t;
+            int main(void) { int_box_t value = { 42 }; return value.value == 42 ? 0 : 1; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-local-tag-scope.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("valid file-scope specialization should materialize")
+        assertTrue("struct box__int_box_t" in generated.code, generated.code)
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
+    }
+
+    @Test
+    fun prototypeCompletesCompatibleFileScopeStructForwardTag() {
+        val text = """
+            struct box__int_box_t;
+            comptime type @box(type T) { return @code { struct box { T value; }; }; }
+            comptime typedef box(int) int_box_t;
+            int main(void) { int_box_t value = { 42 }; return value.value == 42 ? 0 : 1; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-forward-tag.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
+        val generated = result.transcodedSource ?: error("the generated struct should complete its forward tag")
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
+        assertEquals(0, run.first, run.second)
+    }
+
+    @Test
+    fun prototypeRejectsGeneratedEntitiesCollidingWithOrdinaryCIdentifiers() {
+        val cases = listOf(
+            """
+                int int_box_t(void) { return 0; }
+                comptime type @box(type T) { return @code { struct box { T value; }; }; }
+                comptime typedef box(int) int_box_t;
+            """.trimIndent() to "comptime typedef box(int)",
+            """
+                int int_box_t;
+                comptime type @box(type T) { return @code { struct box { T value; }; }; }
+                comptime typedef box(int) int_box_t;
+            """.trimIndent() to "comptime typedef box(int)",
+            """
+                enum { int_box_t };
+                comptime type @box(type T) { return @code { struct box { T value; }; }; }
+                comptime typedef box(int) int_box_t;
+            """.trimIndent() to "comptime typedef box(int)",
+            """
+                int generated_value(void);
+                comptime function @make() {
+                    return int generated_value(void) { return 42; }
+                }
+                comptime make();
+            """.trimIndent() to "comptime make()",
+            """
+                int generated_value;
+                comptime function @make() {
+                    return int generated_value(void) { return 42; }
+                }
+                comptime make();
+            """.trimIndent() to "comptime make()",
+            """
+                comptime type @box(type T) { return @code { struct box { T value; }; }; }
+                comptime function @make() {
+                    return int int_box_t(void) { return 42; }
+                }
+                comptime typedef box(int) int_box_t;
+                comptime make();
+            """.trimIndent() to "comptime make()",
+            """
+                int second_generated;
+                comptime variable @make() {
+                    return int first_generated = 1, second_generated = 2;
+                }
+                comptime make();
+            """.trimIndent() to "comptime make()"
+        )
+
+        cases.forEachIndexed { index, (text, invocationText) ->
+            val source = sources.open(SourceId.named("ast-comptime-ordinary-name-collision-$index.cp"), text)
+            val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+            val diagnostic = result.loweringDiagnostics.singleOrNull()
+                ?: error("collision case $index produced no lowering diagnostic: parser=${result.parserDiagnostics}; output=${result.transcodedSource?.code}")
+
+            assertEquals("CPLUS_COMPTIME_ENTITY_COLLISION", diagnostic.code)
+            assertEquals(text.indexOf(invocationText), diagnostic.span.startOffset)
         }
     }
 
@@ -4592,6 +7334,29 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals("CPLUS_COMPTIME_SCALAR_ARITHMETIC", diagnostic.code)
         assertEquals(source.id.value, diagnostic.span.file)
         assertEquals(text.indexOf("12 / 0"), diagnostic.span.startOffset)
+    }
+
+    @Test
+    fun prototypeRejectsScalarComptimeSignedOverflowAndUnsafeShiftCases() {
+        val cases = listOf(
+            "comptime long long @bad = 9223372036854775807LL + 1LL;" to "CPLUS_COMPTIME_SCALAR_ARITHMETIC",
+            "comptime long long @min = -9223372036854775807LL - 1LL; comptime long long @bad = min / -1LL;" to "CPLUS_COMPTIME_SCALAR_ARITHMETIC",
+            "comptime long long @bad = -1LL << 1;" to "CPLUS_COMPTIME_SCALAR_ARITHMETIC",
+            "comptime long long @bad = -1LL >> 1;" to "CPLUS_COMPTIME_SCALAR_ARITHMETIC",
+            "comptime long long @bad = 1LL << 63;" to "CPLUS_COMPTIME_SCALAR_ARITHMETIC",
+            "comptime long long @bad = 0x8000000000000000ULL;" to "CPLUS_COMPTIME_SCALAR_LITERAL"
+        )
+
+        cases.forEachIndexed { index, (text, expectedCode) ->
+            val source = sources.open(SourceId.named("scalar-comptime-boundary-$index.cp"), text)
+            val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+            assertFalse(result.successful, "case $index should fail closed")
+            val diagnostic = result.loweringDiagnostics.singleOrNull { it.code == expectedCode }
+                ?: error("case $index expected $expectedCode; parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+            assertEquals(source.id.value, diagnostic.span.file)
+            assertTrue(diagnostic.span.startOffset in text.indices)
+        }
     }
 
     @Test

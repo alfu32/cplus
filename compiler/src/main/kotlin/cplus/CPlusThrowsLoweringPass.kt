@@ -55,8 +55,7 @@ class CPlusThrowsLoweringPass {
                 .firstOrNull { it.syntaxKind in setOf("cplus_function_declaration", "cplus_method_definition") }
                 ?: declaration
             val typeNode = signature.children.firstOrNull { it.fieldName == "type" }
-            val functionDeclarator = signature.descendantsAndSelf()
-                .firstOrNull { it.syntaxKind == "function_declarator" }
+            val functionDeclarator = signature.cplusNamedFunctionDeclarator()
             val functionNameNode = functionDeclarator?.children?.firstOrNull { it.syntaxKind == "identifier" }
             if (metadata.convention == CPlusThrowsConvention.ERROR_RETURN) {
                 val hasPointerReturn = typeNode != null && functionNameNode != null &&

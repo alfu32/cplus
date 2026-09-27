@@ -8,7 +8,8 @@ internal class DeferLowerer {
         val masked = maskDirectives(SourceMasker.mask(input.text))
         val closures = functionBodies(masked)
         val deferred = linkedMapOf<Int, MutableList<DeferredStatement>>()
-        val removals = mutableListOf<IntRange>()
+        val removals = mutableListOf<Removal>()
+        var deferSequence = 0
         var cursor = 0
 
         while (cursor < masked.length) {
@@ -29,9 +30,14 @@ internal class DeferLowerer {
             if (statementEnd <= statementStart) {
                 throw CPlusSyntaxException("defer requires a complete statement", originSpan(input, cursor))
             }
-            deferred.getOrPut(closure.open) { mutableListOf() } += DeferredStatement(statementStart, statementEnd)
-            // Keep a valid statement in place if `defer` was the body of an if/loop.
-            removals += cursor until statementEnd
+            var flag: String
+            do {
+                flag = "cplus_defer_active_${deferSequence++}"
+            } while (Regex("\\b${Regex.escape(flag)}\\b").containsMatchIn(masked))
+            deferred.getOrPut(closure.open) { mutableListOf() } += DeferredStatement(statementStart, statementEnd, flag, cursor)
+            // Register only when control flow reaches the defer site. This matters for defers
+            // nested under conditionals (for example, CloseWindow after an optional InitWindow).
+            removals += Removal(cursor, statementEnd, MappedText.generated("$flag = 1;", input.originAt(cursor)))
             cursor = statementEnd
         }
 
@@ -41,19 +47,27 @@ internal class DeferLowerer {
             val indentation = lineIndent(masked, closure.open) + "    "
             val builder = MappedTextBuilder()
             statements.asReversed().forEach { statement ->
-                builder.appendGenerated("\n$indentation")
+                builder.appendGenerated("\n$indentation if (${statement.flag}) {\n$indentation    ", input.originAt(statement.deferOffset))
                 builder.append(input, statement.start, statement.end)
-                if (statement.end == 0 || input.text.getOrNull(statement.end - 1) != '\n') {
-                    builder.appendGenerated("\n")
-                }
+                builder.appendGenerated("\n$indentation }")
             }
             Insertion(closure.close, builder.build())
         }
 
         val events = mutableListOf<Edit>()
-        removals.forEach { range ->
-            val origin = input.originAt(range.first)
-            events += Edit(range.first, range.last + 1, MappedText.generated(";", origin))
+        removals.forEach { removal -> events += Edit(removal.start, removal.end, removal.replacement) }
+        closures.forEach { closure ->
+            val statements = deferred[closure.open] ?: return@forEach
+            val indentation = lineIndent(masked, closure.open) + "    "
+            val declarations = buildString {
+                statements.forEach { statement -> append("\n$indentation int ${statement.flag} = 0;") }
+                append('\n')
+            }
+            events += Edit(
+                closure.open + 1,
+                closure.open + 1,
+                MappedText.generated(declarations, input.originAt(closure.open))
+            )
         }
         insertions.forEach { insertion -> events += Edit(insertion.offset, insertion.offset, insertion.text) }
         events.sortWith(compareBy<Edit> { it.start }.thenBy { it.end })
@@ -208,7 +222,8 @@ internal class DeferLowerer {
             (offset + word.length == source.length || !source[offset + word.length].isIdentifierPart())
 
     private data class FunctionBody(val open: Int, val close: Int)
-    private data class DeferredStatement(val start: Int, val end: Int)
+    private data class DeferredStatement(val start: Int, val end: Int, val flag: String, val deferOffset: Int)
+    private data class Removal(val start: Int, val end: Int, val replacement: MappedText)
     private data class Insertion(val offset: Int, val text: MappedText)
     private data class Edit(val start: Int, val end: Int, val replacement: MappedText)
 
