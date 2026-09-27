@@ -468,7 +468,7 @@ The complete generated file also contains the annotation macro preamble and sour
 
 The Tree-sitter prototype keeps the current signed-64 evaluation domain, then applies the declared integer type when a module-scope comptime value is resolved. Fixed-width signed types (`signed char`, `short`, `int`, `long`, and `long long`, including their standard spelling variants) reject values outside their target range with a mapped `CPLUS_COMPTIME_SCALAR_WIDTH` diagnostic. Unsigned types use C-style modulo conversion within their target width; for example, `-1` declared as `unsigned char` materializes as `255`. `_Bool` and `bool` normalize any integer or boolean initializer to `0` or `1`.
 
-`long` is target-dependent in this prototype: it is 64-bit on Linux and macOS targets and 32-bit on Windows targets. The target is selected by the compiler configuration, not by the host running the JVM. Plain `char` remains unvalidated because its signedness is implementation-defined and is not yet part of the target ABI model.
+`long` is target-dependent in this prototype: it is 64-bit on Linux and macOS targets and 32-bit on Windows targets. The target is selected by the compiler configuration, not by the host running the JVM. Plain `char` uses the supported target model: signed on Linux x86_64, macOS x86_64/arm64, and Windows x86_64/arm64; unsigned on Linux arm64. An unsupported OS/architecture combination fails closed with `CPLUS_COMPTIME_SCALAR_TYPE` instead of guessing the selected compiler's ABI.
 
 ```c
 comptime unsigned char @byte_value = -1;

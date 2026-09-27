@@ -52,7 +52,7 @@ These are the subproject-level tasks used for progress reporting. The detailed a
 
 | Task | Work package | Dependency | Status | Completion condition |
 |---|---|---|---:|---|
-| FE-SUB-01 | Freeze the parser contract and local baseline | none | DONE | Versioned grammar, normalized AST contract, 104/104 local grammar gate, and reproducible generated artifacts |
+| FE-SUB-01 | Freeze the parser contract and local baseline | none | DONE | Versioned grammar, normalized AST contract, 104/104 focused grammar gate, 62/62 live-source gate with an exact 36-node inventory, and reproducible generated artifacts |
 | FE-SUB-02 | Close packaged parser evidence | FE-SUB-01 | EXTERNAL | Six-host JNI/resource smoke tests, manifests, checksums, and size report pass in CI |
 | FE-SUB-03 | Finish bounded comptime reflection | FE-SUB-01 | IN PROGRESS | Structured annotations and iterable rules are specified, materialized, bounded, and mapped; unsupported forms fail closed |
 | FE-SUB-04 | Define typed scalar/ABI semantics | FE-SUB-03 | OPEN | Integer widths, promotions, conversions, suffixes, and encoding boundaries have one target-aware contract and tests |
@@ -376,6 +376,7 @@ All supported receiver expressions have a resolved type and exact C lowering; or
 | 2026-09-27 | Added multidimensional pointer-to-array return coverage | `retainsMultidimensionalPointerToArrayReturnLayersOnCPlusMethodSymbols` passes; the grammar corpus now parses 104/104 cases and retains `[ARRAY, ARRAY, POINTER, FUNCTION]`; emitted C compiles/runs on the host | SP64-05-M is DONE; P6-12-E/SP64-05 remains open for remaining uncommon declarators and target/compiler evidence |
 | 2026-09-27 | Revalidated the complete repository after the declarator batch | `./gradlew test --no-daemon --max-workers=1` passes in 2m13s; compiler, CLI, parser JVM, grammar, and highlighting gates are green with 104/104 grammar parses | The declarator batch is regression-safe; P6-12-E/SP64-05 remains open and the next local queue item is the target-aware scalar boundary |
 | 2026-09-27 | Established the phase-1 grammar proof from live sources | `SPEC.grammar.md` records the C-plus extension grammar; `provesLiveCPlusSyntaxNodeInventoryForGrammarProof` parses all 62 `stdlib/` and `examples/` sources without recovery and asserts the exact 36 live `cplus_*` node kinds; the focused grammar corpus remains 104/104 | Phase 1 is now a versioned syntax contract. Phase 2 will classify each mismatch as documentation, grammar, AST, lowering, or intentional unsupported behavior and require generated-C evidence before changing semantics |
+| 2026-09-27 | Closed the supported plain-`char` scalar-model slice | `./gradlew :compiler:test --tests cplus.CPlusTargetTest` and the two focused Tree-sitter scalar tests pass; Linux arm64 is modeled unsigned, supported Linux x86_64/macOS/Windows pairs signed, and unknown targets fail with a mapped diagnostic | SP-4.2 gains a bounded target-model case; the parent remains open for external ABI confirmation, wider unsigned materialization, and encoding semantics |
 
 ### Next update protocol
 
