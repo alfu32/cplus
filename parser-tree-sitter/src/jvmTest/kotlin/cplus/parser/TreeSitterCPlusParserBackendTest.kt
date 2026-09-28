@@ -799,7 +799,7 @@ class TreeSitterCPlusParserBackendTest {
                 "parser=${generatedImportResult.parserDiagnostics}; lowering=${generatedImportResult.loweringDiagnostics}"
             )
             val generatedImport = generatedImportResult.cSource ?: error("generated C import should lower")
-            val generatedInclude = "#include \"${cFile.toRealPath()}\""
+            val generatedInclude = "#include \"$escapedPath\""
             assertTrue(generatedInclude in generatedImport.text, generatedImport.text)
             assertFalse("@import" in generatedImport.text, generatedImport.text)
             assertEquals(
