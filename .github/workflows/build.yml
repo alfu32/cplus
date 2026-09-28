@@ -168,6 +168,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download bare and cross-without-sysroots TinyCC JARs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash .github/scripts/download-tinycc.sh latest tinycc-cross-cli-no-sysroots.jar
       - uses: actions/upload-artifact@v4
         with:

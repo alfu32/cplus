@@ -8,8 +8,21 @@ if (($# == 0)); then
   exit 2
 fi
 
+github_headers=(
+  --header "Accept: application/vnd.github+json"
+  --header "User-Agent: c-plus-tinycc-downloader"
+)
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  github_headers+=(--header "Authorization: Bearer $GITHUB_TOKEN")
+fi
+
+github_get() {
+  curl --fail --location --retry 3 --retry-delay 2 --silent --show-error \
+    "${github_headers[@]}" "$@"
+}
+
 if [[ "$release_tag" == "latest" ]]; then
-  release_tag="$(curl --fail --location --retry 3 --silent --show-error \
+  release_tag="$(github_get \
     https://api.github.com/repos/alfu32/tinycc/releases/latest | jq --exit-status --raw-output '.tag_name')"
 fi
 
@@ -46,9 +59,12 @@ download_asset() {
   esac
 
   echo "Downloading TinyCC $release_tag: $release_name"
-  curl --fail --location --retry 3 --retry-delay 2 --silent --show-error \
-    "https://github.com/alfu32/tinycc/releases/download/$release_tag/$release_name" \
-    --output "$temporary"
+  local release_json
+  release_json="$(github_get "https://api.github.com/repos/alfu32/tinycc/releases/tags/$release_tag")"
+  local asset_url
+  asset_url="$(printf '%s' "$release_json" | jq --exit-status --raw-output \
+    --arg name "$release_name" '.assets[] | select(.name == $name) | .browser_download_url')"
+  github_get "$asset_url" --output "$temporary"
   test -s "$temporary"
   mv -f "$temporary" "$destination"
 }
