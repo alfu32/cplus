@@ -1,3 +1,6 @@
+import java.net.URI
+import java.util.zip.ZipInputStream
+
 plugins {
     kotlin("multiplatform")
     id("io.github.tree-sitter.ktreesitter-plugin")
@@ -109,8 +112,123 @@ val installHostParserLibrary = tasks.register<Copy>("installHostParserLibrary") 
 
 val parserNativePayloadDirectory = layout.buildDirectory.dir("parser-native-payload")
 
+val windowsKTreeSitterVersion = "0.25.1"
+val kTreeSitterSource = layout.buildDirectory.dir("third-party/ktreesitter-$windowsKTreeSitterVersion")
+val treeSitterSource = layout.buildDirectory.dir("third-party/tree-sitter-$windowsKTreeSitterVersion")
+val kTreeSitterBuild = layout.buildDirectory.dir("native-ktreesitter-cmake")
+val kTreeSitterOutput = layout.buildDirectory.dir("native-ktreesitter")
+val nativeKTreeSitterLibrary = when (nativeHostOs) {
+    "windows" -> "ktreesitter.dll"
+    "macos" -> "libktreesitter.dylib"
+    else -> "libktreesitter.so"
+}
+
+fun extractPinnedZip(url: String, destination: File) {
+    if (destination.resolve(".extracted").isFile) return
+
+    destination.deleteRecursively()
+    destination.mkdirs()
+    URI(url).toURL().openStream().use { input ->
+        ZipInputStream(input).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                val target = destination.resolve(entry.name).canonicalFile
+                require(target.path.startsWith(destination.canonicalPath + File.separator)) {
+                    "Refusing to extract archive entry outside $destination: ${entry.name}"
+                }
+                if (entry.isDirectory) {
+                    target.mkdirs()
+                } else {
+                    target.parentFile.mkdirs()
+                    target.outputStream().use { output -> zip.copyTo(output) }
+                }
+            }
+        }
+    }
+    destination.resolve(".extracted").writeText(url)
+}
+
+val buildHostKTreeSitter = tasks.register("buildHostKTreeSitter") {
+    group = "build"
+    description = "Builds a host KTreeSitter base JNI library for the parser runtime."
+    onlyIf { nativeHostOs == "windows" || nativeHostOs == "macos" }
+    outputs.file(kTreeSitterOutput.map { it.file(nativeKTreeSitterLibrary) })
+    doLast {
+        val ktreesitterArchiveRoot = kTreeSitterSource.get().asFile
+        val treeSitterArchiveRoot = treeSitterSource.get().asFile
+        extractPinnedZip(
+            "https://github.com/tree-sitter/kotlin-tree-sitter/archive/refs/tags/v$windowsKTreeSitterVersion.tar.gz",
+            ktreesitterArchiveRoot
+        )
+        extractPinnedZip(
+            "https://github.com/tree-sitter/tree-sitter/archive/refs/tags/v$windowsKTreeSitterVersion.tar.gz",
+            treeSitterArchiveRoot
+        )
+
+        val ktreesitterRoot = ktreesitterArchiveRoot.resolve("kotlin-tree-sitter-$windowsKTreeSitterVersion/ktreesitter")
+        val treeSitterRoot = treeSitterArchiveRoot.resolve("tree-sitter-$windowsKTreeSitterVersion")
+        val cmakeRoot = kTreeSitterBuild.get().asFile
+        cmakeRoot.mkdirs()
+        val outputRoot = kTreeSitterOutput.get().asFile
+        outputRoot.mkdirs()
+        val normalized = { file: File -> file.absolutePath.replace('\\', '/') }
+        cmakeRoot.resolve("CMakeLists.txt").writeText(
+            """
+            cmake_minimum_required(VERSION 3.12)
+            project(ktreesitter LANGUAGES C)
+            find_package(JNI REQUIRED)
+            set(CMAKE_C_STANDARD 11)
+            include_directories(
+                ${'$'}{JNI_INCLUDE_DIRS}
+                "${normalized(treeSitterRoot.resolve("lib/src"))}"
+                "${normalized(treeSitterRoot.resolve("lib/include"))}"
+            )
+            add_compile_definitions(TREE_SITTER_HIDE_SYMBOLS _DEFAULT_SOURCE _POSIX_C_SOURCE=200112L)
+            file(GLOB JNI_SOURCES "${normalized(ktreesitterRoot.resolve("src/jni"))}/*.c")
+            add_library(ktreesitter SHARED ${'$'}{JNI_SOURCES} "${normalized(treeSitterRoot.resolve("lib/src/lib.c"))}")
+            set_target_properties(ktreesitter PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${normalized(outputRoot)}"
+                LIBRARY_OUTPUT_DIRECTORY "${normalized(outputRoot)}"
+                ARCHIVE_OUTPUT_DIRECTORY "${normalized(outputRoot)}"
+                RUNTIME_OUTPUT_DIRECTORY_RELEASE "${normalized(outputRoot)}"
+                LIBRARY_OUTPUT_DIRECTORY_RELEASE "${normalized(outputRoot)}"
+                ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${normalized(outputRoot)}"
+                DEFINE_SYMBOL ""
+            )
+            """.trimIndent()
+        )
+
+        fun run(command: List<String>) {
+            val process = ProcessBuilder(command).inheritIO().start()
+            check(process.waitFor() == 0) { "Command failed: ${command.joinToString(" ")}" }
+        }
+        run(
+            listOf(
+                "cmake", "-S", cmakeRoot.absolutePath, "-B", kTreeSitterBuild.get().asFile.absolutePath,
+                "-DCMAKE_BUILD_TYPE=Release"
+            )
+        )
+        run(
+            listOf(
+                "cmake", "--build", kTreeSitterBuild.get().asFile.absolutePath,
+                "--config", "Release"
+            )
+        )
+        val output = outputRoot.resolve(nativeKTreeSitterLibrary)
+        require(output.isFile) { "KTreeSitter host JNI build did not produce $output" }
+    }
+}
+
+val installHostKTreeSitterLibrary = tasks.register<Copy>("installHostKTreeSitterLibrary") {
+    dependsOn(buildHostKTreeSitter)
+    onlyIf { nativeHostOs == "windows" || nativeHostOs == "macos" }
+    from(kTreeSitterOutput)
+    into(generatedGrammarSrc.dir("jvmMain/resources/lib/$nativeHostOs/$nativeHostArch"))
+    include(nativeKTreeSitterLibrary)
+}
+
 tasks.named<Copy>("jvmProcessResources") {
-    dependsOn(installHostParserLibrary)
+    dependsOn(installHostParserLibrary, installHostKTreeSitterLibrary)
     // CI stages the six independently built host libraries here before assembling the
     // platform-neutral CLI distribution. Local builds simply contribute their host library.
     from(parserNativePayloadDirectory)

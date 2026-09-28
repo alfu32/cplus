@@ -67,18 +67,10 @@ jobs:
           export PATH="$(cygpath -u "$(npm config get prefix)"):$PATH"
           fi
   
-          gradle_tasks=(":parser-tree-sitter:testTreeSitterGrammar")
-          # KTreeSitter 0.25.1 does not publish its separate base JNI library
-          # for Windows. The generated C-plus grammar DLL is still built and
-          # packaged on Windows, but JVM execution waits for a Windows base
-          # binding before it can be enabled on those hosts.
-          if [[ "$RUNNER_OS" != "Windows" ]]; then
-          gradle_tasks+=(":parser-tree-sitter:jvmTest")
-          else
-          echo "Skipping JVM Tree-sitter tests: KTreeSitter 0.25.1 has no Windows base JNI payload"
-          fi
-
-          ./gradlew "${gradle_tasks[@]}" --no-daemon
+          ./gradlew \
+            :parser-tree-sitter:jvmTest \
+            :parser-tree-sitter:testTreeSitterGrammar \
+            --no-daemon
 
       - name: Run host compiler and mapped-diagnostic regressions
         shell: bash
@@ -89,16 +81,12 @@ jobs:
           TCC: clang
           CPLUS_TEST_COMPILER: clang
         run: |
-          if [[ "$RUNNER_OS" != "Windows" ]]; then
           ./gradlew \
-              :parser-tree-sitter:jvmTest \
-              --tests 'cplus.parser.TreeSitterCPlusParserBackendTest.compilesPortableDialectAttributesAndStandardHeadersWithEveryHostDriver' \
-              --tests 'cplus.parser.TreeSitterCPlusParserBackendTest.allAvailableHostCompilersPreserveMappedMethodDiagnosticLineAndColumn' \
-              --no-daemon \
-              --max-workers=1
-          else
-          echo "Skipping JVM host-driver regressions: KTreeSitter 0.25.1 has no Windows base JNI payload"
-          fi
+            :parser-tree-sitter:jvmTest \
+            --tests 'cplus.parser.TreeSitterCPlusParserBackendTest.compilesPortableDialectAttributesAndStandardHeadersWithEveryHostDriver' \
+            --tests 'cplus.parser.TreeSitterCPlusParserBackendTest.allAvailableHostCompilersPreserveMappedMethodDiagnosticLineAndColumn' \
+            --no-daemon \
+            --max-workers=1
 
           host_os="${PARSER_HOST%%-*}"
           host_arch="${PARSER_HOST#*-}"
@@ -120,6 +108,15 @@ jobs:
           destination="parser-tree-sitter/build/parser-native-payload/lib/$host_os/$host_arch"
           mkdir -p "$destination"
           cp "$library_path" "$destination/$library"
+          if [[ "$host_os" == "windows" ]]; then
+          base_library_path="$(find parser-tree-sitter/build -type f -name 'ktreesitter.dll' -print -quit)"
+          elif [[ "$host_os" == "macos" ]]; then
+          base_library_path="$(find parser-tree-sitter/build -type f -name 'libktreesitter.dylib' -print -quit)"
+          fi
+          if [[ "$host_os" == "windows" || "$host_os" == "macos" ]]; then
+          test -n "$base_library_path"
+          cp "$base_library_path" "$destination/$(basename "$base_library_path")"
+          fi
       - name: Record parser host and resource manifest
         shell: bash
         env:
@@ -275,6 +272,10 @@ jobs:
           for jar in "$bare_jar" "$cross_jar"; do
             parser_hosts="$(jar tf "$jar" | grep -E '^lib/(linux|macos|windows)/(x64|aarch64)/(libktreesitter-c\.so|libktreesitter-c\.dylib|ktreesitter-c\.dll)$' | sort -u | wc -l)"
             test "$parser_hosts" -eq 6
+            parser_windows_base="$(jar tf "$jar" | grep -E '^lib/windows/(x64|aarch64)/ktreesitter\.dll$' | sort -u | wc -l)"
+            test "$parser_windows_base" -eq 2
+            parser_macos_base="$(jar tf "$jar" | grep -E '^lib/macos/(x64|aarch64)/libktreesitter\.dylib$' | sort -u | wc -l)"
+            test "$parser_macos_base" -eq 2
           done
           test "$(find build/parser-host-reports -name host.txt | wc -l | tr -d ' ')" -eq 6
           test "$(find build/parser-host-reports -name resources.txt | wc -l | tr -d ' ')" -eq 6
