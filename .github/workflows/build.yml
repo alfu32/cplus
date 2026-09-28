@@ -12,6 +12,8 @@ permissions:
 jobs:
   parser-host-matrix:
     name: Test Tree-sitter parser (${{ matrix.host }})
+    needs:
+      - prepare-tinycc
 
     strategy:
       fail-fast: false
@@ -35,6 +37,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinycc-compiler-api
+          path: lib
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -52,6 +59,7 @@ jobs:
           PARSER_HOST: ${{ matrix.host }}
           CC: clang
           CXX: clang++
+          TCC: clang
           CPLUS_TEST_COMPILER: clang
         run: |
           npm install --global tree-sitter-cli@0.25.10
@@ -70,6 +78,7 @@ jobs:
           PARSER_HOST: ${{ matrix.host }}
           CC: clang
           CXX: clang++
+          TCC: clang
           CPLUS_TEST_COMPILER: clang
         run: |
           ./gradlew \
@@ -151,6 +160,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Download bare and cross-without-sysroots TinyCC JARs
         run: bash .github/scripts/download-tinycc.sh latest tinycc-cross-cli-no-sysroots.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tinycc-compiler-api
+          path: lib/tinycc-cli.jar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
       - uses: actions/upload-artifact@v4
         with:
           name: tinycc-cli-payloads

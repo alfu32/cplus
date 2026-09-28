@@ -2345,7 +2345,7 @@ class TranspilerTest {
             ).run(listOf("compile", "-v2", source.toString(), "-o", executable.toString()))
             assertTrue(result != 0, "invalid C-plus unexpectedly compiled")
             assertTrue(source.toString() in errors.toString(), errors.toString())
-            assertTrue(":5:" in errors.toString(), errors.toString())
+            assertTrue(":4:" in errors.toString(), errors.toString())
             assertTrue("pass: lower-method-calls" in errors.toString(), errors.toString())
             assertTrue("pass: tcc-compile" in errors.toString(), errors.toString())
         } finally {
