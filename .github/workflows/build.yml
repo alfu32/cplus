@@ -209,7 +209,9 @@ jobs:
         with:
           pattern: tree-sitter-host-report-*
           path: build/parser-host-reports
-          merge-multiple: true
+          # Keep each host's host.txt/resources.txt in its artifact-named
+          # directory; flattening them overwrites five of the six reports.
+          merge-multiple: false
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
