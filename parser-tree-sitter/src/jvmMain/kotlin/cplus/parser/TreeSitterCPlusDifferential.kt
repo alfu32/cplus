@@ -2,6 +2,7 @@ package cplus.parser
 
 import cplus.CPlusImportPaths
 import cplus.CPlusLegacyPassSelection
+import cplus.CPlusSyntaxException
 import cplus.CPlusTarget
 import cplus.CPlusTranspiler
 import cplus.SourceSnapshot
@@ -73,6 +74,35 @@ data class TreeSitterTestDifferentialReport(
         get() = treeSitter.successful && astHarness != null && fixtureNamesMatch && assertionCountsMatch &&
             harnessFixtureNamesMatch && harnessAssertionCountsMatch && harnessTokensMatch && assertionSourceLinesMatch &&
             compilerOptionsMatch && sourceMapCoverageMatch
+}
+
+/** Rollback evidence for disabling fixture extraction in both migration frontends. */
+data class TreeSitterTestExtractionRollbackReport(
+    val legacyFailure: String?,
+    val legacyFailureLine: Int?,
+    val treeSitter: TreeSitterPrototypeResult,
+    val treeSitterBoundaryRetained: Boolean
+) {
+    val selectorContractHolds: Boolean
+        get() = legacyFailure != null && legacyFailureLine != null &&
+            !treeSitter.successful && treeSitterBoundaryRetained
+}
+
+/**
+ * Extraction-only substitution report. Runtime C-plus lowerers are intentionally disabled, so
+ * this contract compares fixture metadata and source locations without requiring a complete C
+ * emission from the surrounding module.
+ */
+data class TreeSitterTestExtractionOnlySubstitutionReport(
+    val legacy: TranscodedTestSource,
+    val treeSitter: TreeSitterPrototypeResult,
+    val fixtureNamesMatch: Boolean,
+    val assertionCountsMatch: Boolean,
+    val assertionSourceLinesMatch: Boolean
+) {
+    val successful: Boolean
+        get() = treeSitter.parserDiagnostics.isEmpty() && fixtureNamesMatch &&
+            assertionCountsMatch && assertionSourceLinesMatch
 }
 
 /**
@@ -154,6 +184,122 @@ class TreeSitterCPlusDifferentialRunner(
     private val backend: cplus.CPlusParserBackend = TreeSitterCPlusParserBackend(),
     private val sourceManager: cplus.SourceManager = cplus.SourceManager()
     ) {
+    /**
+     * Compare AST test extraction independently from every runtime lowering pass.
+     *
+     * The generated harness still uses the established compatibility bridge after extraction;
+     * this operation isolates the extraction contract itself and leaves all runtime lowerers
+     * disabled in both frontends. It is migration evidence, not a promotion decision.
+     */
+    fun compareTestExtractionSubstitution(
+        source: SourceSnapshot,
+        targetOs: String = CPlusTarget.hostOs(),
+        importPaths: CPlusImportPaths = CPlusImportPaths(),
+        targetArch: String = CPlusTarget.hostArch()
+    ): TreeSitterTestDifferentialReport = compareTests(
+        source = source,
+        targetOs = targetOs,
+        importPaths = importPaths,
+        targetArch = targetArch,
+        legacyPassSelection = CPlusLegacyPassSelection(
+            disabledPasses = CPlusLegacyPassSelection.KNOWN_PASSES,
+            extractTests = true
+        ),
+        treeSitterPassSelection = TreeSitterPassSelection(
+            disabledRuntimePasses = CPlusLegacyPassSelection.KNOWN_PASSES,
+            extractTests = true
+        )
+    )
+
+    /**
+     * Disable extraction in both frontends and require a mapped, fail-closed fixture boundary.
+     * Neither frontend may silently emit a runtime C program with the fixture left behind.
+     */
+    fun compareTestExtractionRollback(
+        source: SourceSnapshot,
+        targetOs: String = CPlusTarget.hostOs(),
+        importPaths: CPlusImportPaths = CPlusImportPaths(),
+        targetArch: String = CPlusTarget.hostArch()
+    ): TreeSitterTestExtractionRollbackReport {
+        val disabledRuntimePasses = CPlusLegacyPassSelection.KNOWN_PASSES
+        val legacyResult = runCatching {
+            CPlusTranspiler().transpileTests(
+                source.text,
+                source.id.value,
+                importPaths = importPaths,
+                targetOs = targetOs,
+                legacyPassSelection = CPlusLegacyPassSelection(
+                    disabledPasses = disabledRuntimePasses,
+                    extractTests = false
+                )
+            )
+        }
+        val legacyException = legacyResult.exceptionOrNull()
+        val legacySyntaxException = legacyException as? CPlusSyntaxException
+        val treeSitter = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sourceManager,
+            targetOs = targetOs,
+            importPaths = importPaths,
+            targetArch = targetArch,
+            passSelection = TreeSitterPassSelection(
+                disabledRuntimePasses = disabledRuntimePasses,
+                extractTests = false
+            )
+        ).transpile(source)
+        return TreeSitterTestExtractionRollbackReport(
+            legacyFailure = legacyException?.message,
+            legacyFailureLine = legacySyntaxException?.sourceSpan?.startLine,
+            treeSitter = treeSitter,
+            treeSitterBoundaryRetained = treeSitter.unsupportedNodes.any {
+                it.syntaxKind == "cplus_test_declaration"
+            }
+        )
+    }
+
+    /** Compare fixture discovery while all runtime lowerers remain disabled. */
+    fun compareTestExtractionOnlySubstitution(
+        source: SourceSnapshot,
+        targetOs: String = CPlusTarget.hostOs(),
+        importPaths: CPlusImportPaths = CPlusImportPaths(),
+        targetArch: String = CPlusTarget.hostArch()
+    ): TreeSitterTestExtractionOnlySubstitutionReport {
+        val disabledRuntimePasses = CPlusLegacyPassSelection.KNOWN_PASSES
+        val legacy = CPlusTranspiler().transpileTests(
+            source.text,
+            source.id.value,
+            importPaths = importPaths,
+            targetOs = targetOs,
+            legacyPassSelection = CPlusLegacyPassSelection(
+                disabledPasses = disabledRuntimePasses,
+                extractTests = true
+            )
+        )
+        val treeSitter = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sourceManager,
+            targetOs = targetOs,
+            importPaths = importPaths,
+            targetArch = targetArch,
+            passSelection = TreeSitterPassSelection(
+                disabledRuntimePasses = disabledRuntimePasses,
+                extractTests = true
+            )
+        ).transpile(source)
+        return TreeSitterTestExtractionOnlySubstitutionReport(
+            legacy = legacy,
+            treeSitter = treeSitter,
+            fixtureNamesMatch = legacy.testNames == treeSitter.testFixtures.map { it.name },
+            assertionCountsMatch = legacy.fixtures.map { it.assertionCount } ==
+                treeSitter.testFixtures.map { it.assertions.size },
+            assertionSourceLinesMatch = legacy.fixtures.flatMap { fixture ->
+                fixture.assertionSourceSpans.map { it.startLine }
+            } == treeSitter.testFixtures.flatMap { fixture ->
+                fixture.assertions.map { it.span.startLine }
+            }
+        )
+    }
+
     fun compareTests(
         source: SourceSnapshot,
         targetOs: String = CPlusTarget.hostOs(),

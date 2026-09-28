@@ -54,6 +54,7 @@ B022	boundary	documentation/spec/SPEC.errors.md	## Supported subset and diagnost
 B023	boundary	documentation/spec/SPEC.language.md	## Struct Methods	diagnosesInstanceMethodsWithoutTheRequiredSelfReceiver
 B024	boundary	documentation/spec/SPEC.language.md	## Struct Methods	diagnosesStaticAndInstanceCallsWithTheWrongReceiverKind
 B025	boundary	documentation/spec/SPEC.language.md	## Struct Methods	validatesMethodAccessOperatorsAndSinglePointerReceiverDepth
+B026	boundary	documentation/spec/SPEC.comptime.md	## Reliability Rules and Limitations	astComptimeRollbackFailsClosedAtTheOriginalSourceSpan
 O001	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterMethodLoweringProduceTheSameRuntimeBehavior
 O002	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterAgreeOnStaticFactoriesAndPointerReceivers
 O003	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterPreserveCommonCFunctionPointerAndControlFlowBehavior
@@ -68,3 +69,5 @@ O011	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legac
 O012	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterMethodErrorsMapToTheSameOriginalSourceLine
 O013	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterTestDiscoveryProduceTheSameRunnableFixtures
 O014	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterAgreeOnPlatformConditionalCodeAndCompilerFlags
+O015	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	comptimeScalarDifferentialMatchesLegacyAndAstFrontends
+O016	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	comptimeStringDifferentialMatchesLegacyAndAstFrontends

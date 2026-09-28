@@ -21,7 +21,6 @@ import cplus.CPlusMethodCallLoweringPass
 import cplus.CPlusStructMethodLoweringPass
 import cplus.CPlusTranspiler
 import cplus.CPlusLegacyPassSelection
-import cplus.CPlusSyntaxException
 import cplus.CPlusParserShadowRunner
 import cplus.CPlusSyntaxNode
 import cplus.CPlusParseResult
@@ -46,7 +45,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
-import kotlin.test.assertFailsWith
 
 class TreeSitterCPlusParserBackendTest {
     private val backend = TreeSitterCPlusParserBackend()
@@ -233,8 +231,8 @@ class TreeSitterCPlusParserBackendTest {
                 fields
             }
 
-        assertEquals(68, rows.size, "frontend-v1.tsv case count changed; update the frozen count intentionally")
-        assertEquals(68, contractRows.size, "frontend-v1-contract.tsv case count changed; update the frozen count intentionally")
+        assertEquals(71, rows.size, "frontend-v1.tsv case count changed; update the frozen count intentionally")
+        assertEquals(71, contractRows.size, "frontend-v1-contract.tsv case count changed; update the frozen count intentionally")
         assertEquals(rows.size, rows.map { it[0] }.toSet().size, "frontend corpus IDs must be unique")
         assertEquals(
             contractRows.size,
@@ -245,7 +243,7 @@ class TreeSitterCPlusParserBackendTest {
         val contractById = contractRows.associateBy { it[0] }
         assertEquals(rows.map { it[0] }.toSet(), contractById.keys, "manifest and result contract IDs must match")
         assertEquals(
-            mapOf("normative" to 29, "boundary" to 25, "overlap" to 14),
+            mapOf("normative" to 29, "boundary" to 26, "overlap" to 16),
             rows.groupingBy { it[1] }.eachCount(),
             "frontend corpus categories changed; update the frozen counts intentionally"
         )
@@ -543,6 +541,38 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(
             failures.isEmpty(),
             "standard-library fixture harness differential failures (${inputs.size} sources):\n" +
+                failures.joinToString("\n")
+        )
+    }
+
+    @Test
+    fun standardLibraryTestExtractionSubstitutionMeetsIndependentContract() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib/tests")) }
+            ?: error("could not locate repository standard-library tests from ${Path.of("").toAbsolutePath()}")
+        val stdlibRoot = repository.resolve("stdlib").toAbsolutePath().normalize()
+        val inputs = Files.walk(repository.resolve("stdlib/tests")).use { paths ->
+            paths.filter { it.toString().endsWith(".cp") || it.toString().endsWith(".c+") }
+                .sorted()
+                .toList()
+        }
+        val failures = mutableListOf<String>()
+        inputs.forEach { path ->
+            val relative = repository.relativize(path).toString()
+            val source = sources.open(SourceId.named(path.toRealPath().toString()), Files.readString(path))
+            val report = TreeSitterCPlusDifferentialRunner(backend, sources)
+                .compareTestExtractionOnlySubstitution(
+                    source,
+                    targetOs = "linux",
+                    importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
+                )
+            if (!report.successful) {
+                failures += "$relative: $report"
+            }
+        }
+        assertTrue(
+            failures.isEmpty(),
+            "standard-library extraction substitution failures (${inputs.size} sources):\n" +
                 failures.joinToString("\n")
         )
     }
@@ -2490,6 +2520,49 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun comptimeScalarDifferentialMatchesLegacyAndAstFrontends() {
+        val text = """
+            comptime int @answer = 40 + 2;
+            int main(void) { return comptime answer - 42; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("comptime-scalar-differential.cp"), text)
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compare(source)
+
+        assertTrue(report.successful, report.toString())
+        assertTrue(report.normalizedTokensMatch, report.tokenDifference.orEmpty())
+        assertTrue(report.compilerOptionsMatch, report.toString())
+        assertTrue(report.sourceMapCoverageMatch, report.toString())
+        compileAndRunC(report.legacy.code, compilerOptions = report.legacy.compilerOptions)
+        compileAndRunC(
+            report.treeSitter.transcodedSource!!.code,
+            compilerOptions = report.treeSitter.compilerOptions
+        )
+    }
+
+    @Test
+    fun comptimeStringDifferentialMatchesLegacyAndAstFrontends() {
+        val text = """
+            comptime string @generated_name() { return "generated_" + "answer"; }
+            int main(void) {
+                const char* value = comptime generated_name();
+                return value[0] == 'g' && value[10] == 'a' && value[16] == '\0' ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("comptime-string-differential.cp"), text)
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compare(source)
+
+        assertTrue(report.successful, report.toString())
+        assertTrue(report.normalizedTokensMatch, report.tokenDifference.orEmpty())
+        assertTrue(report.compilerOptionsMatch, report.toString())
+        assertTrue(report.sourceMapCoverageMatch, report.toString())
+        compileAndRunC(report.legacy.code, compilerOptions = report.legacy.compilerOptions)
+        compileAndRunC(
+            report.treeSitter.transcodedSource!!.code,
+            compilerOptions = report.treeSitter.compilerOptions
+        )
+    }
+
+    @Test
     fun prototypeErasesUnusedUniqueEntityGeneratorsBeforeCEmission() {
         val text = """
             comptime type @unused_box(type T) {
@@ -3070,6 +3143,24 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun astComptimeRollbackFailsClosedAtTheOriginalSourceSpan() {
+        val text = "comptime int @answer = 42; int main(void) { return comptime answer; }"
+        val source = sources.open(SourceId.named("rollback-comptime.cp"), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            passSelection = TreeSitterPassSelection(resolveComptime = false)
+        ).transpile(source)
+
+        assertFalse(result.successful)
+        assertNull(result.cSource)
+        val boundary = result.unsupportedNodes.single()
+        assertEquals("cplus_comptime_declaration", boundary.syntaxKind)
+        assertEquals(source.id.value, boundary.span.file)
+        assertEquals(text.indexOf("comptime int"), boundary.span.startOffset)
+    }
+
+    @Test
     fun differentialRunnerProducesAStableOverlapReport() {
         val text = """
             #include <stdio.h>
@@ -3567,12 +3658,8 @@ class TreeSitterCPlusParserBackendTest {
             }
         """.trimIndent()
         val source = sources.open(SourceId.named("test-extraction-substitution.cp"), text)
-        val disabledRuntimePasses = CPlusLegacyPassSelection.KNOWN_PASSES
-        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compareTests(
-            source,
-            legacyPassSelection = CPlusLegacyPassSelection(disabledPasses = disabledRuntimePasses),
-            treeSitterPassSelection = TreeSitterPassSelection(disabledRuntimePasses = disabledRuntimePasses)
-        )
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources)
+            .compareTestExtractionSubstitution(source)
 
         assertTrue(report.successful, report.toString() + "\n" + report.harnessTokenDifference.orEmpty())
         assertEquals(emptyList<String>(), report.legacy.source.frontendPasses)
@@ -3584,34 +3671,32 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(report.harnessTokensMatch, report.harnessTokenDifference.orEmpty())
         assertTrue(report.assertionSourceLinesMatch, report.toString())
 
-        val legacyFailure = assertFailsWith<CPlusSyntaxException> {
-            CPlusTranspiler().transpileTests(
-                text,
-                source.id.value,
-                legacyPassSelection = CPlusLegacyPassSelection(
-                    disabledPasses = disabledRuntimePasses,
-                    extractTests = false
-                )
-            )
-        }
-        assertEquals(3, legacyFailure.sourceSpan?.startLine)
-
-        val astRollback = TreeSitterCPlusPrototypeTranspiler(
-            backend = backend,
-            sourceManager = sources,
-            passSelection = TreeSitterPassSelection(
-                disabledRuntimePasses = disabledRuntimePasses,
-                extractTests = false
-            )
-        ).transpile(source)
-        assertFalse(astRollback.successful)
-        assertNull(astRollback.transcodedSource)
+        val rollback = TreeSitterCPlusDifferentialRunner(backend, sources)
+            .compareTestExtractionRollback(source)
+        assertTrue(rollback.selectorContractHolds, rollback.toString())
+        assertEquals(3, rollback.legacyFailureLine)
+        assertNull(rollback.treeSitter.transcodedSource)
         assertTrue(
-            astRollback.unsupportedNodes.any {
+            rollback.treeSitter.unsupportedNodes.any {
                 it.syntaxKind == "cplus_test_declaration" && it.span.startLine == 3
             },
-            "AST extraction rollback lost the fixture boundary: ${astRollback.unsupportedNodes}"
+            "AST extraction rollback lost the fixture boundary: ${rollback.treeSitter.unsupportedNodes}"
         )
+    }
+
+    @Test
+    fun testExtractionOnlySubstitutionAllowsSourcesWithoutFixtures() {
+        val text = "int main(void) { return 0; }"
+        val source = sources.open(SourceId.named("test-extraction-no-fixtures.cp"), text)
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources)
+            .compareTestExtractionOnlySubstitution(source)
+
+        assertTrue(report.successful, report.toString())
+        assertTrue(report.legacy.testNames.isEmpty())
+        assertTrue(report.treeSitter.testFixtures.isEmpty())
+        assertTrue(report.fixtureNamesMatch)
+        assertTrue(report.assertionCountsMatch)
+        assertTrue(report.assertionSourceLinesMatch)
     }
 
     @Test

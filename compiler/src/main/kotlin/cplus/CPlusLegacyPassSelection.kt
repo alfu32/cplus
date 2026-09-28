@@ -10,7 +10,9 @@ package cplus
 data class CPlusLegacyPassSelection(
     val disabledPasses: Set<String> = emptySet(),
     /** Test-mode extraction is selected independently from runtime lowering passes. */
-    val extractTests: Boolean = true
+    val extractTests: Boolean = true,
+    /** Migration-only rollback switch for legacy comptime resolution. */
+    val resolveComptime: Boolean = true
 ) {
     init {
         require(disabledPasses.all { it in KNOWN_PASSES }) {

@@ -127,6 +127,15 @@ class CPlusTranspiler {
             SourceId.named(sourceName ?: "<cplus-input>"),
             source
         ).sourceFile
+        if (!legacyPassSelection.resolveComptime) {
+            val comptimeSpan = firstLegacyComptimeItemSpan(sourceFile)
+            if (comptimeSpan != null) {
+                throw CPlusSyntaxException(
+                    "comptime resolution is disabled for this frontend selection",
+                    comptimeSpan
+                )
+            }
+        }
         val comptime = logger.pass("comptime-resolve") {
             ComptimeCompiler(sourceFile, logger, importPaths, targetOs, sourceManager)
                 .compile(

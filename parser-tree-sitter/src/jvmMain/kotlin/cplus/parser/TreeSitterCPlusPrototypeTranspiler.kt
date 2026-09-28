@@ -60,7 +60,9 @@ data class TreeSitterUnsupportedConstruct(val syntaxKind: String, val span: cplu
 data class TreeSitterPassSelection(
     val disabledRuntimePasses: Set<String> = emptySet(),
     /** Migration-only test-mode switch; runtime lowering remains independently selectable. */
-    val extractTests: Boolean = true
+    val extractTests: Boolean = true,
+    /** Migration-only rollback switch for the AST comptime/materialization frontend. */
+    val resolveComptime: Boolean = true
 ) {
     init {
         require(disabledRuntimePasses.all { it in KNOWN_RUNTIME_PASSES }) {
@@ -108,6 +110,18 @@ class TreeSitterCPlusPrototypeTranspiler(
         var sourceOrder: List<SourceId> = emptyList()
         var compilerOptionOrder: List<SourceId> = emptyList()
         var sourceImports: List<cplus.SourceImportEdge> = emptyList()
+        if (!passSelection.resolveComptime) {
+            val comptimeNode = descendants(parsed.root).firstOrNull { it.kind in CPLUS_COMPTIME_NODES }
+            if (comptimeNode != null) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    emptyList(),
+                    emptyList(),
+                    listOf(TreeSitterUnsupportedConstruct(comptimeNode.kind, comptimeNode.span)),
+                    testFixtures = testFixtures
+                )
+            }
+        }
         val conditionalPass = TreeSitterComptimeConditionalLowering()
         var conditionalPassCount = 0
         while (conditionalPassCount < MAX_COMPTIME_CONDITIONAL_PASSES) {
@@ -553,6 +567,25 @@ class TreeSitterCPlusPrototypeTranspiler(
             }
         }
         ast = CPlusAstAdapter().adapt(parsed)
+        // Extraction-only migration probes need fixture metadata even when runtime lowerers are
+        // deliberately disabled and the surrounding source must fail closed at C-plus nodes.
+        // Do not replace `mapped` here: the normal pipeline still lowers fixture bodies after
+        // runtime passes, while this probe only records the extraction boundary.
+        if (passSelection.extractTests &&
+            passSelection.disabledRuntimePasses == CPlusFrontendPassIds.ALL
+        ) {
+            val extractionProbe = CPlusTestExtractionPass().extract(ast, mapped)
+            if (extractionProbe.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    emptyList(),
+                    extractionProbe.diagnostics,
+                    emptyList(),
+                    testFixtures = testFixtures
+                )
+            }
+            testFixtures = extractionProbe.fixtures
+        }
         val disabledRuntimeKinds = buildSet {
             if (!passSelection.enabled(CPlusFrontendPassIds.EXTRACT_THROWS)) {
                 add("cplus_throws_annotation")
@@ -829,5 +862,11 @@ class TreeSitterCPlusPrototypeTranspiler(
     private companion object {
         const val MAX_COMPTIME_CONDITIONAL_PASSES = 128
         val CPLUS_MODULE_IMPORT_NODES = setOf("cplus_comptime_import", "cplus_at_import")
+        val CPLUS_COMPTIME_NODES = setOf(
+            "cplus_comptime_declaration", "cplus_comptime_block", "cplus_comptime_function_definition",
+            "cplus_comptime_invocation", "cplus_comptime_value", "cplus_comptime_import", "cplus_comptime_flags",
+            "cplus_comptime_expression", "cplus_comptime_conditional", "cplus_code_fragment", "cplus_at_call_expression",
+            "cplus_legacy_type_generator", "cplus_legacy_function_generator", "cplus_legacy_comptime_invocation"
+        )
     }
 }

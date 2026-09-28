@@ -54,6 +54,7 @@ B022	boundary	mapped-diagnostic
 B023	boundary	mapped-diagnostic
 B024	boundary	mapped-diagnostic
 B025	boundary	mapped-diagnostic
+B026	boundary	mapped-diagnostic
 O001	overlap	differential
 O002	overlap	differential
 O003	overlap	differential
@@ -68,3 +69,5 @@ O011	overlap	differential
 O012	overlap	differential
 O013	overlap	differential
 O014	overlap	differential
+O015	overlap	differential
+O016	overlap	differential

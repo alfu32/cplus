@@ -1056,6 +1056,10 @@ internal class ComptimeCompiler(
     }
 }
 
+/** Returns the first source span owned by the legacy comptime parser, if any. */
+internal fun firstLegacyComptimeItemSpan(source: SourceFile): SourceSpan? =
+    ComptimeParser(source).parse().items.minByOrNull { it.start }?.let { source.span(it.start, it.end) }
+
 internal data class ComptimeCompilation(
     val runtime: MappedText,
     val tests: List<ComptimeTestBlock>,
