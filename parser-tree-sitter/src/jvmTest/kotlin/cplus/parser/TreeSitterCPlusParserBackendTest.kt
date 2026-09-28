@@ -2584,7 +2584,7 @@ class TreeSitterCPlusParserBackendTest {
         val generated = result.cSource!!.text
         assertTrue("int list_map(" in generated, generated.takeLast(8_000))
         assertTrue("named_value_list_t *input" in generated, generated.takeLast(8_000))
-        assertTrue("int(*callback)(borrowed named_value_t *item, size_t index)" in generated, generated.takeLast(8_000))
+        assertTrue("int(*callback)(CPLUS_BORROWED named_value_t *item, size_t index)" in generated, generated.takeLast(8_000))
         assertFalse("@InputList" in generated || "@OutputList" in generated || "@T" in generated || "@R" in generated, generated.takeLast(8_000))
         assertC11Syntax(generated, "examples/generic_list.cp")
         val compiler = cplusTestCompilers(listOf("cc", "gcc", "clang")).firstOrNull { candidate ->
@@ -4826,6 +4826,8 @@ class TreeSitterCPlusParserBackendTest {
         )
         val generated = result.cSource?.text ?: error("portable dialect output is missing")
         assertTrue("__attribute__((noinline))" in generated, generated)
+        assertTrue("CPLUS_COLD" in generated, generated)
+        assertTrue("#define cold" !in generated, generated)
         assertTrue("dialect_surface__read" in generated, generated)
         compileAndRunC(generated)
     }
@@ -6485,10 +6487,10 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
 
         assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
         val methods = result.cSource!!
-        assertTrue(methods.text.contains("pub int counter__increment(borrowed mut counter_t *self, int amount)"), methods.text)
-        assertTrue(methods.text.contains("static pub int counter__zero(void)"), methods.text)
-        assertTrue(methods.text.contains("static pub counter_t *counter__create(void)"), methods.text)
-        assertTrue(methods.text.contains("pub int counter__read(borrowed counter_t *self);"), methods.text)
+        assertTrue(methods.text.contains("CPLUS_PUB int counter__increment(CPLUS_BORROWED CPLUS_MUT counter_t *self, int amount)"), methods.text)
+        assertTrue(methods.text.contains("static CPLUS_PUB int counter__zero(void)"), methods.text)
+        assertTrue(methods.text.contains("static CPLUS_PUB counter_t *counter__create(void)"), methods.text)
+        assertTrue(methods.text.contains("CPLUS_PUB int counter__read(CPLUS_BORROWED counter_t *self);"), methods.text)
         assertTrue(methods.text.contains("counter__increment(&counter, 2)"), methods.text)
         assertTrue(methods.text.contains("counter__increment(pointer, 0)"), methods.text)
         assertTrue(methods.text.contains("counter__zero()"), methods.text)

@@ -1366,7 +1366,7 @@ class TranspilerTest {
         val result = CPlusTranspiler().transpile(source, "keyword-type.cp").code
         assertTrue("typedef struct int_list_t" in result, result)
         assertTrue("} int_list_t;" in result, result)
-        assertTrue("int int_list__first(borrowed int_list_t *self)" in result, result)
+        assertTrue("int int_list__first(CPLUS_BORROWED int_list_t *self)" in result, result)
         assertTrue("int_list__first(&values)" in result, result)
         assertTrue("@typename" !in result, result)
 
@@ -1583,13 +1583,13 @@ class TranspilerTest {
         """.trimIndent()
 
         val result = CPlusTranspiler().transpile(source).code
-        assertTrue("#define borrowed" in result, result)
-        assertTrue("#define scratch" in result, result)
-        assertTrue("#define hot" in result, result)
-        assertTrue("#define warm" in result, result)
-        assertTrue("#define cold" in result, result)
-        assertTrue("pub int counter__add(borrowed mut counter_t *self, int amount)" in result, result)
-        assertTrue("static pub counter_t* counter__alloc_init(int initial)" in result, result)
+        assertTrue("#define CPLUS_BORROWED" in result, result)
+        assertTrue("#define CPLUS_SCRATCH" in result, result)
+        assertTrue("#define CPLUS_HOT" in result, result)
+        assertTrue("#define CPLUS_WARM" in result, result)
+        assertTrue("#define CPLUS_COLD" in result, result)
+        assertTrue("CPLUS_PUB int counter__add(CPLUS_BORROWED CPLUS_MUT counter_t *self, int amount)" in result, result)
+        assertTrue("static CPLUS_PUB counter_t* counter__alloc_init(int initial)" in result, result)
         assertTrue("counter__add(&counter, 3)" in result, result)
         assertTrue("counter__alloc_init(0)" in result, result)
     }
@@ -1605,14 +1605,14 @@ class TranspilerTest {
             """.trimIndent()
         ).code
 
-        assertTrue("#define scratch" in generated, generated)
-        assertTrue("#define hot" in generated, generated)
-        assertTrue("#define warm" in generated, generated)
-        assertTrue("#define cold" in generated, generated)
-        assertTrue("scratch char* temporary;" in generated, generated)
-        assertTrue("hot node_t* active;" in generated, generated)
-        assertTrue("warm char* text;" in generated, generated)
-        assertTrue("cold unsigned char* snapshot;" in generated, generated)
+        assertTrue("#define CPLUS_SCRATCH" in generated, generated)
+        assertTrue("#define CPLUS_HOT" in generated, generated)
+        assertTrue("#define CPLUS_WARM" in generated, generated)
+        assertTrue("#define CPLUS_COLD" in generated, generated)
+        assertTrue("CPLUS_SCRATCH char* temporary;" in generated, generated)
+        assertTrue("CPLUS_HOT node_t* active;" in generated, generated)
+        assertTrue("CPLUS_WARM char* text;" in generated, generated)
+        assertTrue("CPLUS_COLD unsigned char* snapshot;" in generated, generated)
     }
 
     @Test
@@ -1808,8 +1808,8 @@ class TranspilerTest {
         val result = CPlusTranspiler().transpile(
             "priv int read(owned char* output);\nborrowed int* value;\n"
         ).code
-        assertTrue("priv int read(owned char* output);" in result, result)
-        assertTrue("borrowed int* value;" in result, result)
+        assertTrue("CPLUS_PRIV int read(CPLUS_OWNED char* output);" in result, result)
+        assertTrue("CPLUS_BORROWED int* value;" in result, result)
     }
 
     @Test
@@ -2044,14 +2044,14 @@ class TranspilerTest {
         val result = transpiled.code
 
         assertTrue("typedef struct generated_box_t" in result, result)
-        assertTrue("int generated_box__get(borrowed generated_box_t *self)" in result, result)
+        assertTrue("int generated_box__get(CPLUS_BORROWED generated_box_t *self)" in result, result)
         assertTrue("generated_box__get(&box)" in result, result)
         assertTrue("@emit_seed" !in result, result)
         assertTrue("@emit_box" !in result, result)
         assertTrue("@type" !in result, result)
         assertTrue("@box" !in result, result)
         val generatedMethodLine = result.lines().indexOfFirst {
-            "generated_box__get(borrowed generated_box_t *self)" in it
+            "generated_box__get(CPLUS_BORROWED generated_box_t *self)" in it
         } + 1
         assertTrue(generatedMethodLine > 0, result)
         val generatedMethodOrigin = transpiled.sourceMap.sourceForGeneratedLine(generatedMethodLine)
@@ -2169,8 +2169,8 @@ class TranspilerTest {
                 }
             """.trimIndent()
         ).code
-        assertTrue("int (*callback)(borrowed int* item, size_t index)" in result, result)
-        assertTrue("int_list__each(borrowed int_list_t *self" in result, result)
+        assertTrue("int (*callback)(CPLUS_BORROWED int* item, size_t index)" in result, result)
+        assertTrue("int_list__each(CPLUS_BORROWED int_list_t *self" in result, result)
         assertTrue("callback(&self->items[i], i)" in result, result)
         assertTrue("int_list__each(&values, visit)" in result, result)
     }

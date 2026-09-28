@@ -240,6 +240,7 @@ class MappedEmitter(private val sourceFile: SourceFile) {
         compilerOptions: List<String> = emptyList()
     ): TranscodedSource {
         val output = StringBuilder(prelude)
+        val hygienicMapped = rewriteCPlusAnnotationMacros(mapped)
         val uniqueCompilerOptions = CompilerOptions.distinct(compilerOptions)
         if (uniqueCompilerOptions.isNotEmpty()) {
             output.append("/* cplus compiler flags: ")
@@ -252,10 +253,10 @@ class MappedEmitter(private val sourceFile: SourceFile) {
         var previousSourceFile: String? = null
         var cursor = 0
 
-        while (cursor < mapped.text.length) {
-            val newline = mapped.text.indexOf('\n', cursor)
-            val end = if (newline < 0) mapped.text.length else newline + 1
-            val firstOrigin = mapped.firstOrigin(cursor, end)
+        while (cursor < hygienicMapped.text.length) {
+            val newline = hygienicMapped.text.indexOf('\n', cursor)
+            val end = if (newline < 0) hygienicMapped.text.length else newline + 1
+            val firstOrigin = hygienicMapped.firstOrigin(cursor, end)
             val sourceSpan = firstOrigin?.file?.span(firstOrigin.offset)
             if (sourceSpan != null && (
                     sourceSpan.file != previousSourceFile ||
@@ -273,10 +274,10 @@ class MappedEmitter(private val sourceFile: SourceFile) {
             if (sourceSpan != null) {
                 entries += SourceMapEntry(physicalLine, sourceSpan)
             }
-            output.append(mapped.text, cursor, end)
-            physicalLine += mapped.text.substring(cursor, end).count { it == '\n' }
-            previousSourceLine = sourceSpan?.startLine?.plus(mapped.text.substring(cursor, end).count { it == '\n' })
-                ?.minus(if (end > cursor && mapped.text[end - 1] == '\n') 1 else 0)
+            output.append(hygienicMapped.text, cursor, end)
+            physicalLine += hygienicMapped.text.substring(cursor, end).count { it == '\n' }
+            previousSourceLine = sourceSpan?.startLine?.plus(hygienicMapped.text.substring(cursor, end).count { it == '\n' })
+                ?.minus(if (end > cursor && hygienicMapped.text[end - 1] == '\n') 1 else 0)
             previousSourceFile = sourceSpan?.file
             if (sourceSpan == null) {
                 previousSourceLine = null

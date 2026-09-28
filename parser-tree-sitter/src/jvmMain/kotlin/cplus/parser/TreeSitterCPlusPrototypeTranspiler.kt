@@ -27,6 +27,7 @@ import cplus.SourceSpan
 import cplus.SourceManager
 import cplus.SourceSnapshot
 import cplus.TranscodedSource
+import cplus.rewriteCPlusAnnotationMacros
 
 data class TreeSitterPrototypeResult(
     val cSource: MappedText?,
@@ -62,6 +63,7 @@ internal val TREE_SITTER_COMPTIME_ROLLBACK_NODES = setOf(
     "cplus_comptime_expression", "cplus_comptime_conditional", "cplus_code_fragment", "cplus_at_call_expression",
     "cplus_legacy_type_generator", "cplus_legacy_function_generator", "cplus_legacy_comptime_invocation"
 )
+
 
 /**
  * Per-pass migration switch for the AST runtime pipeline. Disabled passes are not silently
@@ -801,6 +803,9 @@ class TreeSitterCPlusPrototypeTranspiler(
             )
         }
         val generatedC = cEmission.source ?: error("successful AST C emission must contain output")
+        val hygienicGeneratedC = rewriteCPlusAnnotationMacros(generatedC)
+        // Validate the emitter's C-plus-shaped intermediate with the C-plus
+        // grammar; the hygienic macro names are applied only to final C output.
         val emittedParse = backend.parse(snapshotFor(generatedC.text))
         if (emittedParse.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(
@@ -813,7 +818,7 @@ class TreeSitterCPlusPrototypeTranspiler(
             )
         }
         val transcoded = MappedEmitter(source.sourceFile)
-            .emit(generatedC, "", allocationAnalysis, compilerOptions)
+            .emit(hygienicGeneratedC, "", allocationAnalysis, compilerOptions)
             .copy(
                 sourceOrder = sourceOrder,
                 sourceImports = sourceImports,
@@ -824,7 +829,7 @@ class TreeSitterCPlusPrototypeTranspiler(
                     .toSet()
             )
         return TreeSitterPrototypeResult(
-            generatedC,
+            hygienicGeneratedC,
             emptyList(),
             emptyList(),
             emptyList(),
@@ -863,6 +868,7 @@ class TreeSitterCPlusPrototypeTranspiler(
         sequenceOf(node) + node.children.asSequence().flatMap { descendants(it) }
 
     private fun mappedIdentity(source: SourceSnapshot): MappedText = MappedText.identity(source.sourceFile)
+
 
     private fun ParserDiagnostic.withMappedSpan(mapped: MappedText, span: SourceSpan): ParserDiagnostic =
         copy(span = mapped.toOriginalSpan(span))

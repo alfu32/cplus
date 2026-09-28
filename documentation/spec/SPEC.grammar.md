@@ -115,7 +115,7 @@ annotation            = intent-keyword | memory-hint ;
 ```
 
 `pub`, `priv`, `static`/`stat`, ownership, mutation, and memory hints are retained
-as metadata and emitted as empty macros where appropriate. They are not ownership
+as metadata and emitted as hygienic `CPLUS_*` empty macros where appropriate. They are not ownership
 enforcement. C declarator binding order is preserved: an array of function pointers
 is not a pointer to an array, and a pointer to a multidimensional array remains
 distinct in the AST.

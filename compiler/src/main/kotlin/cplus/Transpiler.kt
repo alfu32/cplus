@@ -617,16 +617,16 @@ private object CPlusPreamble {
         /* C-plus source annotations are intentionally retained in generated C. */
         #ifndef CPLUS_ANNOTATIONS_DEFINED
         #define CPLUS_ANNOTATIONS_DEFINED
-        #define pub
-        #define priv
-        #define mut
-        #define borrowed
-        #define owned
-        #define stat
-        #define scratch
-        #define hot
-        #define warm
-        #define cold
+        #define CPLUS_PUB
+        #define CPLUS_PRIV
+        #define CPLUS_MUT
+        #define CPLUS_BORROWED
+        #define CPLUS_OWNED
+        #define CPLUS_STAT
+        #define CPLUS_SCRATCH
+        #define CPLUS_HOT
+        #define CPLUS_WARM
+        #define CPLUS_COLD
         #endif
 
     """.trimIndent() + "\n\n"

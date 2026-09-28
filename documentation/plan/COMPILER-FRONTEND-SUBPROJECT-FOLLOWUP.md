@@ -478,4 +478,7 @@ All supported receiver expressions have a resolved type and exact C lowering; or
 
 ### Next update protocol
 
+| 2026-09-28 | Made emitted annotation macros hygienic across both frontends | `rewriteCPlusAnnotationMacros` rewrites standalone `pub`, `priv`, `mut`, `borrowed`, `owned`, `stat`, `scratch`, `hot`, `warm`, and `cold` tokens to `CPLUS_*` names outside comments/literals; generated C now defines only the prefixed empty macros. `compilesPortableDialectAttributesAndStandardHeadersWithEveryHostDriver` passes, including the standard-header/attribute regression, and mapped emission remains source-preserving | This removes the Apple Clang `__has_attribute(cold)` collision without removing the annotations; a fresh six-host CI run is still required to close the external parser/compiler gate |
+| 2026-09-28 | Revalidated the annotation-hygiene change across the repository | `./gradlew test --no-daemon --max-workers=1` passes: CLI, compiler, 315 Tree-sitter JVM tests, 104/104 grammar parses, and syntax-highlighting fixtures; the legacy C golden and parser generated-C fixtures now assert the prefixed output | Local migration evidence is green; the six-host CI/resource gate remains external and must be observed from a pushed revision |
+
 For each next task: record the source fixture, implementation commit/change, exact Gradle/CLI command, result, elapsed engineering time, and whether the parent acceptance condition changed. Then update both this log and the parent row in `COMPILER-FRONTEND-IMPLEMENTATION.md`.

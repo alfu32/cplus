@@ -2,6 +2,7 @@ package cplus
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class CompilerDiagnosticParserTest {
@@ -98,6 +99,19 @@ class CompilerDiagnosticParserTest {
         assertEquals(DiagnosticSeverity.UNKNOWN, diagnostics.single().severity)
         assertEquals("fatal compiler startup failure", diagnostics.single().message)
         assertNull(diagnostics.single().file)
+    }
+
+    @Test
+    fun prefixesAnnotationMacrosWithoutRewritingCommentsOrLiterals() {
+        val file = SourceFile(
+            "cold char* value; const char* text = \"cold borrowed\"; // pub\n",
+            "annotations.cp"
+        )
+        val generated = MappedEmitter(file).emit(MappedText.identity(file), "").code
+
+        assertTrue("CPLUS_COLD char* value;" in generated)
+        assertTrue("\"cold borrowed\"" in generated)
+        assertTrue("// pub" in generated)
     }
 
     private fun mappedSource(name: String): TranscodedSource {
