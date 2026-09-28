@@ -67,10 +67,18 @@ jobs:
           export PATH="$(cygpath -u "$(npm config get prefix)"):$PATH"
           fi
   
-          ./gradlew \
-          :parser-tree-sitter:jvmTest \
-          :parser-tree-sitter:testTreeSitterGrammar \
-          --no-daemon
+          gradle_tasks=(":parser-tree-sitter:testTreeSitterGrammar")
+          # KTreeSitter 0.25.1 does not publish its separate base JNI library
+          # for Windows. The generated C-plus grammar DLL is still built and
+          # packaged on Windows, but JVM execution waits for a Windows base
+          # binding before it can be enabled on those hosts.
+          if [[ "$RUNNER_OS" != "Windows" ]]; then
+          gradle_tasks+=(":parser-tree-sitter:jvmTest")
+          else
+          echo "Skipping JVM Tree-sitter tests: KTreeSitter 0.25.1 has no Windows base JNI payload"
+          fi
+
+          ./gradlew "${gradle_tasks[@]}" --no-daemon
 
       - name: Run host compiler and mapped-diagnostic regressions
         shell: bash
@@ -81,12 +89,16 @@ jobs:
           TCC: clang
           CPLUS_TEST_COMPILER: clang
         run: |
+          if [[ "$RUNNER_OS" != "Windows" ]]; then
           ./gradlew \
-            :parser-tree-sitter:jvmTest \
-            --tests 'cplus.parser.TreeSitterCPlusParserBackendTest.compilesPortableDialectAttributesAndStandardHeadersWithEveryHostDriver' \
-            --tests 'cplus.parser.TreeSitterCPlusParserBackendTest.allAvailableHostCompilersPreserveMappedMethodDiagnosticLineAndColumn' \
-            --no-daemon \
-            --max-workers=1
+              :parser-tree-sitter:jvmTest \
+              --tests 'cplus.parser.TreeSitterCPlusParserBackendTest.compilesPortableDialectAttributesAndStandardHeadersWithEveryHostDriver' \
+              --tests 'cplus.parser.TreeSitterCPlusParserBackendTest.allAvailableHostCompilersPreserveMappedMethodDiagnosticLineAndColumn' \
+              --no-daemon \
+              --max-workers=1
+          else
+          echo "Skipping JVM host-driver regressions: KTreeSitter 0.25.1 has no Windows base JNI payload"
+          fi
 
           host_os="${PARSER_HOST%%-*}"
           host_arch="${PARSER_HOST#*-}"
