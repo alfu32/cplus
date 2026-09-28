@@ -36,6 +36,20 @@ comptime-keyword    = "comptime" ;
 The annotation and comptime words are recognized only in the productions below;
 ordinary C identifiers remain valid wherever the C grammar permits them.
 
+Two parser-only productions preserve C declarator meaning where a typedef name would
+otherwise be ambiguous with an expression:
+
+```ebnf
+block-type-declaration = type-identifier declaration-declarator ("," declaration-declarator)* ";" ;
+result-annotation      = "borrowed" | "owned" | "mut"
+                       | "scratch" | "hot" | "warm" | "cold" ;
+```
+
+`block-type-declaration` is deliberately narrow: it handles block-scope typedef-name
+function-pointer declarations and does not replace the upstream C ambiguity policy.
+`result-annotation` is retained on declarations and method symbols as metadata; it is
+not a runtime type qualifier.
+
 ## Translation-unit extensions
 
 The upstream `translation_unit` is extended with these top-level items:
@@ -207,6 +221,25 @@ and freezes the observed inventory. Current evidence is:
 - Existing AST/prototype tests transcode the repository acceptance sources and
   validate the resulting C with the host C compiler. That generated-C result is
   the phase-2 behavioral proof, not a reason to accept a questionable parse.
+
+The current live-node manifest is:
+
+```text
+cplus_access_modifier, cplus_at_call_expression, cplus_at_import,
+cplus_comptime_block, cplus_comptime_body, cplus_comptime_conditional,
+cplus_comptime_declaration, cplus_comptime_expression, cplus_comptime_flags,
+cplus_comptime_function_definition, cplus_comptime_import,
+cplus_comptime_invocation, cplus_comptime_return_declaration,
+cplus_comptime_result_type, cplus_comptime_type_definition, cplus_comptime_value,
+cplus_defer_statement, cplus_function_declaration, cplus_generic_type_parameter,
+cplus_interpolated_identifier, cplus_legacy_comptime_invocation,
+cplus_legacy_function_generator, cplus_legacy_generic_type_parameter,
+cplus_legacy_returned_function, cplus_legacy_type_generator,
+cplus_method_declarator, cplus_method_definition, cplus_parameter_annotation,
+cplus_parameter_declaration, cplus_result_annotation, cplus_static_modifier,
+cplus_test_assertion_statement, cplus_test_declaration, cplus_type_argument,
+cplus_type_reference
+```
 
 The remaining grammar productions (`@code`, `@for`, `@throws`, `@try`/`@catch`,
 and some legacy forms) are exercised by focused parser/compiler fixtures outside

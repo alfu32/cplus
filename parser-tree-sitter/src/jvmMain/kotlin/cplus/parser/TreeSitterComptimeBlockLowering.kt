@@ -18,15 +18,18 @@ class TreeSitterComptimeBlockLowering {
 
         val blocks = mutableListOf<CPlusSyntaxNode>()
         val scopedBlocks = mutableListOf<CPlusSyntaxNode>()
-        fun collect(node: CPlusSyntaxNode, moduleScope: Boolean) {
+        fun collect(node: CPlusSyntaxNode, moduleScope: Boolean, dormant: Boolean = false) {
             if (node.kind == BLOCK_KIND) {
-                if (moduleScope) blocks += node
-                else scopedBlocks += node
+                if (!dormant) {
+                    if (moduleScope) blocks += node
+                    else scopedBlocks += node
+                }
                 return
             }
             val childrenAreModuleScope = moduleScope &&
                 (node.kind == "translation_unit" || node.kind in PREPROCESSOR_CONTAINERS)
-            node.children.forEach { child -> collect(child, childrenAreModuleScope) }
+            val childrenAreDormant = dormant || node.kind in GENERATOR_DEFINITION_NODES
+            node.children.forEach { child -> collect(child, childrenAreModuleScope, childrenAreDormant) }
         }
         collect(parsed.root, true)
         if (scopedBlocks.isNotEmpty()) {
@@ -146,6 +149,11 @@ class TreeSitterComptimeBlockLowering {
         val PREPROCESSOR_CONTAINERS = setOf(
             "preproc_if", "preproc_ifdef", "preproc_else", "preproc_elif", "preproc_elifdef",
             "preproc_elifndef", "preproc_endif"
+        )
+        val GENERATOR_DEFINITION_NODES = setOf(
+            "cplus_comptime_function_definition",
+            "cplus_legacy_type_generator",
+            "cplus_legacy_function_generator"
         )
     }
 }

@@ -28,13 +28,16 @@ class TreeSitterComptimeConditionalLowering {
             node: CPlusSyntaxNode,
             moduleScope: Boolean,
             insideConditional: Boolean = false,
-            insideComptimeBlock: Boolean = false
+            insideComptimeBlock: Boolean = false,
+            dormant: Boolean = false
         ) {
+            if (dormant) return
             val isConditional = node.kind == CONDITIONAL_KIND
             if (isConditional && !insideConditional) {
                 if (moduleScope) conditionals += node else scopedConditionals += node
             }
             val startsComptimeBlock = node.kind == COMPTIME_BLOCK_KIND
+            val startsGenerator = node.kind in GENERATOR_DEFINITION_NODES
             val childModuleScope = when {
                 !moduleScope -> false
                 node.kind == "compound_statement" && insideComptimeBlock -> true
@@ -47,7 +50,8 @@ class TreeSitterComptimeConditionalLowering {
                     it,
                     childModuleScope,
                     insideConditional || isConditional,
-                    insideComptimeBlock || startsComptimeBlock
+                    insideComptimeBlock || startsComptimeBlock,
+                    dormant || startsGenerator
                 )
             }
         }
@@ -163,6 +167,11 @@ class TreeSitterComptimeConditionalLowering {
             "enum_specifier",
             "field_declaration_list",
             "compound_statement"
+        )
+        val GENERATOR_DEFINITION_NODES = setOf(
+            "cplus_comptime_function_definition",
+            "cplus_legacy_type_generator",
+            "cplus_legacy_function_generator"
         )
     }
 }
