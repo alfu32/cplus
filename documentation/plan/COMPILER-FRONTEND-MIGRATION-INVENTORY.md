@@ -32,20 +32,20 @@ behavior explicit.
 
 ## Entry-point inventory
 
-| Entry point | Current owner | AST replacement | Status / retirement gate |
-|---|---|---|---|
-| `ComptimeCompiler.compile` | `compiler/Comptime.kt` textual scanner/evaluator | `TreeSitterCPlusPrototypeTranspiler` comptime passes | AST path is selectable; retire after fixed-point and import differential (`CF-16`, `CF-17`) |
-| `CPlusTranspiler.transpile` | legacy comptime plus textual runtime lowerers | prototype AST pipeline plus mapped C emitter | legacy default; compare through `CF-14`, then migrate per pass |
-| `CPlusTranspiler.transpileTests` | textual test discovery/harness extraction | `CPlusTestExtractionPass` plus AST-lowered fixture bridge | runtime AST extraction exists; test CLI migration is `SP44-03` |
-| `StructTypeCollector` | textual struct-name discovery | `CPlusSemanticAnalyzer` / AST symbol index | replacement exists for AST path; remove only after receiver differential |
-| `MethodCallLowerer` | masked-text receiver rewrite | `CPlusMethodCallLoweringPass` | AST replacement covered by overlap fixtures; retirement is `CF-19` |
-| `DeferLowerer` | brace/statement scanner | `CPlusDeferLoweringPass` | AST replacement covered; retirement is `CF-19` |
-| `StructLowerer` | textual method extraction | `CPlusStructMethodLoweringPass` | AST replacement covered; retirement is `CF-19` |
-| `TryCatchLowerer` | textual checked-call rewrite | `CPlusTryCatchLoweringPass` | AST replacement covered; retirement is `CF-20` |
-| `ErrorAnnotationCollector` | textual `@throws` scan | `CPlusThrowsLoweringPass` | AST replacement covered; retirement is `CF-20` |
-| `TestProgram` / assertion scan | textual test/assertion bridge | `CPlusTestExtractionPass` plus harness emitter | bridge remains during test migration; retirement is `CF-20` |
-| `AllocationIntentAnalyzer` | mapped-text flow scan | `TreeSitterAllocationIntentAnalyzer` | AST analyzer is available; sequencing/flow parity remains `CF-18` |
-| `MappedEmitter` | shared mapped C emission | `CPlusAstCEmitter` followed by `MappedEmitter` | retained as the common source-map/output facade |
+| Entry point                      | Current owner                                    | AST replacement                                           | Status / retirement gate                                                                    |
+|----------------------------------|--------------------------------------------------|-----------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| `ComptimeCompiler.compile`       | `compiler/Comptime.kt` textual scanner/evaluator | `TreeSitterCPlusPrototypeTranspiler` comptime passes      | AST path is selectable; retire after fixed-point and import differential (`CF-16`, `CF-17`) |
+| `CPlusTranspiler.transpile`      | legacy comptime plus textual runtime lowerers    | prototype AST pipeline plus mapped C emitter              | legacy default; compare through `CF-14`, then migrate per pass                              |
+| `CPlusTranspiler.transpileTests` | textual test discovery/harness extraction        | `CPlusTestExtractionPass` plus AST-lowered fixture bridge | runtime AST extraction exists; test CLI migration is `SP44-03`                              |
+| `StructTypeCollector`            | textual struct-name discovery                    | `CPlusSemanticAnalyzer` / AST symbol index                | replacement exists for AST path; remove only after receiver differential                    |
+| `MethodCallLowerer`              | masked-text receiver rewrite                     | `CPlusMethodCallLoweringPass`                             | AST replacement covered by overlap fixtures; retirement is `CF-19`                          |
+| `DeferLowerer`                   | brace/statement scanner                          | `CPlusDeferLoweringPass`                                  | AST replacement covered; retirement is `CF-19`                                              |
+| `StructLowerer`                  | textual method extraction                        | `CPlusStructMethodLoweringPass`                           | AST replacement covered; retirement is `CF-19`                                              |
+| `TryCatchLowerer`                | textual checked-call rewrite                     | `CPlusTryCatchLoweringPass`                               | AST replacement covered; retirement is `CF-20`                                              |
+| `ErrorAnnotationCollector`       | textual `@throws` scan                           | `CPlusThrowsLoweringPass`                                 | AST replacement covered; retirement is `CF-20`                                              |
+| `TestProgram` / assertion scan   | textual test/assertion bridge                    | `CPlusTestExtractionPass` plus harness emitter            | bridge remains during test migration; retirement is `CF-20`                                 |
+| `AllocationIntentAnalyzer`       | mapped-text flow scan                            | `TreeSitterAllocationIntentAnalyzer`                      | AST analyzer is available; sequencing/flow parity remains `CF-18`                           |
+| `MappedEmitter`                  | shared mapped C emission                         | `CPlusAstCEmitter` followed by `MappedEmitter`            | retained as the common source-map/output facade                                             |
 
 ## Rules for migration
 

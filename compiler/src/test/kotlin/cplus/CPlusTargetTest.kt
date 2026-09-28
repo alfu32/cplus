@@ -18,6 +18,24 @@ class CPlusTargetTest {
     }
 
     @Test
+    fun `normalizes every shipped target family and common aliases`() {
+        val aliases = mapOf(
+            "x86_64-linux-gnu" to "linux-x86_64",
+            "linux-arm64" to "linux-aarch64",
+            "x86_64-apple-darwin" to "macos-x86_64",
+            "macos-arm64" to "macos-aarch64",
+            "x86_64-w64-mingw32" to "windows-x86_64",
+            "windows-aarch64" to "windows-aarch64"
+        )
+        aliases.forEach { (input, expected) ->
+            assertEquals(expected, CPlusTarget.shippedTargetId(input))
+        }
+        assertEquals(CPlusTarget.shippedTargetIds, aliases.values.toSet())
+        assertNull(CPlusTarget.shippedTargetId("riscv64-unknown-linux-gnu"))
+        assertNull(CPlusTarget.shippedTargetId("freebsd-x86_64"))
+    }
+
+    @Test
     fun `derives compile time os from target compiler options`() {
         assertEquals("windows", CPlusTarget.osFromCompilerOptions(listOf("--target=x86_64-w64-mingw32")))
         assertEquals("macos", CPlusTarget.osFromCompilerOptions(listOf("--target", "aarch64-apple-darwin")))

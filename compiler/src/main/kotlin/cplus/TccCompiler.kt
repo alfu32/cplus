@@ -211,12 +211,7 @@ class TccCompiler {
             "linux" in os -> "linux"
             else -> return null
         }
-        val arch = when (System.getProperty("os.arch").lowercase()) {
-            "amd64", "x86_64", "x64" -> "x86_64"
-            "aarch64", "arm64" -> "aarch64"
-            else -> return null
-        }
-        return "$nativeOs-$arch"
+        return CPlusTarget.shippedTargetId("$nativeOs-${System.getProperty("os.arch")}")
     }
 
     /** Static link archives must follow the source/object files that reference them. */
@@ -251,10 +246,11 @@ class TccCompiler {
 
     private fun targetOption(options: List<String>): String? {
         val targetFlag = options.indexOf("--target")
-        return when {
+        val raw = when {
             targetFlag >= 0 -> options.getOrNull(targetFlag + 1)
             else -> options.firstOrNull { it.startsWith("--target=") }?.substringAfter('=')
         }
+        return raw?.let { CPlusTarget.shippedTargetId(it) ?: it }
     }
 
     private fun targetDiagnostic(message: String) = CompilerDiagnostic(

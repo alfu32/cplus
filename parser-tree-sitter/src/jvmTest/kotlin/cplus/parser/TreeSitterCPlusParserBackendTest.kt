@@ -1622,7 +1622,6 @@ class TreeSitterCPlusParserBackendTest {
         )
         val parsed = backend.parse(snapshot)
         assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
-
         val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
 
         assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
@@ -1634,7 +1633,7 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
-    fun allocationFlowInvalidatesStaleProvenanceAfterUnsequencedCallArgumentWrites() {
+    fun allocationFlowPropagatesIndependentUnsequencedCallArgumentWrites() {
         val snapshot = sources.open(
             SourceId.named("allocation-call-argument-flow.cp"),
             """
@@ -1654,8 +1653,65 @@ class TreeSitterCPlusParserBackendTest {
 
         assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
         assertEquals(
-            AllocationIntent.NONE,
+            AllocationIntent.SCRATCH,
             result.symbols.single { it.name == "no_stale_claim" }.knownProvenance
+        )
+    }
+
+    @Test
+    fun allocationFlowJoinsDistinctWritesAcrossUnsequencedCallArguments() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-call-argument-join.cp"),
+            """
+                void consume(char* left, char* right);
+                int main(void) {
+                    char* left = alloc_warm(8);
+                    char* right = alloc_warm(8);
+                    consume((left = alloc_scratch(16)), (right = alloc_cold(16)));
+                    scratch char* after_left = left;
+                    cold char* after_right = right;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
+        assertEquals(AllocationIntent.SCRATCH, result.symbols.single { it.name == "after_left" }.knownProvenance)
+        assertEquals(AllocationIntent.COLD, result.symbols.single { it.name == "after_right" }.knownProvenance)
+    }
+
+    @Test
+    fun allocationFlowInvalidatesConflictingWritesAcrossUnsequencedCallArguments() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-call-argument-conflict.cp"),
+            """
+                void consume(char* left, char* right);
+                int main(void) {
+                    char* value = alloc_warm(8);
+                    consume((value = alloc_scratch(16)), (value = alloc_hot(16)));
+                    scratch char* after_conflict = value;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(
+            result.diagnostics.single().message.contains("unsequenced conflicting allocation writes"),
+            result.diagnostics.toString()
+        )
+        assertEquals(
+            AllocationIntent.NONE,
+            result.symbols.single { it.name == "after_conflict" }.knownProvenance,
+            "conflicting unsequenced writes must not invent a final allocation domain"
         )
     }
 
@@ -1716,7 +1772,11 @@ class TreeSitterCPlusParserBackendTest {
 
         val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
 
-        assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(
+            result.diagnostics.single().message.contains("unsequenced conflicting allocation writes"),
+            result.diagnostics.toString()
+        )
         assertEquals(
             AllocationIntent.NONE,
             result.symbols.single { it.name == "after_initializer" }.knownProvenance,
@@ -1747,14 +1807,97 @@ class TreeSitterCPlusParserBackendTest {
 
         val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
 
-        assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.single().message.contains("'after_subscript' is declared scratch"))
         listOf("after_assignment", "after_subscript").forEach { name ->
-            assertEquals(
-                AllocationIntent.NONE,
-                result.symbols.single { it.name == name }.knownProvenance,
-                "$name must not inherit a guessed operand evaluation order"
-            )
+            val expected = if (name == "after_assignment") AllocationIntent.SCRATCH else AllocationIntent.COLD
+            assertEquals(expected, result.symbols.single { it.name == name }.knownProvenance)
         }
+    }
+
+    @Test
+    fun allocationFlowDoesNotEvaluateUnevaluatedSizeofOperands() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-unevaluated-operands.cp"),
+            """
+                #include <stddef.h>
+                int main(void) {
+                    char* value = alloc_warm(8);
+                    size_t size = sizeof(value = alloc_scratch(16));
+                    scratch char* after_sizeof = value;
+                    (void)size;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.single().message.contains("'after_sizeof' is declared scratch"))
+        assertEquals(snapshot.text.indexOf("after_sizeof"), result.diagnostics.single().sourceSpan.startOffset)
+    }
+
+    @Test
+    fun allocationFlowDoesNotEvaluateGenericControllingExpression() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-generic-controlling-expression.cp"),
+            """
+                int main(void) {
+                    char* value = alloc_warm(8);
+                    int selected = _Generic(
+                        (value = alloc_scratch(16)),
+                        char*: 1,
+                        default: 0
+                    );
+                    scratch char* after_generic = value;
+                    (void)selected;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(result.diagnostics.single().message.contains("'after_generic' is declared scratch"))
+        assertEquals(snapshot.text.indexOf("after_generic"), result.diagnostics.single().sourceSpan.startOffset)
+    }
+
+    @Test
+    fun allocationFlowPreservesSwitchConditionEffectsInsideCases() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-switch-condition.cp"),
+            """
+                int main(int selector) {
+                    char* value = alloc_warm(8);
+                    switch (selector = (value = alloc_scratch(16), selector)) {
+                        case 1:
+                            scratch char* in_case = value;
+                            (void)in_case;
+                            break;
+                        default:
+                            break;
+                    }
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
+        assertEquals(
+            AllocationIntent.SCRATCH,
+            result.symbols.single { it.name == "in_case" }.knownProvenance,
+            result.symbols.toString()
+        )
     }
 
     @Test
@@ -1901,7 +2044,7 @@ class TreeSitterCPlusParserBackendTest {
         val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
 
         assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
-        assertTrue(result.symbols.any { it.name == "case_local" && it.knownProvenance == AllocationIntent.NONE })
+        assertTrue(result.symbols.any { it.name == "case_local" && it.knownProvenance == AllocationIntent.WARM })
         assertEquals(
             AllocationIntent.NONE,
             result.symbols.single { it.name == "after_switch" }.knownProvenance
@@ -3588,6 +3731,39 @@ class TreeSitterCPlusParserBackendTest {
             compileAndRunC(report.legacy!!.code)
             compileAndRunC(report.treeSitter.transcodedSource!!.code)
         }
+    }
+
+    @Test
+    fun legacyAllocationFlowReportsKnownStaleProvenanceForIndependentCallWrites() {
+        val text = """
+            #include <stddef.h>
+            void* alloc_scratch(size_t size) { return 0; }
+            void* alloc_hot(size_t size) { return 0; }
+            void* alloc_warm(size_t size) { return 0; }
+            void consume(char* left, char* right) { (void)left; (void)right; }
+            int main(void) {
+                char* left = alloc_warm(8);
+                char* right = alloc_warm(8);
+                consume((left = alloc_scratch(16)), (right = alloc_hot(16)));
+                scratch char* after_left = left;
+                hot char* after_right = right;
+                return 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("known-legacy-unsequenced-flow.cp"), text)
+
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources)
+            .compareSemanticPassSubstitution(source)
+
+        assertFalse(report.diagnosticsMatch, "legacy and AST results must expose the known correction")
+        assertTrue(report.treeSitter.allocationAnalysis.diagnostics.isEmpty(), report.toString())
+        assertTrue(
+            report.legacy?.allocationAnalysis?.diagnostics.orEmpty()
+                .any { "after_right" in it.message && "alloc_warm" in it.message },
+            report.toString()
+        )
+        assertTrue(report.normalizedTokensMatch, report.tokenDifference.orEmpty())
+        compileAndRunC(report.treeSitter.transcodedSource!!.code)
     }
 
     @Test

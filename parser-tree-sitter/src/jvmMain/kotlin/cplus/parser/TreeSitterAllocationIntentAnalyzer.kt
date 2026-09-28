@@ -315,6 +315,38 @@ class TreeSitterAllocationIntentAnalyzer {
             }
         }
 
+        fun mergeUnsequencedScopes(
+            target: MutableMap<String, VariableState>,
+            incoming: Map<String, VariableState>,
+            effects: List<Map<String, VariableState>>,
+            context: CPlusAstNode
+        ) {
+            // Every operand is evaluated, but C does not impose an order between most
+            // operands. Union effects that touch different variables; if multiple operands
+            // write the same tracked variable, retain provenance only when all writes agree.
+            incoming.forEach { (name, initial) ->
+                val changed = effects.mapNotNull { state ->
+                    state[name]?.takeIf { it.provenance != initial.provenance }
+                }
+                target[name] = when {
+                    changed.isEmpty() -> initial
+                    changed.map { it.provenance }.distinct().size == 1 -> initial.copy(
+                        provenance = changed.first().provenance
+                    )
+                    else -> {
+                        val changedDomains = changed.mapNotNull { it.provenance?.intent }.distinct()
+                        if (changedDomains.size > 1) {
+                            diagnostics += CPlusDiagnostic(
+                                "unsequenced conflicting allocation writes to '$name' leave its provenance undefined",
+                                ast.source.sourceFile.span(context.span.startOffset, context.span.endOffset)
+                            )
+                        }
+                        initial.copy(provenance = null)
+                    }
+                }
+            }
+        }
+
         fun modifiedVariablesIn(node: CPlusAstNode): Set<String> = node.descendantsAndSelf()
             .flatMap { expression ->
                 when (expression.syntaxKind) {
@@ -378,9 +410,8 @@ class TreeSitterAllocationIntentAnalyzer {
                 "call_expression" -> {
                     checkCall(node, scope)
                     // C does not specify argument evaluation order. Analyze nested expressions
-                    // independently, then retain only allocation domains that agree across
-                    // every possible single-argument effect. This intentionally loses some
-                    // precision, but never carries a stale pre-call value forward.
+                    // independently, union effects on distinct variables, and invalidate only
+                    // conflicting writes to the same tracked variable.
                     val beforeCall = scope.toMap()
                     val functionExpression = node.children.firstOrNull { it.fieldName == "function" }
                     val arguments = node.children.firstOrNull { it.fieldName == "arguments" }
@@ -390,7 +421,7 @@ class TreeSitterAllocationIntentAnalyzer {
                         scope.toMutableMap().also { visit(expression, it, currentFunction) }
                     }
                     if (possibleEffects.isNotEmpty()) {
-                        mergePossibleScopes(scope, beforeCall, possibleEffects)
+                        mergeUnsequencedScopes(scope, beforeCall, possibleEffects, node)
                     }
                 }
                 "assignment_expression" -> {
@@ -404,7 +435,7 @@ class TreeSitterAllocationIntentAnalyzer {
                         val paths = listOf(left, right).map { operand ->
                             scope.toMutableMap().also { visit(operand, it, currentFunction) }
                         }
-                        mergePossibleScopes(scope, incoming, listOf(incoming) + paths)
+                        mergeUnsequencedScopes(scope, incoming, paths, node)
                     }
                     val operator = node.children.firstOrNull { it.fieldName == "operator" }
                         ?.let { text(source, it) }
@@ -444,13 +475,13 @@ class TreeSitterAllocationIntentAnalyzer {
                         visit(right, rightScope, currentFunction)
                         mergePossibleScopes(scope, afterLeft, listOf(afterLeft, rightScope))
                     } else {
-                        // Other binary operands may be evaluated in either order. Preserve only
-                        // provenance that agrees with both independently analyzed possibilities.
+                        // Other binary operands may be evaluated in either order. Both operands
+                        // execute, so union independent effects and invalidate conflicting writes.
                         val incoming = scope.toMap()
                         val paths = listOf(left, right).map { operand ->
                             scope.toMutableMap().also { visit(operand, it, currentFunction) }
                         }
-                        mergePossibleScopes(scope, incoming, listOf(incoming) + paths)
+                        mergeUnsequencedScopes(scope, incoming, paths, node)
                     }
                 }
                 "subscript_expression" -> {
@@ -460,7 +491,7 @@ class TreeSitterAllocationIntentAnalyzer {
                         val paths = operands.map { operand ->
                             scope.toMutableMap().also { visit(operand, it, currentFunction) }
                         }
-                        mergePossibleScopes(scope, incoming, listOf(incoming) + paths)
+                        mergeUnsequencedScopes(scope, incoming, paths, node)
                     } else {
                         operands.forEach { visit(it, scope, currentFunction) }
                     }
@@ -468,16 +499,40 @@ class TreeSitterAllocationIntentAnalyzer {
                 "initializer_list" -> {
                     val elements = node.children.filter { it.named }
                     if (elements.size > 1) {
-                        // C does not specify a left-to-right order for initializer
-                        // element evaluation. Keep only provenance shared by every
-                        // possible single-element effect.
+                        // C does not specify a left-to-right order for initializer element
+                        // evaluation. All elements execute; union independent effects while
+                        // invalidating conflicting writes to one tracked value.
                         val incoming = scope.toMap()
                         val paths = elements.map { element ->
                             scope.toMutableMap().also { visit(element, it, currentFunction) }
                         }
-                        mergePossibleScopes(scope, incoming, listOf(incoming) + paths)
+                        mergeUnsequencedScopes(scope, incoming, paths, node)
                     } else {
                         elements.forEach { visit(it, scope, currentFunction) }
+                    }
+                }
+                "sizeof_expression", "alignof_expression", "offsetof_expression" -> {
+                    // These operators inspect a type/layout and do not evaluate their
+                    // expression operands. Do not let assignments or calls nested inside an
+                    // unevaluated operand invalidate runtime allocation provenance.
+                }
+                "generic_expression" -> {
+                    // C11 _Generic does not evaluate its controlling expression. Exactly one
+                    // association expression is selected at runtime, but the selected type is
+                    // not resolved by this bounded flow pass. Analyze each association as an
+                    // independent possibility and retain only provenance common to all of them.
+                    val expressions = node.children.filter {
+                        it.named && it.syntaxKind != "type_descriptor"
+                    }
+                    val associations = expressions.drop(1)
+                    if (associations.size > 1) {
+                        val incoming = scope.toMap()
+                        val paths = associations.map { expression ->
+                            scope.toMutableMap().also { visit(expression, it, currentFunction) }
+                        }
+                        mergePossibleScopes(scope, incoming, paths)
+                    } else {
+                        associations.forEach { visit(it, scope, currentFunction) }
                     }
                 }
                 "conditional_expression" -> {
@@ -658,20 +713,27 @@ class TreeSitterAllocationIntentAnalyzer {
                     }
                 }
                 "switch_statement" -> {
-                    val outerNames = scope.keys.toSet()
-                    val switchScope = scope.mapValues { (_, state) -> state.copy(provenance = null) }.toMutableMap()
+                    // The controlling expression is sequenced before case dispatch. Preserve
+                    // its effects, then analyze every reachable case from that post-condition
+                    // snapshot. Case selection/fallthrough is still not modeled precisely, so
+                    // writes made by any case invalidate the corresponding outer value after
+                    // the switch.
                     val body = node.children.firstOrNull { it.fieldName == "body" }
                         ?: node.children.firstOrNull { it.syntaxKind == "compound_statement" }
-                    node.children.filterNot { it === body }.forEach {
-                        visit(it, switchScope.toMutableMap(), currentFunction)
-                    }
+                    node.children.firstOrNull { it.fieldName == "condition" }
+                        ?.let { visit(it, scope, currentFunction) }
+                    val outerNames = scope.keys.toSet()
+                    val switchEntry = scope.toMap()
                     val caseBranches = body?.children.orEmpty().filter { it.syntaxKind == "case_statement" }
                     if (caseBranches.isNotEmpty()) {
                         // A case may be entered directly or reached by fallthrough. Start each
-                        // branch without outer provenance rather than sequencing sibling cases.
-                        caseBranches.forEach { visit(it, switchScope.toMutableMap(), currentFunction) }
+                        // branch from the post-condition state rather than sequencing sibling
+                        // cases. This retains facts established by the controlling expression.
+                        caseBranches.forEach {
+                            visit(it, switchEntry.toMutableMap(), currentFunction)
+                        }
                     } else {
-                        body?.let { visit(it, switchScope.toMutableMap(), currentFunction) }
+                        body?.let { visit(it, switchEntry.toMutableMap(), currentFunction) }
                     }
                     // Cases can be skipped or fall through, so a single traversal cannot
                     // establish the post-switch allocation domain for a written outer value.

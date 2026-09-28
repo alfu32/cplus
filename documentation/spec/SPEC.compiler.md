@@ -56,6 +56,12 @@ For test extraction, source-map coverage is scoped to extracted assertion source
 imported runtime modules may have different generated layout while retaining their own
 mapped origins.
 
+For ordinary compilation, dependency emission and compiler-option ordering are separate
+contracts. Generated runtime C uses a canonical dependency-first order with stable ordering
+for independent modules. Collected `comptime flags` retain the historical dependency-first
+depth-first discovery order, so existing link and define ordering remains reproducible even
+when canonical source emission sorts independent modules differently.
+
 The bounded accepted fixture-body contract is the repository's ordinary C statements,
 structured control flow, C-plus method/receiver calls, `defer`, and supported checked
 calls/assertions. The standard-library fixture corpus is the executable positive
@@ -126,13 +132,18 @@ Top-level `comptime flags` declarations in the source and its comptime imports a
 
 Comptime exposes `os` as the normalized operating system of the selected target. `compile` and `run` derive it from TinyCC's `--target` option (or the local host when omitted); `transcode` can be given `--target` for the same selection. The current supported spellings include `linux`, `windows`, and `macos`. This only selects source branches: the target compiler/sysroot must still contain the requested libraries.
 
-The shipped cross-runtime distribution names the supported host/architecture pairs explicitly:
+The shipped cross-runtime distribution names the supported host/architecture pairs explicitly.
+The compiler accepts either the resource ID shown below or an equivalent target triple and
+normalizes it to that ID for bundled-resource lookup and output-format validation:
 
-| Host/target family | Architecture | Status |
-|---|---|---|
-| Linux | x86_64, arm64 | bundled TinyCC driver/runtime; ABI reflection model available |
-| macOS | x86_64, arm64 | bundled TinyCC driver/runtime; ABI reflection model available |
-| Windows | x86_64, arm64 | bundled TinyCC driver/runtime; ABI reflection model available |
+| Host/target family | Resource ID | Accepted examples | Status |
+|---|---|---|---|
+| Linux | `linux-x86_64` | `x86_64-linux-gnu` | bundled TinyCC driver/runtime; ABI reflection model available |
+| Linux | `linux-aarch64` | `linux-arm64` | bundled TinyCC driver/runtime; ABI reflection model available |
+| macOS | `macos-x86_64` | `x86_64-apple-darwin` | bundled TinyCC driver/runtime; ABI reflection model available |
+| macOS | `macos-aarch64` | `macos-arm64` | bundled TinyCC driver/runtime; ABI reflection model available |
+| Windows | `windows-x86_64` | `x86_64-w64-mingw32` | bundled TinyCC driver/runtime; ABI reflection model available |
+| Windows | `windows-aarch64` | `windows-aarch64` | bundled TinyCC driver/runtime; ABI reflection model available |
 
 `-Ptarget=cross` packages all six TinyCC runtime payloads without libc sysroots; `-Ptarget=none`/`bare` packages no compiler runtime and uses the selected external compiler. This table describes C-plus target normalization and packaging availability, not a guarantee that every platform library or linker flag exists on every host. The compiler must still report an unsupported target or missing library instead of silently selecting another ABI.
 

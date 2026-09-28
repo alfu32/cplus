@@ -2,6 +2,14 @@ package cplus
 
 /** Target operating-system information available to comptime expressions as the string `os`. */
 object CPlusTarget {
+    /** Resource/ABI identifiers for the six bundled TinyCC host-target families. */
+    @JvmStatic
+    val shippedTargetIds: Set<String> = setOf(
+        "linux-x86_64", "linux-aarch64",
+        "macos-x86_64", "macos-aarch64",
+        "windows-x86_64", "windows-aarch64"
+    )
+
     @JvmStatic
     fun hostOs(): String = normalizeOs(System.getProperty("os.name"))
 
@@ -39,6 +47,28 @@ object CPlusTarget {
             "riscv64" -> "riscv64"
             else -> "unknown"
         }
+    }
+
+    /**
+     * Normalize a target triple or `os-arch` resource spelling to a shipped payload ID.
+     * Returns null for targets outside the bundled six-family matrix.
+     */
+    @JvmStatic
+    fun shippedTargetId(value: String?): String? {
+        val spelling = value.orEmpty().lowercase()
+        val os = normalizeOs(spelling)
+        if (os !in setOf("linux", "windows", "macos")) return null
+        val architecture = if (spelling.startsWith("$os-")) {
+            normalizeArch(spelling.removePrefix("$os-"))
+        } else {
+            normalizeArch(spelling)
+        }
+        val resourceArch = when (architecture) {
+            "x86_64" -> "x86_64"
+            "arm64" -> "aarch64"
+            else -> return null
+        }
+        return "$os-$resourceArch".takeIf { it in shippedTargetIds }
     }
 
     /** Resolve `os` from TinyCC target arguments, falling back to the JVM host when absent. */
