@@ -295,8 +295,14 @@ jobs:
           mapfile -t fixtures < <(find stdlib/tests -maxdepth 1 -name '*.cp' ! -name 'raylib_math.cp' ! -name 'http.cp' -print | sort)
           test "${#fixtures[@]}" -gt 0
           java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" test "${fixtures[@]}"
-          java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" test compile \
+          set +e
+          java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" -v2 test compile \
             -o build/bare-http-smoke stdlib/tests/http.cp
+          http_compile_status=$?
+          set -e
+          echo "HTTP fixture compile exit code: $http_compile_status"
+          ls -l build/bare-http-smoke 2>/dev/null || true
+          test "$http_compile_status" -eq 0
           test -s build/bare-http-smoke
       - uses: actions/upload-artifact@v4
         with:
