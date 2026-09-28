@@ -117,6 +117,19 @@ jobs:
           test -n "$base_library_path"
           cp "$base_library_path" "$destination/$(basename "$base_library_path")"
           fi
+      - name: Run frontend benchmark
+        shell: bash
+        env:
+          PARSER_HOST: ${{ matrix.host }}
+          CC: clang
+          CXX: clang++
+          TCC: clang
+          CPLUS_TEST_COMPILER: clang
+        run: |
+          report="parser-tree-sitter/build/parser-host-report"
+          mkdir -p "$report"
+          ./gradlew :parser-tree-sitter:benchmarkFrontend --no-daemon --max-workers=1 \
+            2>&1 | tee "$report/frontend-benchmark.log"
       - name: Record parser host and resource manifest
         shell: bash
         env:
