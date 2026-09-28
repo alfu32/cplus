@@ -218,10 +218,6 @@ jobs:
       - name: Install pinned Tree-sitter CLI
         run: npm install --global tree-sitter-cli@0.25.10
       - uses: gradle/actions/setup-gradle@v4
-      - name: Install system TinyCC for the bare JAR
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes tcc
       - name: Run Gradle tests
         env:
           CC: clang
@@ -235,6 +231,10 @@ jobs:
         run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=none bundleDist --no-daemon
       - name: Verify payload selection, documentation, installers, and both distributions
         shell: bash
+        env:
+          TCC: clang
+          CC: clang
+          CPLUS_TEST_COMPILER: clang
         run: |
           bare="dist/cplus-${RELEASE_VERSION}-bare.zip"
           cross="dist/cplus-${RELEASE_VERSION}-cross-no-sysroots.zip"
