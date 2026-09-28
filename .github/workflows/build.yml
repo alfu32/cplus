@@ -296,7 +296,12 @@ jobs:
           # making distribution verification depend on runner networking policy.
           mapfile -t fixtures < <(find stdlib/tests -maxdepth 1 -name '*.cp' ! -name 'raylib_math.cp' ! -name 'http.cp' -print | sort)
           test "${#fixtures[@]}" -gt 0
-          java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" test "${fixtures[@]}"
+          set +e
+          java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" -v2 test "${fixtures[@]}"
+          fixture_test_status=$?
+          set -e
+          echo "Packaged non-HTTP fixture test exit code: $fixture_test_status"
+          test "$fixture_test_status" -eq 0
           set +e
           java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" -v2 test compile \
             -o build/bare-http-smoke stdlib/tests/http.cp
