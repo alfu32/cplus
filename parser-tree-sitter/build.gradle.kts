@@ -181,6 +181,16 @@ val buildHostKTreeSitter = tasks.register("buildHostKTreeSitter") {
             project(ktreesitter LANGUAGES C)
             find_package(JNI REQUIRED)
             set(CMAKE_C_STANDARD 11)
+            if(MSVC)
+                add_compile_options(/W3 /wd4244)
+            else()
+                set(CMAKE_C_VISIBILITY_PRESET hidden)
+                add_compile_options(-Wall -Wextra
+                    -Wno-unused-parameter
+                    -Wno-cast-function-type
+                    -Werror=incompatible-pointer-types
+                    -Werror=implicit-function-declaration)
+            endif()
             include_directories(
                 ${'$'}{JNI_INCLUDE_DIRS}
                 "${normalized(treeSitterRoot.resolve("lib/src"))}"
@@ -218,6 +228,10 @@ val buildHostKTreeSitter = tasks.register("buildHostKTreeSitter") {
             )
         )
         val output = outputRoot.resolve(nativeKTreeSitterLibrary)
+        val produced = outputRoot.walkTopDown().firstOrNull { it.isFile && it.name == nativeKTreeSitterLibrary }
+        if (!output.isFile && produced != null) {
+            produced.copyTo(output, overwrite = true)
+        }
         require(output.isFile) { "KTreeSitter host JNI build did not produce $output" }
     }
 }
@@ -239,6 +253,11 @@ tasks.named<Copy>("jvmProcessResources") {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStandardStreams = true
+    }
 }
 
 val jvmTestTask = tasks.named<Test>("jvmTest") {
