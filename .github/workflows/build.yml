@@ -309,9 +309,15 @@ jobs:
 
   editor-plugins:
     name: Build editor plugin bundles
+    needs:
+      - prepare-tinycc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tinycc-compiler-api
+          path: lib
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

@@ -249,7 +249,7 @@ This snapshot separates code work from evidence that only CI or elapsed releases
 
 ### Phase 4 comptime inventory
 
-> Audit correction: the bounded AST comptime, sequencing, and per-pass migration gates referenced by the execution-order note above are complete for phases 1–8. P2-07/P2-08 packaged-parser evidence is closed by CI run 36462417920; P5-11 host/compiler/ABI evidence remains external. Legacy retirement remains a future Phase 9 decision.
+> Audit correction: the bounded AST comptime, sequencing, and per-pass migration gates referenced by the execution-order note above are complete for phases 1–8. P2-07/P2-08 packaged-parser evidence is closed by CI run `36465066172`; P5-11 host/compiler/ABI evidence remains external. Legacy retirement remains a future Phase 9 decision.
 
 This is the current capability boundary, based on the prototype pass sequence and tests—not on whether the grammar recognizes a construct. Each row must eventually have a positive materialization test and applicable failure/source-map tests before the scanner/evaluator retirement gate can close.
 
