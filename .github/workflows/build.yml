@@ -447,15 +447,18 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
-          pattern: cplus-*
-          merge-multiple: true
+          name: cplus-application-distributions
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          name: cplus-editor-plugins
       - name: Create or update release and upload application distributions and IDE plugins
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+        RELEASE_TAG: ${{ github.ref_name }}
         run: |
           shopt -s nullglob
-          assets=(release-assets/*)
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f -print | sort)
           if (( ${#assets[@]} == 0 )); then
             echo "No release assets were downloaded" >&2
             exit 1
