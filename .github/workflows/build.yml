@@ -455,7 +455,7 @@ jobs:
       - name: Create or update release and upload application distributions and IDE plugins
         env:
           GH_TOKEN: ${{ github.token }}
-        RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           shopt -s nullglob
           mapfile -t assets < <(find release-assets -maxdepth 1 -type f -print | sort)
