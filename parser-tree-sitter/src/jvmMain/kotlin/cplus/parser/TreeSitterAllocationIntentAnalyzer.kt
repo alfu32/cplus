@@ -741,7 +741,31 @@ class TreeSitterAllocationIntentAnalyzer {
                         scope[name]?.let { state -> scope[name] = state.copy(provenance = null) }
                     }
                 }
-                else -> node.children.forEach { visit(it, scope, currentFunction) }
+                "gnu_asm_expression" -> {
+                    // Inline assembly can read or write memory through constraints and
+                    // clobbers that are opaque to this frontend. Do not preserve any tracked
+                    // allocation provenance across it.
+                    scope.keys.toList().forEach { name ->
+                        scope[name]?.let { state -> scope[name] = state.copy(provenance = null) }
+                    }
+                }
+                else -> {
+                    val namedChildren = node.children.filter { it.named }
+                    if (node.syntaxKind.endsWith("expression") && namedChildren.size > 1) {
+                        // Keep unknown multi-part expression wrappers conservative.  Their
+                        // children may include a type/designator plus an evaluated expression,
+                        // or an extension-specific pair of operands whose ordering C does not
+                        // define.  Analyze each child from the same incoming state and join the
+                        // effects instead of silently imposing tree order.
+                        val incoming = scope.toMap()
+                        val paths = namedChildren.map { child ->
+                            scope.toMutableMap().also { visit(child, it, currentFunction) }
+                        }
+                        mergeUnsequencedScopes(scope, incoming, paths, node)
+                    } else {
+                        node.children.forEach { visit(it, scope, currentFunction) }
+                    }
+                }
             }
         }
 

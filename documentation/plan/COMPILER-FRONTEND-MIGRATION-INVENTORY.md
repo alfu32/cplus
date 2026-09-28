@@ -3,7 +3,9 @@
 This inventory is the C5 migration boundary. It names every production entry point
 that still depends on the textual compiler and the AST replacement that must become
 authoritative before that entry point is retired. The legacy implementation remains
-the default and is a supported rollback path.
+the default and is a supported rollback path throughout phases 1–8. Removing a
+scanner or textual lowerer is a later promotion/retirement decision, not a
+prerequisite for this migration.
 
 ## Selection boundary
 
@@ -105,10 +107,13 @@ the AST flow solver correctly retains the incoming zero-iteration domain. This i
 tracked as a legacy diagnostic limitation, not copied into AST semantics.
 The legacy and AST pipelines currently retain different dependency-safe runtime
 orders, and `frontendPassOrderMatch` makes that fact explicit rather than hiding it.
-The next implementation unit is `CF-17`/`SP62-06`:
-execute one equivalent legacy/AST substitute at a time, compare its mapped
-output/diagnostics/runtime, and retain a reversible fallback. Scanner retirement
-remains prohibited until those per-pass gates close.
+The bounded `CF-17`/`SP62-06` migration gate is complete: equivalent
+legacy/AST substitutes have been exercised for the supported runtime lowerers,
+validation, test extraction, and comptime rollback, with mapped output,
+diagnostic, and runtime evidence over the frozen overlap corpus. Scanner
+retirement remains prohibited during phases 1–8; the completed gates provide
+promotion evidence and rollback safety, not permission to remove the legacy
+implementation in this migration.
 
 The rollback probe now exercises all six known pass IDs in both selectors on a
 neutral C source. That proves switch plumbing and fail-closed omission only; it

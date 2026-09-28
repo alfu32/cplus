@@ -1360,6 +1360,7 @@ class TreeSitterCPlusParserBackendTest {
         )
         val parsed = backend.parse(snapshot)
         assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
         val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
 
         assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
@@ -1678,7 +1679,6 @@ class TreeSitterCPlusParserBackendTest {
         )
         val parsed = backend.parse(snapshot)
         assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
-
         val result = TreeSitterAllocationIntentAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
 
         assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
@@ -1843,6 +1843,75 @@ class TreeSitterCPlusParserBackendTest {
             val expected = if (name == "after_assignment") AllocationIntent.SCRATCH else AllocationIntent.COLD
             assertEquals(expected, result.symbols.single { it.name == name }.knownProvenance)
         }
+    }
+
+    @Test
+    fun allocationFlowKeepsUnknownExpressionWrappersConservative() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-unknown-expression-wrapper.cp"),
+            """
+                struct pair_t { char* first; char* second; };
+                int main(void) {
+                    char* value = alloc_warm(8);
+                    struct pair_t pair = (struct pair_t){
+                        (value = alloc_scratch(8)),
+                        (value = alloc_hot(8))
+                    };
+                    scratch char* after_pair = value;
+                    (void)pair;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        assertTrue(
+            ast.root.descendantsAndSelf().any { it.syntaxKind == "compound_literal_expression" },
+            "the regression must exercise the previously generic expression wrapper"
+        )
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(ast)
+
+        assertEquals(1, result.diagnostics.size, result.diagnostics.toString())
+        assertTrue(
+            result.diagnostics.single().message.contains("unsequenced conflicting allocation writes"),
+            result.diagnostics.toString()
+        )
+        assertEquals(
+            AllocationIntent.NONE,
+            result.symbols.single { it.name == "after_pair" }.knownProvenance
+        )
+    }
+
+    @Test
+    fun allocationFlowTreatsInlineAssemblyAsAnUnknownMemoryWrite() {
+        val snapshot = sources.open(
+            SourceId.named("allocation-inline-assembly.cp"),
+            """
+                int main(void) {
+                    char* value = alloc_warm(8);
+                    __asm__ volatile ("" : "+r"(value));
+                    scratch char* after_asm = value;
+                    return 0;
+                }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        assertTrue(
+            ast.root.descendantsAndSelf().any { it.syntaxKind == "gnu_asm_expression" },
+            "the regression must exercise the GNU inline-assembly expression"
+        )
+
+        val result = TreeSitterAllocationIntentAnalyzer().analyze(ast)
+
+        assertTrue(result.diagnostics.isEmpty(), result.diagnostics.toString())
+        assertEquals(
+            AllocationIntent.NONE,
+            result.symbols.single { it.name == "after_asm" }.knownProvenance
+        )
     }
 
     @Test
@@ -3146,18 +3215,28 @@ class TreeSitterCPlusParserBackendTest {
     fun astComptimeRollbackFailsClosedAtTheOriginalSourceSpan() {
         val text = "comptime int @answer = 42; int main(void) { return comptime answer; }"
         val source = sources.open(SourceId.named("rollback-comptime.cp"), text)
-        val result = TreeSitterCPlusPrototypeTranspiler(
-            backend = backend,
-            sourceManager = sources,
-            passSelection = TreeSitterPassSelection(resolveComptime = false)
-        ).transpile(source)
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compareComptimeRollback(source)
 
-        assertFalse(result.successful)
-        assertNull(result.cSource)
-        val boundary = result.unsupportedNodes.single()
+        assertTrue(report.selectorContractHolds, report.toString())
+        assertFalse(report.treeSitter.successful)
+        assertNull(report.treeSitter.cSource)
+        val boundary = report.treeSitterBoundary ?: error("missing AST comptime rollback boundary")
         assertEquals("cplus_comptime_declaration", boundary.syntaxKind)
         assertEquals(source.id.value, boundary.span.file)
         assertEquals(text.indexOf("comptime int"), boundary.span.startOffset)
+    }
+
+    @Test
+    fun comptimeRollbackLeavesOrdinaryCPlusAvailable() {
+        val text = "int main(void) { return 0; }"
+        val source = sources.open(SourceId.named("rollback-ordinary.cp"), text)
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compareComptimeRollback(source)
+
+        assertNull(report.legacyFailure, report.toString())
+        assertNull(report.legacyFailureSpan)
+        assertTrue(report.treeSitter.successful, report.toString())
+        assertNull(report.treeSitterBoundary)
+        assertTrue(report.treeSitter.cSource?.text?.contains("int main") == true)
     }
 
     @Test

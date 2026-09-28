@@ -53,6 +53,17 @@ data class TreeSitterPrototypeResult(
 data class TreeSitterUnsupportedConstruct(val syntaxKind: String, val span: cplus.SourceSpan)
 
 /**
+ * Syntax nodes that belong to the comptime frontend boundary.  Keeping this inventory at
+ * module scope lets both the prototype and migration reports apply the same rollback contract.
+ */
+internal val TREE_SITTER_COMPTIME_ROLLBACK_NODES = setOf(
+    "cplus_comptime_declaration", "cplus_comptime_block", "cplus_comptime_function_definition",
+    "cplus_comptime_invocation", "cplus_comptime_value", "cplus_comptime_import", "cplus_comptime_flags",
+    "cplus_comptime_expression", "cplus_comptime_conditional", "cplus_code_fragment", "cplus_at_call_expression",
+    "cplus_legacy_type_generator", "cplus_legacy_function_generator", "cplus_legacy_comptime_invocation"
+)
+
+/**
  * Per-pass migration switch for the AST runtime pipeline. Disabled passes are not silently
  * emulated: their C-plus nodes reach the final unsupported-node check, which gives callers a
  * deterministic rollback/negative-test result instead of partially applying semantics.
@@ -111,7 +122,7 @@ class TreeSitterCPlusPrototypeTranspiler(
         var compilerOptionOrder: List<SourceId> = emptyList()
         var sourceImports: List<cplus.SourceImportEdge> = emptyList()
         if (!passSelection.resolveComptime) {
-            val comptimeNode = descendants(parsed.root).firstOrNull { it.kind in CPLUS_COMPTIME_NODES }
+            val comptimeNode = descendants(parsed.root).firstOrNull { it.kind in TREE_SITTER_COMPTIME_ROLLBACK_NODES }
             if (comptimeNode != null) {
                 return TreeSitterPrototypeResult(
                     null,
@@ -862,11 +873,5 @@ class TreeSitterCPlusPrototypeTranspiler(
     private companion object {
         const val MAX_COMPTIME_CONDITIONAL_PASSES = 128
         val CPLUS_MODULE_IMPORT_NODES = setOf("cplus_comptime_import", "cplus_at_import")
-        val CPLUS_COMPTIME_NODES = setOf(
-            "cplus_comptime_declaration", "cplus_comptime_block", "cplus_comptime_function_definition",
-            "cplus_comptime_invocation", "cplus_comptime_value", "cplus_comptime_import", "cplus_comptime_flags",
-            "cplus_comptime_expression", "cplus_comptime_conditional", "cplus_code_fragment", "cplus_at_call_expression",
-            "cplus_legacy_type_generator", "cplus_legacy_function_generator", "cplus_legacy_comptime_invocation"
-        )
     }
 }

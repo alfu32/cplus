@@ -5,6 +5,7 @@ import cplus.CPlusLegacyPassSelection
 import cplus.CPlusSyntaxException
 import cplus.CPlusTarget
 import cplus.CPlusTranspiler
+import cplus.SourceSpan
 import cplus.SourceSnapshot
 import cplus.TranscodedSource
 import cplus.TranscodedTestSource
@@ -86,6 +87,20 @@ data class TreeSitterTestExtractionRollbackReport(
     val selectorContractHolds: Boolean
         get() = legacyFailure != null && legacyFailureLine != null &&
             !treeSitter.successful && treeSitterBoundaryRetained
+}
+
+/** Rollback evidence for disabling comptime resolution in both migration frontends. */
+data class TreeSitterComptimeRollbackReport(
+    val legacyFailure: String?,
+    val legacyFailureSpan: SourceSpan?,
+    val treeSitter: TreeSitterPrototypeResult,
+    val treeSitterBoundary: TreeSitterUnsupportedConstruct?
+) {
+    val selectorContractHolds: Boolean
+        get() = legacyFailure != null && legacyFailureSpan != null &&
+            treeSitterBoundary != null && treeSitterBoundary.span.file == legacyFailureSpan.file &&
+            treeSitterBoundary.span.startOffset == legacyFailureSpan.startOffset &&
+            treeSitterBoundary.span.endOffset == legacyFailureSpan.endOffset
 }
 
 /**
@@ -184,6 +199,43 @@ class TreeSitterCPlusDifferentialRunner(
     private val backend: cplus.CPlusParserBackend = TreeSitterCPlusParserBackend(),
     private val sourceManager: cplus.SourceManager = cplus.SourceManager()
     ) {
+    /** Runs the comptime rollback boundary in both frontends without changing production defaults. */
+    fun compareComptimeRollback(
+        source: SourceSnapshot,
+        targetOs: String = CPlusTarget.hostOs(),
+        importPaths: CPlusImportPaths = CPlusImportPaths(),
+        targetArch: String = CPlusTarget.hostArch()
+    ): TreeSitterComptimeRollbackReport {
+        val legacyResult = runCatching {
+            CPlusTranspiler().transpile(
+                source.text,
+                source.id.value,
+                importPaths = importPaths,
+                targetOs = targetOs,
+                legacyPassSelection = CPlusLegacyPassSelection(resolveComptime = false)
+            )
+        }
+        val treeResult = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sourceManager,
+            targetOs = targetOs,
+            importPaths = importPaths,
+            targetArch = targetArch,
+            passSelection = TreeSitterPassSelection(resolveComptime = false)
+        ).transpile(source)
+        val legacyFailure = legacyResult.exceptionOrNull()
+        val legacySpan = (legacyFailure as? CPlusSyntaxException)?.sourceSpan
+        val boundary = treeResult.unsupportedNodes.firstOrNull {
+            it.syntaxKind in TREE_SITTER_COMPTIME_ROLLBACK_NODES
+        }
+        return TreeSitterComptimeRollbackReport(
+            legacyFailure = legacyFailure?.message,
+            legacyFailureSpan = legacySpan,
+            treeSitter = treeResult,
+            treeSitterBoundary = boundary
+        )
+    }
+
     /**
      * Compare AST test extraction independently from every runtime lowering pass.
      *

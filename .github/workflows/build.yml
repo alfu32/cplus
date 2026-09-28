@@ -67,7 +67,19 @@ jobs:
           :parser-tree-sitter:jvmTest \
           :parser-tree-sitter:testTreeSitterGrammar \
           --no-daemon
-  
+
+      - name: Run host compiler and mapped-diagnostic regressions
+        shell: bash
+        env:
+          PARSER_HOST: ${{ matrix.host }}
+        run: |
+          ./gradlew \
+            :parser-tree-sitter:jvmTest \
+            --tests 'cplus.parser.TreeSitterCPlusParserBackendTest.compilesPortableDialectAttributesAndStandardHeadersWithEveryHostDriver' \
+            --tests 'cplus.parser.TreeSitterCPlusParserBackendTest.allAvailableHostCompilersPreserveMappedMethodDiagnosticLineAndColumn' \
+            --no-daemon \
+            --max-workers=1
+
           host_os="${PARSER_HOST%%-*}"
           host_arch="${PARSER_HOST#*-}"
           if [[ "$host_arch" == "x86_64" ]]; then
