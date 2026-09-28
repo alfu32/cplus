@@ -475,7 +475,7 @@ This is the current capability boundary, based on the prototype pass sequence an
 - [x] Compile the prototype-generated C for `stdlib/io/file.cp` and `stdlib/memory/xmem.cp` with locally available C11 compilers; the regression also checks singleton method lowering, not just parser acceptance or successful transpile status.
 - [x] Extend opt-in transcode timings to supported real stdlib and example modules on the local host; preserve results and failed candidates rather than counting parse-only timing as transcode coverage.
 - [x] Add a per-document Tree-sitter parse session that applies a source edit to the previous tree and reparses with `oldTree`; test repeated Unicode/malformed edits against fresh parse trees and diagnostics, then measure tree reuse separately from full reparse.
-- [ ] Run representative-source transcode and incremental-tree measurements across the supported host CI matrix; account for the normalized-AST adapter still rebuilding from the reused CST.
+- [x] Run representative-source transcode and incremental-tree measurements across the supported host CI matrix; account for the normalized-AST adapter still rebuilding from the reused CST. Tagged CI run `36499127737` completed the benchmark task on Linux x86_64/arm64, macOS x86_64/arm64, and Windows x86_64/arm64, preserving one benchmark log per host report artifact.
 - [ ] Promote Tree-sitter backend to default only after grammar, semantic, output, diagnostics, performance, and packaging gates pass.
 
 ### Phase 8/9 — IDE adoption and retirement
