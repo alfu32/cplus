@@ -376,5 +376,12 @@ val packageIntellij = tasks.register<Exec>("packageIntellij") {
 tasks.register("editorArtifacts") {
     group = "build"
     description = "Builds the VS Code, IntelliJ, and Vim editor artifacts."
-    dependsOn(packageVscode, packageVim, packageIntellij)
+    dependsOn(":cli:compileKotlin", packageVscode, packageVim, packageIntellij)
 }
+
+// Editor packaging can be memory-heavy, especially the nested IntelliJ build.
+// Keep it behind the CLI compiler and serialize the three packagers so a
+// Kotlin daemon is not lost while unrelated archive tasks compete for memory.
+packageVscode.configure { mustRunAfter(":cli:compileKotlin") }
+packageVim.configure { mustRunAfter(packageVscode) }
+packageIntellij.configure { mustRunAfter(packageVim) }
