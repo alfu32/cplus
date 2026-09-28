@@ -220,17 +220,51 @@ jobs:
       - name: Install pinned Tree-sitter CLI
         run: npm install --global tree-sitter-cli@0.25.10
       - uses: gradle/actions/setup-gradle@v4
+      - name: Initialize CLI diagnostics
+        shell: bash
+        run: |
+          mkdir -p build/ci-evidence
+          {
+            echo "workflow=${GITHUB_WORKFLOW}"
+            echo "run=${GITHUB_RUN_ID}"
+            echo "sha=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF}"
+            echo "runner_os=${RUNNER_OS}"
+            echo "runner_arch=${RUNNER_ARCH}"
+            echo "java_home=${JAVA_HOME:-}"
+            echo "java=$(java -version 2>&1 | head -n 1)"
+            echo "java_path=$(command -v java || true)"
+            echo "clang_path=$(command -v clang || true)"
+            echo "clang_version=$(clang --version 2>&1 | head -n 1 || true)"
+            echo "cc_path=$(command -v cc || true)"
+            echo "cc_version=$(cc --version 2>&1 | head -n 1 || true)"
+            echo "tcc_path=$(command -v tcc || true)"
+            echo "pwd=$(pwd)"
+            echo "uname=$(uname -a 2>/dev/null || true)"
+          } > build/ci-evidence/environment.txt
       - name: Run Gradle tests
         env:
           CC: clang
           CXX: clang++
           TCC: clang
           CPLUS_TEST_COMPILER: clang
-        run: ./gradlew test --no-daemon
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew test --no-daemon 2>&1 | tee build/ci-evidence/gradle-test.log
+
       - name: Build cross-runtime application ZIP (no sysroots)
-        run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=cross bundleDist --no-daemon
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=cross bundleDist --no-daemon \
+            2>&1 | tee build/ci-evidence/build-cross-runtime.log
       - name: Build system-compiler application ZIP
-        run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=none bundleDist --no-daemon
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=none bundleDist --no-daemon \
+            2>&1 | tee build/ci-evidence/build-bare-runtime.log
       - name: Verify payload selection, documentation, installers, and both distributions
         shell: bash
         env:
@@ -238,6 +272,20 @@ jobs:
           CC: clang
           CPLUS_TEST_COMPILER: clang
         run: |
+          set -o pipefail
+          exec > >(tee build/ci-evidence/distribution-verification.log) 2>&1
+          set -x
+          trap 'status=$?; set +x; { echo "failure_status=$status"; echo "failure_line=$LINENO"; echo "failure_command=$BASH_COMMAND"; find build/ci-evidence build/distribution-check dist -maxdepth 4 -type f -print 2>/dev/null | sort; } >> build/ci-evidence/failure-summary.txt; exit "$status"' ERR
+          {
+            echo "verification_release=$RELEASE_VERSION"
+            echo "verification_tcc=$TCC"
+            echo "verification_cc=$CC"
+            echo "verification_test_compiler=$CPLUS_TEST_COMPILER"
+            echo "tcc_path=$(command -v "$TCC" || true)"
+            echo "cc_path=$(command -v "$CC" || true)"
+            "$TCC" --version 2>&1 | head -n 3 || true
+            "$CC" --version 2>&1 | head -n 3 || true
+          } > build/ci-evidence/verification-environment.txt
           bare="dist/cplus-${RELEASE_VERSION}-bare.zip"
           cross="dist/cplus-${RELEASE_VERSION}-cross-no-sysroots.zip"
           test -s "$bare"
@@ -319,6 +367,18 @@ jobs:
             dist/cplus-${{ env.RELEASE_VERSION }}-cross-no-sysroots.zip
           if-no-files-found: error
           compression-level: 0
+      - name: Upload CLI failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cplus-cli-diagnostics
+          path: |
+            build/ci-evidence/
+            build/bare-smoke
+            build/cross-smoke
+            build/bare-http-smoke
+          if-no-files-found: ignore
+          retention-days: 14
 
   editor-plugins:
     name: Build editor plugin bundles
