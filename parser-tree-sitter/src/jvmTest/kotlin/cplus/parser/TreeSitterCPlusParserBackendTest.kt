@@ -372,12 +372,14 @@ class TreeSitterCPlusParserBackendTest {
                 failures += "${path.toString().removePrefix(repository.toString()).trimStart('/')} produced no AST @test fixtures"
             } else {
                 val generatedC = result.cSource!!.text
-                validateCCompiles(
-                    generatedC,
-                    includeDirectories = listOf(path.parent),
-                    compilerOptions = result.compilerOptions,
-                    context = path.toString().removePrefix(repository.toString()).trimStart('/')
-                )
+                if (!requiresRaylib(generatedC, result.compilerOptions) || raylibIsAvailable(result.compilerOptions)) {
+                    validateCCompiles(
+                        generatedC,
+                        includeDirectories = listOf(path.parent),
+                        compilerOptions = result.compilerOptions,
+                        context = path.toString().removePrefix(repository.toString()).trimStart('/')
+                    )
+                }
                 if (generatedC.contains("comptime function") || generatedC.contains("@name(")) {
                     failures += "${path.toString().removePrefix(repository.toString()).trimStart('/')} retained unresolved comptime generator syntax"
                 }
@@ -446,12 +448,15 @@ class TreeSitterCPlusParserBackendTest {
                 ) {
                     failures += "$relative retained active comptime generator syntax"
                 } else {
-                    validateCCompilesWithAvailableDrivers(
-                        code = result.cSource?.text ?: error("successful AST result has no C output for $relative"),
-                        includeDirectories = listOf(path.parent, stdlibRoot),
-                        compilerOptions = result.compilerOptions,
-                        context = relative
-                    )
+                    val generatedC = result.cSource?.text ?: error("successful AST result has no C output for $relative")
+                    if (!requiresRaylib(generatedC, result.compilerOptions) || raylibIsAvailable(result.compilerOptions)) {
+                        validateCCompilesWithAvailableDrivers(
+                            code = generatedC,
+                            includeDirectories = listOf(path.parent, stdlibRoot),
+                            compilerOptions = result.compilerOptions,
+                            context = relative
+                        )
+                    }
                 }
             } catch (failure: Throwable) {
                 failures += "$relative: ${failure.message ?: failure::class.simpleName}"
@@ -495,11 +500,13 @@ class TreeSitterCPlusParserBackendTest {
                         result.cSource ?: error("successful AST result has no C output"),
                         result.testFixtures
                     )
-                    compileAndRunC(
-                        harness.source.code,
-                        includeDirectories = listOf(path.parent, stdlibRoot),
-                        compilerOptions = result.compilerOptions
-                    )
+                    if (!requiresRaylib(harness.source.code, result.compilerOptions) || raylibIsAvailable(result.compilerOptions)) {
+                        compileAndRunC(
+                            harness.source.code,
+                            includeDirectories = listOf(path.parent, stdlibRoot),
+                            compilerOptions = result.compilerOptions
+                        )
+                    }
                 }
             } catch (failure: Throwable) {
                 failures += "$relative: ${failure.message ?: failure::class.simpleName}"
@@ -2580,7 +2587,7 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue("int(*callback)(borrowed named_value_t *item, size_t index)" in generated, generated.takeLast(8_000))
         assertFalse("@InputList" in generated || "@OutputList" in generated || "@T" in generated || "@R" in generated, generated.takeLast(8_000))
         assertC11Syntax(generated, "examples/generic_list.cp")
-        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+        val compiler = cplusTestCompilers(listOf("cc", "gcc", "clang")).firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
         } ?: return
         val (exitCode, stdout) = compileAndCaptureC(compiler, generated)
@@ -7060,6 +7067,37 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         }
     }
 
+    private fun requiresRaylib(code: String, compilerOptions: List<String>): Boolean =
+        Regex("#\\s*include\\s*[<\\\"](?:raylib|raymath|rlgl)\\.h[>\\\"]").containsMatchIn(code) ||
+            compilerOptions.any { it == "-lraylib" || it == "raylib" }
+
+    private fun raylibIsAvailable(compilerOptions: List<String>): Boolean {
+        val compiler = cplusTestCompilers(listOf("clang")).firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return false
+        val temporaryDirectory = Files.createTempDirectory("cplus-raylib-probe")
+        try {
+            val executable = temporaryDirectory.resolve(
+                "raylib-probe" + if (System.getProperty("os.name").startsWith("Windows", true)) ".exe" else ""
+            )
+            val command = buildList {
+                addAll(listOf(compiler, "-std=c11", "-x", "c", "-"))
+                addAll(compilerOptions)
+                addAll(listOf("-o", executable.toString()))
+            }
+            val process = ProcessBuilder(command).redirectErrorStream(true).start()
+            process.outputStream.bufferedWriter().use {
+                it.write("#include <raylib.h>\nint main(void) { return 0; }\n")
+            }
+            process.inputStream.bufferedReader().use { it.readText() }
+            return process.waitFor() == 0
+        } catch (_: Exception) {
+            return false
+        } finally {
+            Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
     private fun cplusTestCompilers(defaults: List<String>): List<String> {
         val configured = System.getenv("CPLUS_TEST_COMPILER")
             ?.split(',')
@@ -7191,7 +7229,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         compilerOptions: List<String>,
         context: String
     ) {
-        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+        val compiler = cplusTestCompilers(listOf("cc", "gcc", "clang")).firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
         } ?: return
         val command = buildList {
