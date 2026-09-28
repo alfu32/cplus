@@ -74,14 +74,17 @@ class CPlusTestExtractionPass {
                     CPlusExtractedTestAssertion(
                         macro,
                         arguments,
-                        call.span.startOffset - bodyNode.span.startOffset,
-                        call.span.endOffset - bodyNode.span.startOffset,
+                        call.span.startOffset - (bodyNode.span.startOffset + 1),
+                        call.span.endOffset - (bodyNode.span.startOffset + 1),
                         source.toOriginalSpan(call.span)
                     )
                 }.toList()
             fixtures += CPlusExtractedTestFixture(
                 name = name,
-                body = source.slice(bodyNode.span.startOffset, bodyNode.span.endOffset),
+                // The legacy test model stores the compound body contents, not
+                // the delimiters. Keep the AST fixture contract identical so the
+                // harness owns exactly one pair of function braces.
+                body = source.slice(bodyNode.span.startOffset + 1, bodyNode.span.endOffset - 1),
                 span = source.toOriginalSpan(test.span),
                 assertions = assertions
             )

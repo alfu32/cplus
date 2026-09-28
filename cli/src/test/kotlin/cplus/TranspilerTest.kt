@@ -10,6 +10,190 @@ import java.nio.file.Files
 
 class TranspilerTest {
     @Test
+    fun legacyPassSelectionSupportsRollbackAndFailsClosedAtTheDisabledBoundary() {
+        val source = """
+            typedef struct counter_t {
+                int value;
+                pub int get(borrowed *self) { return self->value; }
+            } counter_t;
+            int main(void) {
+                counter_t counter = {42};
+                return counter.get() != 42;
+            }
+        """.trimIndent()
+
+        val normal = CPlusTranspiler().transpile(source, "legacy-selection.cp")
+        assertTrue("counter__get(&counter)" in normal.code, normal.code)
+
+        val rolledBack = CPlusTranspiler().transpile(
+            source,
+            "legacy-selection.cp",
+            legacyPassSelection = CPlusLegacyPassSelection(
+                disabledPasses = setOf(CPlusLegacyPassSelection.LOWER_METHOD_CALLS)
+            )
+        )
+        assertTrue("counter.get()" in rolledBack.code, rolledBack.code)
+        assertFalse("counter__get(&counter)" in rolledBack.code, rolledBack.code)
+    }
+
+    @Test
+    fun legacyPassSelectionRejectsUnknownPasses() {
+        assertThrows(IllegalArgumentException::class.java) {
+            CPlusLegacyPassSelection(setOf("not-a-real-pass"))
+        }
+    }
+
+    @Test
+    fun legacyPassSelectionReportsTheCompleteOrderedPassInventory() {
+        val source = "int main(void) { return 0; }"
+        val expected = listOf(
+            CPlusLegacyPassSelection.EXTRACT_THROWS,
+            CPlusLegacyPassSelection.LOWER_DEFER,
+            CPlusLegacyPassSelection.LOWER_METHOD_CALLS,
+            CPlusLegacyPassSelection.LOWER_STRUCT_METHODS,
+            CPlusLegacyPassSelection.LOWER_TRY_CATCH,
+            CPlusLegacyPassSelection.VALIDATE_SEMANTICS
+        )
+        val normal = CPlusTranspiler().transpile(source, "legacy-pass-inventory.cp")
+        assertEquals(expected, normal.frontendPasses)
+
+        expected.forEach { disabled ->
+            val selected = CPlusTranspiler().transpile(
+                source,
+                "legacy-pass-inventory.cp",
+                legacyPassSelection = CPlusLegacyPassSelection(setOf(disabled))
+            )
+            assertEquals(expected.filterNot { it == disabled }, selected.frontendPasses)
+        }
+    }
+
+    @Test
+    fun legacyTestExtractionSelectionFailsClosedAtTheFixtureBoundary() {
+        val source = "@test \"disabled fixture\" { @assert(1 == 1); }\nint main(void) { return 0; }"
+
+        val normal = CPlusTranspiler().transpileTests(source, "legacy-test-selection.cp")
+        assertEquals(listOf("disabled fixture"), normal.testNames)
+
+        val failure = assertThrows(CPlusSyntaxException::class.java) {
+            CPlusTranspiler().transpileTests(
+                source,
+                "legacy-test-selection.cp",
+                legacyPassSelection = CPlusLegacyPassSelection(extractTests = false)
+            )
+        }
+        assertTrue(failure.message.orEmpty().contains("@test extraction is disabled"))
+        assertEquals("legacy-test-selection.cp", failure.sourceSpan?.file)
+        assertEquals(1, failure.sourceSpan?.startLine)
+    }
+
+    @Test
+    fun cliSelectsTreeSitterCompilationFrontendWithoutChangingTheLegacyDefault() {
+        val directory = Files.createTempDirectory("cplus-frontend-selector")
+        try {
+            val source = directory.resolve("counter.cp")
+            val treeOutput = directory.resolve("counter.tree.c")
+            Files.writeString(
+                source,
+                """
+                    typedef struct counter_t {
+                        int value;
+                        pub int get(borrowed *self) { return self->value; }
+                    } counter_t;
+                    int main(void) {
+                        counter_t counter = {42};
+                        return counter.get() != 42;
+                    }
+                """.trimIndent()
+            )
+
+            val treeErrors = StringBuilder()
+            val treeStatus = CPlusCli(output = StringBuilder(), errors = treeErrors).run(
+                listOf("transcode", source.toString(), "--frontend=tree-sitter", "-o", treeOutput.toString())
+            )
+            assertEquals(0, treeStatus, treeErrors.toString())
+            val treeGenerated = Files.readString(treeOutput)
+            assertTrue("counter__get(&counter)" in treeGenerated, treeGenerated)
+
+            val legacyOutput = directory.resolve("counter.legacy.c")
+            val legacyStatus = CPlusCli(output = StringBuilder(), errors = StringBuilder()).run(
+                listOf("transcode", source.toString(), "-o", legacyOutput.toString())
+            )
+            assertEquals(0, legacyStatus)
+            assertTrue("counter__get(&counter)" in Files.readString(legacyOutput))
+        } finally {
+            Files.walk(directory).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+    }
+
+    @Test
+    fun cliSelectsTreeSitterForTestTranscodingWhileKeepingTheLegacyFixtureBridgeExplicit() {
+        val directory = Files.createTempDirectory("cplus-test-frontend-selector")
+        try {
+            val source = directory.resolve("fixture.cp")
+            val output = directory.resolve("fixture.test.c")
+            Files.writeString(
+                source,
+                """
+                    typedef struct counter_t {
+                        int value;
+                        pub int get(borrowed *self) { return self->value; }
+                    } counter_t;
+                    comptime flags -DTEST_FRONTEND_FLAG=1;
+                    @test "tree fixture" {
+                        counter_t counter = {42};
+                        @assertEquals(42, counter.get());
+                    }
+                """.trimIndent()
+            )
+
+            val errors = StringBuilder()
+            val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                listOf("test", "transcode", "--frontend=tree-sitter", source.toString(), "-o", output.toString())
+            )
+            assertEquals(0, status, errors.toString())
+            val generated = Files.readString(output)
+            assertTrue("cplus_test_0" in generated, generated)
+            assertTrue("counter__get(&counter)" in generated, generated)
+            assertTrue("TEST_FRONTEND_FLAG" in generated, generated)
+        } finally {
+            Files.walk(directory).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+    }
+
+    @Test
+    fun cliRunsTestsThroughTheSelectedTreeSitterFrontend() {
+        val directory = Files.createTempDirectory("cplus-test-frontend-run")
+        try {
+            val source = directory.resolve("fixture.cp")
+            Files.writeString(
+                source,
+                """
+                    @test "tree runtime fixture" {
+                        int value = 42;
+                        @assertEquals(42, value);
+                    }
+                """.trimIndent()
+            )
+            val output = StringBuilder()
+            val errors = StringBuilder()
+            val status = CPlusCli(output = output, errors = errors).run(
+                listOf("test", "run", "--frontend=tree-sitter", source.toString())
+            )
+            assertEquals(0, status, "${errors}\n${output}")
+            assertTrue("tree runtime fixture" in output, output.toString())
+            assertTrue("0 failed files" in output, output.toString())
+        } finally {
+            Files.walk(directory).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+    }
+
+    @Test
     fun cliParseEmitsNormalizedAstJsonAndPreservesRecoveredDiagnostics() {
         val directory = Files.createTempDirectory("cplus-parse-json")
         try {
@@ -1119,6 +1303,7 @@ class TranspilerTest {
             val status = CPlusCli(output = StringBuilder(), errors = errors).run(listOf("test", source.toString()))
 
             assertEquals(1, status, errors.toString())
+            println("diagnostic test errors: $errors")
             assertTrue(errors.contains("${source.toAbsolutePath()}:2"), errors.toString())
         } finally {
             Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)

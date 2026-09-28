@@ -20,6 +20,7 @@ import cplus.CPlusComptimeResolver
 import cplus.CPlusMethodCallLoweringPass
 import cplus.CPlusStructMethodLoweringPass
 import cplus.CPlusTranspiler
+import cplus.CPlusLegacyPassSelection
 import cplus.CPlusParserShadowRunner
 import cplus.CPlusSyntaxNode
 import cplus.CPlusParseResult
@@ -43,6 +44,7 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class TreeSitterCPlusParserBackendTest {
     private val backend = TreeSitterCPlusParserBackend()
@@ -209,6 +211,8 @@ class TreeSitterCPlusParserBackendTest {
             .firstOrNull { Files.isRegularFile(it.resolve("documentation/corpus/frontend-v1.tsv")) }
             ?: error("could not locate frontend corpus from ${Path.of("").toAbsolutePath()}")
         val manifest = repository.resolve("documentation/corpus/frontend-v1.tsv")
+        val contract = repository.resolve("documentation/corpus/frontend-v1-contract.tsv")
+        assertTrue(Files.isRegularFile(contract), "frontend corpus result contract is missing")
         val testSource = Files.readString(
             repository.resolve("parser-tree-sitter/src/jvmTest/kotlin/cplus/parser/TreeSitterCPlusParserBackendTest.kt")
         )
@@ -219,9 +223,25 @@ class TreeSitterCPlusParserBackendTest {
                 assertEquals(5, fields.size, "manifest line ${index + 1} must have five tab-separated fields: $line")
                 fields
             }
+        val contractRows = Files.readAllLines(contract)
+            .filter { it.isNotBlank() && !it.startsWith("#") }
+            .mapIndexed { index, line ->
+                val fields = line.split('\t')
+                assertEquals(3, fields.size, "contract line ${index + 1} must have three tab-separated fields: $line")
+                fields
+            }
 
         assertEquals(68, rows.size, "frontend-v1.tsv case count changed; update the frozen count intentionally")
+        assertEquals(68, contractRows.size, "frontend-v1-contract.tsv case count changed; update the frozen count intentionally")
         assertEquals(rows.size, rows.map { it[0] }.toSet().size, "frontend corpus IDs must be unique")
+        assertEquals(
+            contractRows.size,
+            contractRows.map { it[0] }.toSet().size,
+            "frontend corpus contract IDs must be unique"
+        )
+        val manifestById = rows.associateBy { it[0] }
+        val contractById = contractRows.associateBy { it[0] }
+        assertEquals(rows.map { it[0] }.toSet(), contractById.keys, "manifest and result contract IDs must match")
         assertEquals(
             mapOf("normative" to 29, "boundary" to 25, "overlap" to 14),
             rows.groupingBy { it[1] }.eachCount(),
@@ -238,6 +258,16 @@ class TreeSitterCPlusParserBackendTest {
                 Regex("""\bfun\s+${Regex.escape(evidence)}\s*\(""").containsMatchIn(testSource),
                 "$id references missing executable evidence method '$evidence'"
             )
+        }
+        contractRows.forEach { (id, category, expectedResult) ->
+            assertEquals(category, manifestById.getValue(id)[1], "$id contract category does not match the manifest")
+            val expected = when (category) {
+                "normative" -> "materialize"
+                "boundary" -> "mapped-diagnostic"
+                "overlap" -> "differential"
+                else -> error("unhandled frontend corpus category '$category'")
+            }
+            assertEquals(expected, expectedResult, "$id has an invalid expected result contract")
         }
     }
 
@@ -479,6 +509,37 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(
             failures.isEmpty(),
             "AST-lowered standard-library fixtures did not execute successfully:\n" +
+                failures.joinToString("\n")
+        )
+    }
+
+    @Test
+    fun standardLibraryTestFixturesMeetHarnessDifferentialContract() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib/tests")) }
+            ?: error("could not locate repository standard-library tests from ${Path.of("").toAbsolutePath()}")
+        val stdlibRoot = repository.resolve("stdlib").toAbsolutePath().normalize()
+        val inputs = Files.walk(repository.resolve("stdlib/tests")).use { paths ->
+            paths.filter { it.toString().endsWith(".cp") || it.toString().endsWith(".c+") }
+                .sorted()
+                .toList()
+        }
+        val failures = mutableListOf<String>()
+        inputs.forEach { path ->
+            val relative = repository.relativize(path).toString()
+            val source = sources.open(SourceId.named(path.toRealPath().toString()), Files.readString(path))
+            val report = TreeSitterCPlusDifferentialRunner(backend, sources).compareTests(
+                source,
+                targetOs = "linux",
+                importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
+            )
+            if (!report.successful) {
+                failures += "$relative: ${report.harnessTokenDifference ?: report}"
+            }
+        }
+        assertTrue(
+            failures.isEmpty(),
+            "standard-library fixture harness differential failures (${inputs.size} sources):\n" +
                 failures.joinToString("\n")
         )
     }
@@ -2757,6 +2818,47 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun acceptedAstOutputCompilesAndRunsWithEveryAvailableHostCCompiler() {
+        val text = """
+            #include <stdio.h>
+            typedef int error_t;
+            @throws() pub error_t status(int value) { return value; }
+            typedef struct counter_t {
+                int value;
+                pub void add(borrowed mut *self, int amount) { self->value += amount; }
+            } counter_t;
+            int main(void) {
+                counter_t counter = {1};
+                defer counter.value += 1;
+                @try { counter.add(40); status(0); }
+                @catch (error_t error) { return error; }
+                return counter.value == 41 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("host-compiler-matrix.cp"), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val code = result.transcodedSource?.code ?: error("AST frontend did not emit C")
+        val compilers = listOf("cc", "gcc", "clang", "tcc").distinct().filter { compiler ->
+            runCatching {
+                ProcessBuilder(compiler, "--version").start().let { process ->
+                    process.inputStream.use { it.readBytes() }
+                    process.waitFor() == 0
+                }
+            }.getOrDefault(false)
+        }
+        if (compilers.isEmpty()) return
+
+        compilers.forEach { compiler ->
+            val run = compileAndCaptureC(compiler, code)
+            assertEquals(0, run.first, "$compiler rejected or failed the representative AST output:\n${run.second}\n$code")
+        }
+    }
+
+    @Test
     fun delegatesOrdinaryCTypeCheckingToTheSelectedCompiler() {
         val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
@@ -2786,6 +2888,619 @@ class TreeSitterCPlusParserBackendTest {
             output.contains("not an integer") || output.contains("incompatible") || output.contains("conversion"),
             "$compiler did not report the delegated type error:\n$output"
         )
+    }
+
+    @Test
+    fun reportsAndSelectsAstRuntimePassesForMigrationRollback() {
+        val source = sources.open(
+            SourceId.named("runtime-pass-selection.cp"),
+            "int main(void) { return 0; }"
+        )
+        val defaultResult = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(defaultResult.successful, defaultResult.loweringDiagnostics.toString())
+        assertEquals(
+            listOf(
+                "extract-throws",
+                "lower-try-catch",
+                "lower-defer",
+                "validate-semantics",
+                "lower-method-calls",
+                "lower-struct-methods"
+            ),
+            defaultResult.runtimePasses
+        )
+
+        val selectedResult = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            passSelection = TreeSitterPassSelection(
+                disabledRuntimePasses = setOf("lower-try-catch", "lower-defer")
+            )
+        ).transpile(source)
+        assertTrue(selectedResult.successful, selectedResult.loweringDiagnostics.toString())
+        assertFalse("lower-try-catch" in selectedResult.runtimePasses)
+        assertFalse("lower-defer" in selectedResult.runtimePasses)
+        assertTrue("lower-method-calls" in selectedResult.runtimePasses)
+    }
+
+    @Test
+    fun differentialRunnerProducesAStableOverlapReport() {
+        val text = """
+            #include <stdio.h>
+            typedef struct counter_t {
+                int value;
+                pub int get(borrowed *self) { return self->value; }
+            } counter_t;
+            int main(void) {
+                counter_t counter = {42};
+                printf("%d\\n", counter.get());
+                return counter.get() == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("differential-report.cp"), text)
+
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compare(source)
+
+        assertTrue(report.treeSitter.successful, report.treeSitter.loweringDiagnostics.toString())
+        assertTrue(report.normalizedTokensMatch, report.tokenDifference.orEmpty())
+        assertTrue(report.compilerOptionsMatch)
+        assertEquals(report.legacy.sourceOrder, report.treeSitter.sourceOrder)
+        assertTrue(
+            report.allocationDiagnosticsMatch,
+            "legacy=${report.legacy.allocationAnalysis.diagnostics}; " +
+                "tree-sitter=${report.treeSitter.allocationAnalysis.diagnostics}"
+        )
+        assertTrue(report.sourceMapCoverageMatch, report.toString())
+        assertTrue(report.frontendPassesMatch)
+        assertTrue(report.frontendPassChangesMatch)
+        assertFalse(report.frontendPassOrderMatch)
+        assertTrue(report.successful)
+    }
+
+    @Test
+    fun differentialRunnerComparesLegacyAndAstFixtureDiscovery() {
+        val text = """
+            @test "alpha" { @assert(1 == 1); @assertEquals(2, 2); }
+            @test beta { @assert(3 == 3); }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("differential-tests.cp"), text)
+
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compareTests(source)
+
+        assertTrue(report.treeSitter.successful, report.treeSitter.loweringDiagnostics.toString())
+        assertTrue(report.astHarness != null)
+        assertTrue(report.fixtureNamesMatch, report.toString())
+        assertTrue(report.assertionCountsMatch, report.toString())
+        assertTrue(report.harnessFixtureNamesMatch, report.toString())
+        assertTrue(report.harnessAssertionCountsMatch, report.toString())
+        assertTrue(report.harnessTokensMatch, report.harnessTokenDifference.orEmpty())
+        assertTrue(report.assertionSourceLinesMatch, report.toString())
+        assertTrue(report.successful, report.toString())
+    }
+
+    @Test
+    fun differentialRunnerComparesAllocationDiagnosticsAtOriginalOrigins() {
+        val text = """
+            int main(void) {
+                scratch char* source = alloc_scratch(8);
+                warm char* mismatch = source;
+                return mismatch == 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("differential-allocation.cp"), text)
+
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compare(source)
+
+        assertTrue(report.treeSitter.successful, report.treeSitter.loweringDiagnostics.toString())
+        assertTrue(report.normalizedTokensMatch, report.tokenDifference.orEmpty())
+        assertTrue(
+            report.allocationDiagnosticsMatch,
+            "legacy=${report.legacy.allocationAnalysis.diagnostics}; " +
+                "tree-sitter=${report.treeSitter.allocationAnalysis.diagnostics}"
+        )
+        assertEquals(1, report.legacy.allocationAnalysis.diagnostics.size)
+        assertEquals(1, report.treeSitter.allocationAnalysis.diagnostics.size)
+        assertEquals(
+            text.indexOf("mismatch"),
+            report.treeSitter.allocationAnalysis.diagnostics.single().sourceSpan.startOffset
+        )
+    }
+
+    @Test
+    fun perPassRollbackProbeDisablesEveryKnownFrontendPassInBothSelectors() {
+        val source = sources.open(
+            SourceId.named("per-pass-rollback.cp"),
+            "int main(void) { return 0; }"
+        )
+        val runner = TreeSitterCPlusDifferentialRunner(backend, sources)
+
+        CPlusLegacyPassSelection.KNOWN_PASSES.forEach { passId ->
+            val report = runner.comparePassRollback(source, passId)
+            assertTrue(report.selectorContractHolds, "$passId: $report")
+            assertTrue(report.treeSitter.successful, "$passId: ${report.treeSitter.loweringDiagnostics}")
+        }
+    }
+
+    @Test
+    fun astMethodCallRollbackFailsClosedAtTheOriginalCPlusBoundary() {
+        val text = """
+            typedef struct counter_t {
+                int value;
+                pub int get(borrowed *self) { return self->value; }
+            } counter_t;
+            int main(void) {
+                counter_t counter = {42};
+                return counter.get() == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("rollback-method-call.cp"), text)
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).comparePassRollback(
+            source,
+            CPlusLegacyPassSelection.LOWER_METHOD_CALLS
+        )
+
+        assertTrue(report.legacyPassDisabled)
+        assertTrue(report.treeSitterPassDisabled)
+        assertTrue(report.legacy != null, report.legacyFailure.orEmpty())
+        assertFalse(report.treeSitter.successful)
+        assertTrue(report.treeSitter.transcodedSource == null)
+        assertTrue(
+            report.treeSitter.unsupportedNodes.any { it.span.startLine == 7 },
+            "expected the disabled receiver call to remain mapped at line 7: ${report.treeSitter.unsupportedNodes}"
+        )
+    }
+
+    @Test
+    fun astRuntimeRollbackBoundariesFailClosedForDeferTryAndStructMethods() {
+        data class RollbackCase(val passId: String, val source: String, val kind: String)
+        val cases = listOf(
+            RollbackCase(
+                CPlusLegacyPassSelection.EXTRACT_THROWS,
+                """
+                    @throws() pub int checked(void) { return 0; }
+                    int main(void) { return checked(); }
+                """.trimIndent(),
+                "cplus_throws_annotation"
+            ),
+            RollbackCase(
+                CPlusLegacyPassSelection.LOWER_DEFER,
+                """
+                    int main(void) {
+                        defer puts("cleanup");
+                        return 0;
+                    }
+                """.trimIndent(),
+                "cplus_defer_statement"
+            ),
+            RollbackCase(
+                CPlusLegacyPassSelection.LOWER_TRY_CATCH,
+                """
+                    typedef int error_t;
+                    int main(void) {
+                        @try { puts("body"); }
+                        @catch (error_t error) { puts("caught"); }
+                        return 0;
+                    }
+                """.trimIndent(),
+                "cplus_try_statement"
+            ),
+            RollbackCase(
+                CPlusLegacyPassSelection.LOWER_STRUCT_METHODS,
+                """
+                    typedef struct counter_t {
+                        int value;
+                        pub int get(borrowed *self) { return self->value; }
+                    } counter_t;
+                    int main(void) { return 0; }
+                """.trimIndent(),
+                "cplus_method_definition"
+            )
+        )
+
+        cases.forEachIndexed { index, case ->
+            val source = sources.open(SourceId.named("rollback-runtime-$index.cp"), case.source)
+            val report = TreeSitterCPlusDifferentialRunner(backend, sources).comparePassRollback(
+                source,
+                case.passId
+            )
+            assertTrue(report.legacy != null, "${case.passId}: ${report.legacyFailure}")
+            assertFalse(report.treeSitter.successful, "${case.passId} rollback unexpectedly succeeded")
+            assertTrue(report.treeSitter.transcodedSource == null)
+            assertTrue(
+                report.treeSitter.unsupportedNodes.any { it.syntaxKind == case.kind },
+                "${case.passId} did not retain ${case.kind}: ${report.treeSitter.unsupportedNodes}"
+            )
+        }
+    }
+
+    @Test
+    fun exercisedPassParityReportsFullOutputAndRollbackForMethodLowering() {
+        val text = """
+            typedef struct counter_t {
+                int value;
+                pub int get(borrowed *self) { return self->value; }
+            } counter_t;
+            int main(void) {
+                counter_t counter = {42};
+                return counter.get() == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("pass-parity-method.cp"), text)
+
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).comparePass(
+            source,
+            CPlusLegacyPassSelection.LOWER_METHOD_CALLS
+        )
+
+        assertTrue(report.passExercised, report.toString())
+        assertTrue(report.full.successful, report.full.toString())
+        assertTrue(report.rollback.selectorContractHolds, report.rollback.toString())
+        assertFalse(report.rollback.treeSitter.successful)
+        assertTrue(report.successful, report.toString())
+    }
+
+    @Test
+    fun exercisedPassParityReportsTheRemainingRuntimeLowerers() {
+        data class Case(val passId: String, val source: String)
+        val cases = listOf(
+            Case(
+                CPlusLegacyPassSelection.EXTRACT_THROWS,
+                """
+                    typedef int error_t;
+                    @throws() pub error_t checked(void) { return 0; }
+                    int main(void) { return checked(); }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_DEFER,
+                """
+                    #include <stdio.h>
+                    int main(void) {
+                        defer puts("cleanup");
+                        return 0;
+                    }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_STRUCT_METHODS,
+                """
+                    typedef struct counter_t {
+                        int value;
+                        pub int get(borrowed *self) { return self->value; }
+                    } counter_t;
+                    int main(void) { return 0; }
+                """.trimIndent()
+            )
+        )
+
+        cases.forEachIndexed { index, case ->
+            val source = sources.open(SourceId.named("pass-parity-runtime-$index.cp"), case.source)
+            val report = TreeSitterCPlusDifferentialRunner(backend, sources).comparePass(source, case.passId)
+            assertTrue(report.successful, "${case.passId}: $report")
+        }
+    }
+
+    @Test
+    fun passSubstitutionComparesEachIndependentRuntimeLowererWithDependencies() {
+        data class Case(val passId: String, val source: String)
+        val cases = listOf(
+            Case(
+                CPlusLegacyPassSelection.EXTRACT_THROWS,
+                """
+                    typedef int error_t;
+                    @throws() pub error_t checked(void) { return 0; }
+                    int main(void) { return checked(); }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.EXTRACT_THROWS,
+                """
+                    typedef int error_t;
+                    @throws(error) pub int create(borrowed mut error_t* error) {
+                        *error = 0;
+                        return 7;
+                    }
+                    int main(void) {
+                        error_t error = 1;
+                        return create(&error) == 7 && error == 0 ? 0 : 1;
+                    }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_DEFER,
+                """
+                    #include <stdio.h>
+                    int main(void) { defer puts("cleanup"); return 0; }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_DEFER,
+                """
+                    #include <stdio.h>
+                    int main(void) {
+                        if (1) {
+                            defer puts("early cleanup");
+                            return 0;
+                        }
+                        return 1;
+                    }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_STRUCT_METHODS,
+                """
+                    typedef struct counter_t {
+                        int value;
+                        pub int get(borrowed *self) { return self->value; }
+                    } counter_t;
+                    int main(void) { return 0; }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_STRUCT_METHODS,
+                """
+                    typedef struct counter_t {
+                        static pub int make(void) { return 42; }
+                    } counter_t;
+                    int main(void) { return 0; }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_METHOD_CALLS,
+                """
+                    typedef struct counter_t {
+                        int value;
+                        pub int get(borrowed *self) { return self->value; }
+                    } counter_t;
+                    int main(void) {
+                        counter_t counter = {42};
+                        return counter.get() == 42 ? 0 : 1;
+                    }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_METHOD_CALLS,
+                """
+                    typedef struct counter_t {
+                        int value;
+                        pub int get(borrowed *self) { return self->value; }
+                    } counter_t;
+                    int main(void) {
+                        counter_t counter = {42};
+                        counter_t* pointer = &counter;
+                        return pointer->get() == 42 ? 0 : 1;
+                    }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_TRY_CATCH,
+                """
+                    #include <stdio.h>
+                    typedef int error_t;
+                    int main(void) {
+                        @try { puts("body"); }
+                        @catch (error_t error) { puts("caught"); }
+                        return 0;
+                    }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_TRY_CATCH,
+                """
+                    typedef int error_t;
+                    enum { ERROR_BAD = 1, ERROR_IO = 2 };
+                    @throws() pub error_t check(error_t code) { return code; }
+                    int main(void) {
+                        int value = 0;
+                        @try {
+                            @try { check(ERROR_IO); }
+                            @catch (ERROR_BAD, error_t nested) { value = nested; }
+                            value = 9;
+                        }
+                        @catch (ERROR_IO, error_t outer) { value = outer; }
+                        @catch (error_t error) { return 1; }
+                        return value == ERROR_IO ? 0 : 2;
+                    }
+                """.trimIndent()
+            ),
+            Case(
+                CPlusLegacyPassSelection.LOWER_TRY_CATCH,
+                """
+                    #include <stdio.h>
+                    typedef int error_t;
+                    int main(void) {
+                        @try { puts("first"); }
+                        @catch (error_t error) { puts("first catch"); }
+                        @try { puts("second"); }
+                        @catch (error_t error) { puts("second catch"); }
+                        return 0;
+                    }
+                """.trimIndent()
+            )
+        )
+
+        cases.forEach { case ->
+            val source = sources.open(SourceId.named("pass-substitution-${case.passId}.cp"), case.source)
+            val report = TreeSitterCPlusDifferentialRunner(backend, sources)
+                .comparePassSubstitution(source, case.passId)
+            assertTrue(report.successful, "${case.passId}: $report")
+            assertTrue(case.passId in report.enabledPasses)
+            assertTrue(report.targetChangedBoth, report.toString())
+            compileAndRunC(report.legacy!!.code)
+            compileAndRunC(report.treeSitter.transcodedSource!!.code)
+        }
+    }
+
+    @Test
+    fun tryCatchPassParityMatchesTheLegacyGeneratedShape() {
+        val text = """
+            #include <stdio.h>
+            typedef int error_t;
+            int main(void) {
+                @try { puts("body"); }
+                @catch (error_t error) { puts("caught"); }
+                return 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("pass-parity-try.cp"), text)
+
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).comparePass(
+            source,
+            CPlusLegacyPassSelection.LOWER_TRY_CATCH
+        )
+
+        assertTrue(report.passExercised, report.toString())
+        assertTrue(report.full.frontendPassChangesMatch, report.full.toString())
+        assertTrue(report.full.normalizedTokensMatch, report.full.toString())
+        assertTrue(report.full.sourceMapCoverageMatch, report.full.toString())
+        assertEquals(null, report.full.tokenDifference)
+        compileAndRunC(report.full.legacy.code)
+        compileAndRunC(report.full.treeSitter.transcodedSource!!.code)
+        assertTrue(report.rollback.selectorContractHolds, report.rollback.toString())
+        assertTrue(report.successful, report.toString())
+    }
+
+    @Test
+    fun astTestExtractionRollbackFailsClosedAtTheFixtureDeclaration() {
+        val text = """
+            @test "rollback fixture" { @assert(1 == 1); }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("rollback-test-extraction.cp"), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            passSelection = TreeSitterPassSelection(extractTests = false)
+        ).transpile(source)
+
+        assertFalse(result.successful)
+        assertNull(result.transcodedSource)
+        assertTrue(
+            result.unsupportedNodes.any {
+                it.syntaxKind == "cplus_test_declaration" && it.span.startLine == 1
+            },
+            "test declaration was not retained as a mapped rollback boundary: ${result.unsupportedNodes}"
+        )
+    }
+
+    @Test
+    fun allocationValidationRollbackDisablesAstAllocationDiagnostics() {
+        val text = """
+            int main(void) {
+                scratch char* source = alloc_scratch(8);
+                warm char* mismatch = source;
+                return mismatch == 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("rollback-allocation-validation.cp"), text)
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).comparePassRollback(
+            source,
+            CPlusLegacyPassSelection.VALIDATE_SEMANTICS
+        )
+
+        assertTrue(report.selectorContractHolds, report.toString())
+        assertTrue(report.treeSitter.successful, report.treeSitter.loweringDiagnostics.toString())
+        assertTrue(report.legacy?.allocationAnalysis?.diagnostics?.isEmpty() == true)
+        assertTrue(report.treeSitter.allocationAnalysis.diagnostics.isEmpty())
+    }
+
+    @Test
+    fun semanticPassParityComparesAllocationDiagnosticsAndRollback() {
+        val text = """
+            int main(void) {
+                scratch char* source = alloc_scratch(8);
+                warm char* mismatch = source;
+                return mismatch == 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("semantic-pass-parity.cp"), text)
+
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compareSemanticPass(
+            source,
+            CPlusLegacyPassSelection.VALIDATE_SEMANTICS
+        )
+
+        assertTrue(report.diagnosticsMatch, report.toString())
+        assertTrue(report.full.successful, report.full.toString())
+        assertTrue(report.rollback.selectorContractHolds, report.rollback.toString())
+        assertTrue(report.successful, report.toString())
+    }
+
+    @Test
+    fun semanticPassSubstitutionComparesValidationWithoutRequiringSourceChanges() {
+        val text = """
+            int main(void) {
+                scratch char* source = 0;
+                warm char* mismatch = source;
+                return mismatch != 0;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("semantic-pass-substitution.cp"), text)
+
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources)
+            .compareSemanticPassSubstitution(source)
+
+        assertTrue(report.successful, report.toString())
+        assertEquals(setOf(CPlusLegacyPassSelection.VALIDATE_SEMANTICS), report.enabledPasses)
+        assertTrue(report.diagnosticsMatch, report.toString())
+        assertTrue(report.normalizedTokensMatch, report.tokenDifference.orEmpty())
+        compileAndRunC(report.legacy!!.code)
+        compileAndRunC(report.treeSitter.transcodedSource!!.code)
+    }
+
+    @Test
+    fun semanticPassSubstitutionCoversAllocationFlowJoinsAndLoops() {
+        val common = """
+            #include <stddef.h>
+            void* alloc_scratch(size_t size) { return 0; }
+            void* alloc_hot(size_t size) { return 0; }
+            void* alloc_warm(size_t size) { return 0; }
+        """.trimIndent()
+        val cases = listOf(
+            """
+                $common
+                int main(void) {
+                    int flag = 0;
+                    scratch char* scratch_source = alloc_scratch(8);
+                    char* merged = alloc_warm(8);
+                    if (flag) merged = scratch_source;
+                    else merged = alloc_scratch(16);
+                    warm char* mismatch = merged;
+                    return mismatch != 0;
+                }
+            """.trimIndent(),
+            """
+                $common
+                int main(void) {
+                    int flag = 0;
+                    char* value = alloc_warm(8);
+                    while (flag) value = alloc_warm(16);
+                    warm char* stable = value;
+                    return stable != 0;
+                }
+            """.trimIndent(),
+            """
+                $common
+                int main(void) {
+                    int flag = 0;
+                    char* value = alloc_hot(8);
+                    do value = alloc_scratch(16); while (flag);
+                    warm char* mismatch = value;
+                    return mismatch != 0;
+                }
+            """.trimIndent()
+        )
+
+        cases.forEachIndexed { index, text ->
+            val source = sources.open(SourceId.named("semantic-flow-substitution-$index.cp"), text)
+            val report = TreeSitterCPlusDifferentialRunner(backend, sources)
+                .compareSemanticPassSubstitution(source)
+            assertTrue(report.successful, "case $index: $report")
+            assertTrue(report.diagnosticsMatch, report.toString())
+            compileAndRunC(report.legacy!!.code)
+            compileAndRunC(report.treeSitter.transcodedSource!!.code)
+        }
     }
 
     @Test
@@ -2834,6 +3549,44 @@ class TreeSitterCPlusParserBackendTest {
             "legacy and Tree-sitter diagnostic locations differ:\nlegacy=${diagnostics.first().second}\nTree-sitter=${diagnostics.last().second}"
                 + "\nlegacy generated C:\n${legacy.code}\nTree-sitter generated C:\n${experimentalC.code}"
         )
+    }
+
+    @Test
+    fun allAvailableHostCompilersPreserveMappedMethodDiagnosticLineAndColumn() {
+        val text = """
+            typedef struct broken_t {
+                pub int fail(borrowed *self) {
+                    return missing_cplus_symbol;
+                }
+            } broken_t;
+        """.trimIndent()
+        val name = "all-host-diagnostic-matrix.cp"
+        val source = sources.open(SourceId.named(name), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}")
+        val generated = result.transcodedSource ?: error("prototype did not create mapped compiler input")
+        val expectedLine = text.lines().indexOfFirst { "missing_cplus_symbol" in it } + 1
+        val expectedColumn = text.lines()[expectedLine - 1].indexOf("missing_cplus_symbol") + 1
+        val compilers = listOf("cc", "gcc", "clang", "tcc").distinct().filter { compiler ->
+            runCatching { ProcessBuilder(compiler, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        }
+        if (compilers.isEmpty()) return
+
+        compilers.forEach { compiler ->
+            val process = ProcessBuilder(compiler, "-std=c11", "-fsyntax-only", "-x", "c", "-")
+                .redirectErrorStream(true)
+                .start()
+            process.outputStream.bufferedWriter().use { it.write(generated.code) }
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            assertTrue(process.waitFor() != 0, "$compiler unexpectedly accepted invalid generated C")
+            assertTrue("missing_cplus_symbol" in output, "$compiler lost the invalid identifier:\n$output")
+            val location = Regex("${Regex.escape(name)}:(\\d+)(?::(\\d+))?").find(output)
+                ?: error("$compiler did not report $name with a source line:\n$output")
+            assertEquals(expectedLine, location.groupValues[1].toInt(), "$compiler reported the wrong C-plus line:\n$output")
+            location.groupValues[2].takeIf(String::isNotEmpty)?.let { column ->
+                assertEquals(expectedColumn, column.toInt(), "$compiler reported the wrong C-plus column:\n$output")
+            }
+        }
     }
 
     @Test
@@ -5530,12 +6283,75 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals(legacy.fixtures.map { it.assertionCount }, treeSitterTests.fixtures.map { it.assertionCount })
         assertEquals(listOf(2, 1), treeSitterTests.fixtures.map { it.assertionCount })
 
+        val differential = TreeSitterCPlusDifferentialRunner(backend, sources).compareTests(source)
+        assertTrue(differential.harnessTokensMatch, differential.harnessTokenDifference.orEmpty())
+        assertTrue(differential.assertionSourceLinesMatch, differential.toString())
+
         val legacyRun = compileAndCaptureC(compiler, legacy.source.code)
         val treeSitterRun = compileAndCaptureC(compiler, treeSitterTests.source.code)
         assertEquals(0, legacyRun.first, "legacy test harness failed: ${legacyRun.second}")
         assertEquals(0, treeSitterRun.first, "Tree-sitter test harness failed: ${treeSitterRun.second}")
         assertEquals(legacyRun, treeSitterRun)
         assertTrue(legacyRun.second.contains("TEST SUMMARY: 2 selected, 0 failed"), legacyRun.second)
+    }
+
+    @Test
+    fun testHarnessBodyParityCoversDeferAndCheckedCalls() {
+        val text = """
+            #include <stdio.h>
+            typedef int error_t;
+            enum { ERROR_BAD = 2 };
+            typedef struct state_t {
+                int total;
+                pub void add(borrowed mut *self, int amount) { self->total += amount; }
+            } state_t;
+            @throws() pub error_t update(int input, borrowed mut int *out) {
+                if (input < 0) return ERROR_BAD;
+                *out = input;
+                return 0;
+            }
+            int main(void) { return 0; }
+            @test "composed fixture" {
+                state_t state = {0};
+                int value = 0;
+                defer { state.total += 1; }
+                @try {
+                    state.add(4);
+                    update(3, &value);
+                }
+                @catch (error_t error) { return error; }
+                @assertEquals(4, state.total);
+                @assertEquals(3, value);
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("differential-test-composed.cp"), text)
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compareTests(source)
+
+        assertTrue(report.successful, report.toString() + "\n" + report.harnessTokenDifference.orEmpty())
+        assertTrue(report.harnessTokensMatch, report.harnessTokenDifference.orEmpty())
+        assertTrue(report.assertionSourceLinesMatch, report.toString())
+    }
+
+    @Test
+    fun astTestHarnessRunsDeferAfterFailedAssertion() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            #include <stdio.h>
+            int main(void) { return 0; }
+            @test "failure cleanup" {
+                defer puts("cleanup");
+                @assert(0);
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-test-defer-failure.cp"), text)
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compareTests(source)
+        assertTrue(report.successful, report.toString() + "\n" + report.harnessTokenDifference.orEmpty())
+        val astHarness = report.astHarness ?: error("AST harness was not generated")
+        val astRun = compileAndCaptureC(compiler, astHarness.source.code)
+        assertEquals(1, astRun.first, "a failed assertion must fail the AST fixture: ${astRun.second}")
+        assertTrue("cleanup" in astRun.second, "defer cleanup must run after assertion failure: ${astRun.second}")
     }
 
     @Test
@@ -5696,6 +6512,31 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals("CPLUS_TRY_CALL_CONTEXT", diagnostic.code)
         assertEquals(source.id.value, diagnostic.span.file)
         assertTrue(text.substring(diagnostic.span.startOffset, diagnostic.span.endOffset).contains("checked()"))
+    }
+
+    @Test
+    fun astTestFixtureRejectsUnsupportedCheckedExpressionAtTheFixtureSourceSpan() {
+        val text = """
+            typedef int error_t;
+            @throws() pub error_t checked(void) { return 0; }
+            int main(void) { return 0; }
+            @test "unsupported checked expression" {
+                @try { if (checked()) return; }
+                @catch (error_t error) { return; }
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("unsupported-checked-test-expression.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "unsupported fixture body must fail closed")
+        val diagnostic = result.loweringDiagnostics.single()
+        assertEquals("CPLUS_TRY_CALL_CONTEXT", diagnostic.code)
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("checked()"), diagnostic.span.startOffset)
+        assertTrue(text.substring(diagnostic.span.startOffset, diagnostic.span.endOffset).contains("checked()"))
+        assertTrue(result.testFixtures.isEmpty(), "a rejected fixture must not be materialized into a harness")
+        assertNull(result.transcodedSource, "a rejected fixture must not emit C")
     }
 
     private fun compileAndCaptureC(

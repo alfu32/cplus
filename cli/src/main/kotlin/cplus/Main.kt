@@ -201,12 +201,13 @@ class CPlusCli(
         val sourcePath = parsed.source.toAbsolutePath().normalize()
         val importPaths = importPathsFor(sourcePath)
         val source = activeLogger.pass("read-source") { readSource(sourcePath) }
-        val transcoded = transpiler.transpile(
+        val transcoded = transpileWithFrontend(
             source,
             sourcePath.toString(),
             activeLogger,
             importPaths,
-            CPlusTarget.osFromCompilerOptions(parsed.passthrough)
+            CPlusTarget.osFromCompilerOptions(parsed.passthrough),
+            parsed.frontend
         )
         printAllocationDiagnostics(transcoded)
         activeLogger.pass("write-c") { writeText(destination, transcoded.code) }
@@ -220,12 +221,13 @@ class CPlusCli(
         val sourcePath = parsed.source.toAbsolutePath().normalize()
         val importPaths = importPathsFor(sourcePath)
         val source = activeLogger.pass("read-source") { readSource(sourcePath) }
-        val transcoded = transpiler.transpile(
+        val transcoded = transpileWithFrontend(
             source,
             sourcePath.toString(),
             activeLogger,
             importPaths,
-            CPlusTarget.osFromCompilerOptions(parsed.passthrough)
+            CPlusTarget.osFromCompilerOptions(parsed.passthrough),
+            parsed.frontend
         )
         printAllocationDiagnostics(transcoded)
         val options = buildList {
@@ -264,9 +266,9 @@ class CPlusCli(
         if (parsed.mode == TestMode.TRANSCODE) {
             val path = sources.single()
             val importPaths = importPathsFor(path)
-            val transpiled = transpiler.transpileTests(
+            val transpiled = transpileTestsWithFrontend(
                 readSource(path), path.toString(), activeLogger, importPaths,
-                CPlusTarget.osFromCompilerOptions(parsed.compilerFlags)
+                CPlusTarget.osFromCompilerOptions(parsed.compilerFlags), parsed.frontend
             )
             val destination = parsed.output ?: path.resolveSibling(path.fileName.toString().substringBeforeLast('.') + ".test.c")
             writeText(
@@ -279,9 +281,9 @@ class CPlusCli(
         val compiledSources = sources.map { path ->
             val importPaths = importPathsFor(path)
             val source = activeLogger.pass("read-source") { readSource(path) }
-            val testSource = transpiler.transpileTests(
+            val testSource = transpileTestsWithFrontend(
                 source, path.toString(), activeLogger, importPaths,
-                CPlusTarget.osFromCompilerOptions(parsed.compilerFlags)
+                CPlusTarget.osFromCompilerOptions(parsed.compilerFlags), parsed.frontend
             )
             printAllocationDiagnostics(testSource.source)
             TestSource(path, testSource, importPaths)
@@ -383,6 +385,113 @@ class CPlusCli(
         return if (failed == 0) 0 else 1
     }
 
+    /**
+     * Selects the complete compilation frontend while keeping the legacy frontend as the
+     * default. The AST frontend is deliberately introduced at the command boundary first;
+     * test-harness migration remains a separate gate because fixture lowering has its own
+     * compatibility bridge.
+     */
+    private fun transpileWithFrontend(
+        source: String,
+        sourceName: String,
+        logger: CompilationLogger,
+        importPaths: CPlusImportPaths,
+        targetOs: String,
+        frontend: CompilationFrontend
+    ): TranscodedSource = when (frontend) {
+        CompilationFrontend.LEGACY -> transpiler.transpile(
+            source, sourceName, logger, importPaths, targetOs
+        )
+        CompilationFrontend.TREE_SITTER -> logger.pass("tree-sitter-transpile") {
+            val manager = SourceManager()
+            val snapshot = manager.open(SourceId.named(sourceName), source)
+            val result = cplus.parser.TreeSitterCPlusPrototypeTranspiler(
+                backend = cplus.parser.TreeSitterCPlusParserBackend(),
+                sourceManager = manager,
+                targetOs = targetOs,
+                importPaths = importPaths,
+                targetArch = targetArchitecture()
+            ).transpile(snapshot)
+            result.transcodedSource ?: run {
+                val diagnostic = result.loweringDiagnostics.firstOrNull()
+                if (diagnostic != null) {
+                    throw CPlusSyntaxException(diagnostic.message, diagnostic.span)
+                }
+                val parserDiagnostic = result.parserDiagnostics.firstOrNull()
+                if (parserDiagnostic != null) {
+                    throw CPlusSyntaxException(parserDiagnostic.message, parserDiagnostic.span)
+                }
+                val unsupported = result.unsupportedNodes.firstOrNull()
+                if (unsupported != null) {
+                    throw CPlusSyntaxException(
+                        "unsupported Tree-sitter construct '${unsupported.syntaxKind}'",
+                        unsupported.span
+                    )
+                }
+                throw CPlusSyntaxException("Tree-sitter frontend did not produce C output")
+            }
+        }
+    }
+
+    /**
+     * Selects the test frontend without changing the legacy default. The AST runtime path feeds
+     * extracted fixture bodies through the established harness bridge until fixture-body AST
+     * lowering has its own promotion gate.
+     */
+    private fun transpileTestsWithFrontend(
+        source: String,
+        sourceName: String,
+        logger: CompilationLogger,
+        importPaths: CPlusImportPaths,
+        targetOs: String,
+        frontend: CompilationFrontend
+    ): TranscodedTestSource = when (frontend) {
+        CompilationFrontend.LEGACY -> transpiler.transpileTests(
+            source, sourceName, logger, importPaths, targetOs
+        )
+        CompilationFrontend.TREE_SITTER -> logger.pass("tree-sitter-test-transpile") {
+            val manager = SourceManager()
+            val snapshot = manager.open(SourceId.named(sourceName), source)
+            val result = cplus.parser.TreeSitterCPlusPrototypeTranspiler(
+                backend = cplus.parser.TreeSitterCPlusParserBackend(),
+                sourceManager = manager,
+                targetOs = targetOs,
+                importPaths = importPaths,
+                targetArch = targetArchitecture()
+            ).transpile(snapshot)
+            val runtime = result.cSource
+            if (runtime == null || !result.successful) {
+                val diagnostic = result.loweringDiagnostics.firstOrNull()
+                if (diagnostic != null) throw CPlusSyntaxException(diagnostic.message, diagnostic.span)
+                val parserDiagnostic = result.parserDiagnostics.firstOrNull()
+                if (parserDiagnostic != null) throw CPlusSyntaxException(parserDiagnostic.message, parserDiagnostic.span)
+                val unsupported = result.unsupportedNodes.firstOrNull()
+                if (unsupported != null) {
+                    throw CPlusSyntaxException(
+                        "unsupported Tree-sitter construct '${unsupported.syntaxKind}'",
+                        unsupported.span
+                    )
+                }
+                throw CPlusSyntaxException("Tree-sitter frontend did not produce test C output")
+            }
+            // Runtime and fixture-body structural lowering is AST-owned. This entry point only
+            // supplies the established assertion/test harness; it must not rerun legacy textual
+            // method, defer, or try/catch lowerers on already-lowered fixture bodies.
+            val bridged = transpiler.emitExtractedTestHarness(runtime, result.testFixtures, logger)
+            bridged.copy(
+                source = bridged.source.copy(
+                    allocationAnalysis = result.allocationAnalysis,
+                    compilerOptions = result.compilerOptions,
+                    sourceOrder = result.sourceOrder,
+                    sourceImports = result.sourceImports,
+                    frontendPasses = result.runtimePasses + bridged.source.frontendPasses
+                )
+            )
+        }
+    }
+
+    private fun targetArchitecture(): String = CPlusTarget.hostArch()
+
     private fun testCompilerOptions(compiled: TestSource, flags: List<String>): List<String> =
         CompilerOptions.merge(buildList {
             compiled.path.parent?.let { add("-I$it") }
@@ -405,12 +514,22 @@ class CPlusCli(
         val sources = mutableListOf<String>()
         val testNames = mutableListOf<String>()
         val flags = mutableListOf<String>()
+        var frontend = CompilationFrontend.LEGACY
         var outputPath: Path? = null
         val paired = setOf("-l", "-L", "-F", "-I", "-D", "-U", "-include", "-isystem", "-iquote", "-isysroot", "--sysroot", "-sysroot", "--target", "-target", "-arch", "-framework", "-Xlinker", "-Xclang")
         var index = start
         while (index < arguments.size) {
             val value = arguments[index]
             when {
+                value == "--frontend" -> {
+                    if (index + 1 >= arguments.size) throw IllegalArgumentException("--frontend requires legacy or tree-sitter")
+                    frontend = parseFrontend(arguments[index + 1])
+                    index += 2
+                }
+                value.startsWith("--frontend=") -> {
+                    frontend = parseFrontend(value.substringAfter('='))
+                    index++
+                }
                 value == "-o" -> {
                     if (index + 1 >= arguments.size) throw IllegalArgumentException("-o requires an output path")
                     outputPath = Path(arguments[index + 1]); index += 2
@@ -425,7 +544,7 @@ class CPlusCli(
             }
         }
         if (sources.isEmpty()) throw IllegalArgumentException("test requires one or more .cp or .c+ source files")
-        return ParsedTestCommand(mode, sources, outputPath, flags, testNames)
+        return ParsedTestCommand(mode, sources, outputPath, flags, testNames, frontend)
     }
 
     private fun printTestAggregateReport(
@@ -464,6 +583,7 @@ class CPlusCli(
         val source = arguments.firstOrNull()?.let(::Path)
             ?: throw IllegalArgumentException("missing input filename")
         var outputPath: Path? = null
+        var frontend = CompilationFrontend.LEGACY
         val passthrough = mutableListOf<String>()
         var index = 1
         while (index < arguments.size) {
@@ -473,16 +593,36 @@ class CPlusCli(
                     outputPath = Path(arguments[index + 1])
                     index += 2
                 }
-                else -> {
-                    if (!allowTccOptions) {
-                        throw IllegalArgumentException("unexpected argument '$argument' for transcode")
+                "--frontend" -> {
+                    if (index + 1 >= arguments.size) {
+                        throw IllegalArgumentException("--frontend requires 'legacy' or 'tree-sitter'")
                     }
-                    passthrough += argument
-                    index++
+                    frontend = parseFrontend(arguments[index + 1])
+                    index += 2
+                }
+                else -> {
+                    if (argument.startsWith("--frontend=")) {
+                        frontend = parseFrontend(argument.substringAfter('='))
+                        index++
+                    } else {
+                        if (!allowTccOptions) {
+                            throw IllegalArgumentException("unexpected argument '$argument' for transcode")
+                        }
+                        passthrough += argument
+                        index++
+                    }
                 }
             }
         }
-        return ParsedCommand(source, outputPath, passthrough)
+        return ParsedCommand(source, outputPath, passthrough, frontend)
+    }
+
+    private fun parseFrontend(value: String): CompilationFrontend = when (value.trim().lowercase()) {
+        "legacy" -> CompilationFrontend.LEGACY
+        "tree-sitter", "treesitter", "ast" -> CompilationFrontend.TREE_SITTER
+        else -> throw IllegalArgumentException(
+            "unknown compilation frontend '$value'; expected 'legacy' or 'tree-sitter'"
+        )
     }
 
     private fun validateTranscodeTargetOptions(options: List<String>) {
@@ -581,13 +721,13 @@ usage:
   cplus parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
   cplus parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
   cplus graph filename.cp [-o imports.json]
-  cplus transcode filename.cp [-o some_file_name.c] [--target=TRIPLE]
-  cplus compile filename.cp [-o executable] [passthrough tcc parameters]
-  cplus run filename.cp [-o executable] [passthrough tcc parameters]
+  cplus transcode filename.cp [-o some_file_name.c] [--frontend legacy|tree-sitter] [--target=TRIPLE]
+  cplus compile filename.cp [-o executable] [--frontend legacy|tree-sitter] [passthrough tcc parameters]
+  cplus run filename.cp [-o executable] [--frontend legacy|tree-sitter] [passthrough tcc parameters]
   cplus test filename.cp [filename2.cp ...] [test name ...]
-  cplus test [run] [compiler flags] filename.cp ... [test name ...]
-  cplus test transcode [-o output.c] filename.cp
-  cplus test compile [-o executable] [compiler flags] filename.cp
+  cplus test [run] [--frontend legacy|tree-sitter] [compiler flags] filename.cp ... [test name ...]
+  cplus test transcode [-o output.c] [--frontend legacy|tree-sitter] filename.cp
+  cplus test compile [-o executable] [--frontend legacy|tree-sitter] [compiler flags] filename.cp
   cplus new project_name|.
 
 global options:
@@ -602,6 +742,7 @@ defaults:
   graph: resolves C-plus imports and emits cplus.imports.v1 dependency-order/edge JSON
   compile/run: filename.cp -> filename
   compiler: bundled TinyCC, then TCC, system tcc on PATH, then compiler from CC
+  frontend: legacy by default; tree-sitter is an explicit migration/rollback option for transcode, compile, and run
   test: runs all @test blocks by default; run, compile, and transcode are explicit modes
   new: creates a C-plus project with cplus.toml and src/main.cp
 
@@ -623,8 +764,11 @@ empty macros: pub, priv, mut, borrowed, owned, and stat.
     private data class ParsedCommand(
         val source: Path,
         val output: Path?,
-        val passthrough: List<String>
+        val passthrough: List<String>,
+        val frontend: CompilationFrontend
     )
+
+    private enum class CompilationFrontend { LEGACY, TREE_SITTER }
 
     private data class TestSource(
         val path: Path,
@@ -639,7 +783,8 @@ empty macros: pub, priv, mut, borrowed, owned, and stat.
         val sources: List<String>,
         val output: Path?,
         val compilerFlags: List<String>,
-        val testNames: List<String>
+        val testNames: List<String>,
+        val frontend: CompilationFrontend
     )
 
     private data class TestFileReport(

@@ -44,7 +44,16 @@ class CPlusTryCatchLoweringPass {
         if (tries.isEmpty()) return CPlusLoweringResult(source, emptyList())
         tries.filter { node ->
             generateSequence(parents[node]) { parents[it] }.none {
-                it.syntaxKind in setOf("function_definition", "cplus_function_declaration", "cplus_method_definition")
+                it.syntaxKind in setOf(
+                    "function_definition",
+                    "cplus_function_declaration",
+                    "cplus_method_definition",
+                    // The harness materializes each @test body as a generated
+                    // function after runtime lowering. Treat the fixture as that
+                    // function's lexical closure so checked calls are lowered
+                    // before extraction rather than rejected at top level.
+                    "cplus_test_declaration"
+                )
             }
         }.forEach { node ->
             diagnostic("CPLUS_TRY_OUTSIDE_FUNCTION", "@try is only valid inside a function or method", node.span)
@@ -76,7 +85,9 @@ class CPlusTryCatchLoweringPass {
             return null
         }
 
-        val status = fresh("cplus_error")
+        // Keep generated handler names aligned with the legacy lowerer while the two emitters
+        // remain independently selectable during migration.
+        val status = fresh("cplus_status")
         val catchLabel = fresh("cplus_catch")
         val endLabel = fresh("cplus_end")
         val bodyCode = lowerRegion(body, Handler(status, catchLabel))
@@ -85,9 +96,9 @@ class CPlusTryCatchLoweringPass {
 
         val output = MappedTextBuilder()
         val origin = source.originAt(node.span.startOffset)
-        output.appendGenerated("{\n    error_t $status = 0;\n    {\n", origin)
+        output.appendGenerated("{\n    error_t $status = 0;\n", origin)
         output.append(bodyCode)
-        output.appendGenerated("\n    }\n    goto $endLabel;\n$catchLabel:\n", origin)
+        output.appendGenerated("\n    goto $endLabel;\n$catchLabel:\n", origin)
         catches.forEachIndexed { index, arm ->
             val condition = arm.codes?.joinToString(" || ") { "$status == $it" } ?: "1"
             output.appendGenerated(
@@ -95,7 +106,7 @@ class CPlusTryCatchLoweringPass {
                 origin
             )
             output.appendGenerated("        error_t ${arm.name} = $status;\n", origin)
-            output.append(catchBodies[index])
+            output.append(stripCompoundBraces(catchBodies[index]))
             output.appendGenerated("\n    }\n", origin)
         }
         if (catches.last().codes != null) {
@@ -109,8 +120,20 @@ class CPlusTryCatchLoweringPass {
                 origin
             )
         }
-        output.appendGenerated("$endLabel:\n    ;\n}", origin)
+        // Keep a separator before the following statement when the mapped AST emitter joins
+        // this replacement directly to the next source node.
+        output.appendGenerated("$endLabel:\n    ;\n}\n", origin)
         return output.build()
+    }
+
+    /** The enclosing catch arm already owns the control-flow braces. */
+    private fun stripCompoundBraces(body: MappedText): MappedText {
+        val open = body.text.indexOf('{')
+        val close = body.text.lastIndexOf('}')
+        if (open < 0 || close <= open) return body
+        if (body.text.substring(0, open).any { !it.isWhitespace() } ||
+            body.text.substring(close + 1).any { !it.isWhitespace() }) return body
+        return body.slice(open + 1, close)
     }
 
     private fun lowerRegion(region: CPlusAstNode, handler: Handler?): MappedText {

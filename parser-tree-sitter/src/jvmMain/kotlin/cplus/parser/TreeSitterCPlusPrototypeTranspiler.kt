@@ -6,6 +6,7 @@ import cplus.CPlusAstLoweringStep
 import cplus.CPlusAstCEmitter
 import cplus.CPlusComptimeIndexer
 import cplus.CPlusImportPaths
+import cplus.CPlusFrontendPassIds
 import cplus.CPlusDeferLoweringPass
 import cplus.CPlusLoweringDiagnostic
 import cplus.CPlusMethodCallLoweringPass
@@ -39,13 +40,40 @@ data class TreeSitterPrototypeResult(
     val allocationAnalysis: cplus.AllocationAnalysisResult = cplus.AllocationAnalysisResult(),
     val compilerOptions: List<String> = emptyList(),
     val sourceOrder: List<SourceId> = emptyList(),
-    val sourceImports: List<cplus.SourceImportEdge> = emptyList()
+    val sourceImports: List<cplus.SourceImportEdge> = emptyList(),
+    /** Runtime AST passes actually executed, in order, for migration reports. */
+    val runtimePasses: List<String> = emptyList(),
+    /** Runtime AST passes that changed mapped source; semantic-only passes are absent. */
+    val runtimePassesChanged: Set<String> = emptySet()
 ) {
     val successful: Boolean
         get() = cSource != null && parserDiagnostics.isEmpty() && loweringDiagnostics.isEmpty() && unsupportedNodes.isEmpty()
 }
 
 data class TreeSitterUnsupportedConstruct(val syntaxKind: String, val span: cplus.SourceSpan)
+
+/**
+ * Per-pass migration switch for the AST runtime pipeline. Disabled passes are not silently
+ * emulated: their C-plus nodes reach the final unsupported-node check, which gives callers a
+ * deterministic rollback/negative-test result instead of partially applying semantics.
+ */
+data class TreeSitterPassSelection(
+    val disabledRuntimePasses: Set<String> = emptySet(),
+    /** Migration-only test-mode switch; runtime lowering remains independently selectable. */
+    val extractTests: Boolean = true
+) {
+    init {
+        require(disabledRuntimePasses.all { it in KNOWN_RUNTIME_PASSES }) {
+            "unknown Tree-sitter runtime pass in selection: ${disabledRuntimePasses - KNOWN_RUNTIME_PASSES}"
+        }
+    }
+
+    fun enabled(passId: String): Boolean = passId !in disabledRuntimePasses
+
+    private companion object {
+        val KNOWN_RUNTIME_PASSES = CPlusFrontendPassIds.ALL
+    }
+}
 
 /**
  * Experimental phase-7 vertical slice. The production CPlusTranspiler remains authoritative.
@@ -58,7 +86,8 @@ class TreeSitterCPlusPrototypeTranspiler(
     private val sourceManager: SourceManager = SourceManager(),
     private val targetOs: String = cplus.CPlusTarget.hostOs(),
     private val importPaths: CPlusImportPaths = CPlusImportPaths(),
-    private val targetArch: String = cplus.CPlusTarget.hostArch()
+    private val targetArch: String = cplus.CPlusTarget.hostArch(),
+    private val passSelection: TreeSitterPassSelection = TreeSitterPassSelection()
 ) {
     fun transpile(source: SourceSnapshot): TreeSitterPrototypeResult {
         var revision = 0
@@ -464,7 +493,11 @@ class TreeSitterCPlusPrototypeTranspiler(
             )
         }
 
-        allocationAnalysis = TreeSitterAllocationIntentAnalyzer().analyze(ast)
+        allocationAnalysis = if (passSelection.enabled(CPlusFrontendPassIds.VALIDATE_SEMANTICS)) {
+            TreeSitterAllocationIntentAnalyzer().analyze(ast)
+        } else {
+            cplus.AllocationAnalysisResult()
+        }
         val scalarMaterialized = TreeSitterComptimeScalarLowering(targetOs, targetArch).lower(parsed, mapped)
         if (scalarMaterialized.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(
@@ -516,38 +549,73 @@ class TreeSitterCPlusPrototypeTranspiler(
             }
         }
         ast = CPlusAstAdapter().adapt(parsed)
-        val unsupported = unsupportedConstructs(parsed.root).map { it.copy(span = mapped.toOriginalSpan(it.span)) }
-        if (unsupported.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), emptyList(), unsupported, testFixtures = testFixtures)
+        val disabledRuntimeKinds = buildSet {
+            if (!passSelection.enabled(CPlusFrontendPassIds.EXTRACT_THROWS)) {
+                add("cplus_throws_annotation")
+                add("cplus_throws_annotated_method")
+            }
+            if (!passSelection.enabled(CPlusFrontendPassIds.LOWER_DEFER)) add("cplus_defer_statement")
+            if (!passSelection.enabled(CPlusFrontendPassIds.LOWER_TRY_CATCH)) {
+                add("cplus_try_statement")
+                add("cplus_catch_clause")
+            }
+            if (!passSelection.enabled(CPlusFrontendPassIds.LOWER_STRUCT_METHODS)) {
+                add("cplus_method_definition")
+                add("cplus_throws_annotated_method")
+            }
+            if (!passSelection.extractTests) {
+                add("cplus_test_declaration")
+                add("cplus_test_assertion_statement")
+            }
+        }
+        val unsupported = unsupportedConstructs(parsed.root, disabledRuntimeKinds).toMutableList()
+        if (!passSelection.enabled(CPlusFrontendPassIds.LOWER_METHOD_CALLS)) {
+            // A disabled receiver pass must not be mistaken for ordinary C field-call syntax.
+            // Resolve the remaining member calls and retain them as an explicit C-plus boundary
+            // so migration rollback fails closed instead of emitting invalid C silently.
+            CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed)).resolvedCalls
+                .forEach { call ->
+                    unsupported += TreeSitterUnsupportedConstruct("cplus_method_invocation", call.span)
+                }
+        }
+        val mappedUnsupported = unsupported
+            .distinctBy { it.syntaxKind to it.span.startOffset }
+            .map { it.copy(span = mapped.toOriginalSpan(it.span)) }
+        if (mappedUnsupported.isNotEmpty()) {
+            return TreeSitterPrototypeResult(null, emptyList(), emptyList(), mappedUnsupported, testFixtures = testFixtures)
         }
         var throwingFunctions: Map<String, CPlusThrowingFunction> = emptyMap()
-        val runtimeLowering = CPlusAstLoweringPipeline().run(
-            ast,
-            mapped,
-            listOf(
-                CPlusAstLoweringStep("extract-throws") { stageAst, stageSource ->
+        val runtimeSteps = buildList {
+            if (passSelection.enabled(CPlusFrontendPassIds.EXTRACT_THROWS)) add(
+                CPlusAstLoweringStep(CPlusFrontendPassIds.EXTRACT_THROWS) { stageAst, stageSource ->
                     val result = CPlusThrowsLoweringPass().lower(stageAst, stageSource)
                     throwingFunctions = result.functions
                     cplus.CPlusLoweringResult(
                         result.source,
                         result.diagnostics.map { it.withMappedSpan(stageSource, it.span) }
                     )
-                },
-                CPlusAstLoweringStep("lower-try-catch") { stageAst, stageSource ->
+                }
+            )
+            if (passSelection.enabled(CPlusFrontendPassIds.LOWER_TRY_CATCH)) add(
+                CPlusAstLoweringStep(CPlusFrontendPassIds.LOWER_TRY_CATCH) { stageAst, stageSource ->
                     val result = CPlusTryCatchLoweringPass().lower(stageAst, stageSource, throwingFunctions)
                     cplus.CPlusLoweringResult(
                         result.source,
                         result.diagnostics.map { it.withMappedSpan(stageSource, it.span) }
                     )
-                },
-                CPlusAstLoweringStep("lower-defer") { stageAst, stageSource ->
+                }
+            )
+            if (passSelection.enabled(CPlusFrontendPassIds.LOWER_DEFER)) add(
+                CPlusAstLoweringStep(CPlusFrontendPassIds.LOWER_DEFER) { stageAst, stageSource ->
                     val result = CPlusDeferLoweringPass().lower(stageAst, stageSource)
                     cplus.CPlusLoweringResult(
                         result.source,
                         result.diagnostics.map { it.withMappedSpan(stageSource, it.span) }
                     )
-                },
-                CPlusAstLoweringStep("validate-semantics") { stageAst, stageSource ->
+                }
+            )
+            if (passSelection.enabled(CPlusFrontendPassIds.VALIDATE_SEMANTICS)) add(
+                CPlusAstLoweringStep(CPlusFrontendPassIds.VALIDATE_SEMANTICS) { stageAst, stageSource ->
                     val semantics = CPlusSemanticAnalyzer().analyze(stageAst)
                     cplus.CPlusLoweringResult(
                         stageSource,
@@ -559,16 +627,20 @@ class TreeSitterCPlusPrototypeTranspiler(
                             )
                         }
                     )
-                },
-                CPlusAstLoweringStep("lower-method-calls") { stageAst, stageSource ->
+                }
+            )
+            if (passSelection.enabled(CPlusFrontendPassIds.LOWER_METHOD_CALLS)) add(
+                CPlusAstLoweringStep(CPlusFrontendPassIds.LOWER_METHOD_CALLS) { stageAst, stageSource ->
                     val semantics = CPlusSemanticAnalyzer().analyze(stageAst)
                     val result = CPlusMethodCallLoweringPass().lower(stageAst, stageSource, semantics)
                     cplus.CPlusLoweringResult(
                         result.source,
                         result.diagnostics.map { it.withMappedSpan(stageSource, it.span) }
                     )
-                },
-                CPlusAstLoweringStep("lower-struct-methods") { stageAst, stageSource ->
+                }
+            )
+            if (passSelection.enabled(CPlusFrontendPassIds.LOWER_STRUCT_METHODS)) add(
+                CPlusAstLoweringStep(CPlusFrontendPassIds.LOWER_STRUCT_METHODS) { stageAst, stageSource ->
                     val result = CPlusStructMethodLoweringPass().lower(stageAst, stageSource)
                     cplus.CPlusLoweringResult(
                         result.source,
@@ -576,6 +648,11 @@ class TreeSitterCPlusPrototypeTranspiler(
                     )
                 }
             )
+        }
+        val runtimeLowering = CPlusAstLoweringPipeline().run(
+            ast,
+            mapped,
+            runtimeSteps
         ) { stageSource ->
             backend.parse(snapshotFor(stageSource.text))
         }
@@ -609,26 +686,28 @@ class TreeSitterCPlusPrototypeTranspiler(
         // generation, but it must not be the first compiler pass that sees C-plus method calls,
         // defer, or try/catch inside a fixture.  Extracting earlier made fixture code depend on
         // the legacy textual lowerers and could move an unresolved receiver out of its scope.
-        val extractedTests = CPlusTestExtractionPass().extract(ast, mapped)
-        if (extractedTests.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(null, emptyList(), extractedTests.diagnostics, emptyList())
+        if (passSelection.extractTests) {
+            val extractedTests = CPlusTestExtractionPass().extract(ast, mapped)
+            if (extractedTests.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(null, emptyList(), extractedTests.diagnostics, emptyList())
+            }
+            testFixtures = extractedTests.fixtures
+            mapped = extractedTests.source
+            snapshot = snapshotFor(mapped.text)
+            parsed = backend.parse(snapshot)
+            if (parsed.diagnostics.isNotEmpty()) {
+                return TreeSitterPrototypeResult(
+                    null,
+                    parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
+                    emptyList(),
+                    emptyList(),
+                    throwingFunctions,
+                    testFixtures,
+                    allocationAnalysis = allocationAnalysis
+                )
+            }
+            ast = CPlusAstAdapter().adapt(parsed)
         }
-        testFixtures = extractedTests.fixtures
-        mapped = extractedTests.source
-        snapshot = snapshotFor(mapped.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
-            return TreeSitterPrototypeResult(
-                null,
-                parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
-                emptyList(),
-                emptyList(),
-                throwingFunctions,
-                testFixtures,
-                allocationAnalysis = allocationAnalysis
-            )
-        }
-        ast = CPlusAstAdapter().adapt(parsed)
 
         val preamble = """
             #ifndef CPLUS_ANNOTATIONS_DEFINED
@@ -687,7 +766,15 @@ class TreeSitterCPlusPrototypeTranspiler(
         }
         val transcoded = MappedEmitter(source.sourceFile)
             .emit(generatedC, "", allocationAnalysis, compilerOptions)
-            .copy(sourceOrder = sourceOrder, sourceImports = sourceImports)
+            .copy(
+                sourceOrder = sourceOrder,
+                sourceImports = sourceImports,
+                frontendPasses = runtimeLowering.trace.map { it.stepId },
+                frontendPassesChanged = runtimeLowering.trace
+                    .filter { it.sourceChanged }
+                    .map { it.stepId }
+                    .toSet()
+            )
         return TreeSitterPrototypeResult(
             generatedC,
             emptyList(),
@@ -699,16 +786,24 @@ class TreeSitterCPlusPrototypeTranspiler(
             allocationAnalysis,
             compilerOptions,
             sourceOrder,
-            sourceImports
+            sourceImports,
+            runtimeLowering.trace.map { it.stepId },
+            runtimeLowering.trace
+                .filter { it.sourceChanged }
+                .map { it.stepId }
+                .toSet()
         )
     }
 
-    private fun unsupportedConstructs(root: CPlusSyntaxNode): List<TreeSitterUnsupportedConstruct> {
+    private fun unsupportedConstructs(
+        root: CPlusSyntaxNode,
+        additionalUnsupportedKinds: Set<String> = emptySet()
+    ): List<TreeSitterUnsupportedConstruct> {
         val unsupportedKinds = setOf(
             "cplus_comptime_declaration", "cplus_comptime_block", "cplus_comptime_function_definition",
             "cplus_comptime_invocation", "cplus_comptime_value", "cplus_comptime_import", "cplus_comptime_flags",
             "cplus_comptime_expression", "cplus_comptime_conditional", "cplus_code_fragment", "cplus_at_call_expression"
-        )
+        ) + additionalUnsupportedKinds
         val nodes = sequenceOf(root) + root.children.asSequence().flatMap { descendants(it) }
         return nodes.filter { it.kind in unsupportedKinds }
             .map { TreeSitterUnsupportedConstruct(it.kind, it.span) }

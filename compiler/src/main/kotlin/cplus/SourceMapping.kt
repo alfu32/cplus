@@ -224,7 +224,11 @@ data class TranscodedSource(
     /** Resolved C-plus imports in dependency-first emission order, including the root source. */
     val sourceOrder: List<SourceId> = emptyList(),
     /** Canonical edges retain the source location that requested each import. */
-    val sourceImports: List<SourceImportEdge> = emptyList()
+    val sourceImports: List<SourceImportEdge> = emptyList(),
+    /** Ordered frontend passes that produced this source; used by migration diagnostics. */
+    val frontendPasses: List<String> = emptyList(),
+    /** Transformation passes that changed the mapped source; semantic-only passes are absent. */
+    val frontendPassesChanged: Set<String> = emptySet()
 )
 
 /** Emits C-plus text and inserts compiler-visible source locations at mapped line boundaries. */

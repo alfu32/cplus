@@ -32,6 +32,10 @@ class CPlusDeferLoweringPass {
                 }
             }
             .toList()
+        val testBodies = ast.root.descendantsAndSelf()
+            .filter { it.kind == CPlusAstKind.TEST }
+            .flatMap { test -> test.children.asSequence().filter { it.kind == CPlusAstKind.BLOCK } }
+            .toSet()
         val deferred = ast.root.descendantsAndSelf().filter { it.kind == CPlusAstKind.DEFER }.toList()
         if (deferred.isEmpty()) return CPlusLoweringResult(source, emptyList())
 
@@ -113,7 +117,22 @@ class CPlusDeferLoweringPass {
                 insertion.append(source, statement.span.startOffset, statement.span.endOffset)
                 insertion.appendGenerated("\n$indentation}", origin)
             }
-            insertionsBefore[closingBrace] = insertion.build()
+            if (testBodies.contains(body)) {
+                // The test harness uses this label as the single assertion-failure
+                // exit. It must precede cleanup so a failed assertion still runs
+                // every registered defer before the generated function returns.
+                val origin = source.originAt(closingBrace.span.startOffset)
+                val marker = MappedText.generated(
+                    "\n${indentation}cplus_test_finish:\n${indentation};",
+                    origin
+                )
+                val combined = MappedTextBuilder()
+                combined.append(marker)
+                combined.append(insertion.build())
+                insertionsBefore[closingBrace] = combined.build()
+            } else {
+                insertionsBefore[closingBrace] = insertion.build()
+            }
         }
         if (diagnostics.isNotEmpty()) return CPlusLoweringResult(source, diagnostics)
 

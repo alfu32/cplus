@@ -67,6 +67,20 @@ class TreeSitterAllocationIntentAnalyzer {
                     ast.source.sourceFile.span(contract.nameSpan.startOffset, contract.nameSpan.endOffset)
                 )
             }
+            contract.parameters.forEach parameterLoop@{ parameter ->
+                val parameterSpan = parameter.nameSpan ?: return@parameterLoop
+                if (parameter.intent == AllocationIntent.NONE && parameter.ownership == AllocationOwnership.NONE) {
+                    return@parameterLoop
+                }
+                symbols += AllocationSymbol(
+                    parameter.name,
+                    AllocationSymbolKind.PARAMETER,
+                    parameter.intent,
+                    parameter.ownership,
+                    parameter.intent.takeUnless { parameter.isOutputPointer } ?: AllocationIntent.NONE,
+                    ast.source.sourceFile.span(parameterSpan.startOffset, parameterSpan.endOffset)
+                )
+            }
         }
 
         fun visitDeclaration(declaration: CPlusAstNode, scope: MutableMap<String, VariableState>) {

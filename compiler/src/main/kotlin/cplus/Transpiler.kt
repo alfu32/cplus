@@ -9,8 +9,11 @@ class CPlusTranspiler {
         sourceName: String? = null,
         logger: CompilationLogger = SilentCompilationLogger,
         importPaths: CPlusImportPaths = CPlusImportPaths(),
-        targetOs: String = CPlusTarget.hostOs()
-    ): TranscodedSource = transpileInternal(source, sourceName, logger, testMode = false, importPaths, targetOs).source
+        targetOs: String = CPlusTarget.hostOs(),
+        legacyPassSelection: CPlusLegacyPassSelection = CPlusLegacyPassSelection()
+    ): TranscodedSource = transpileInternal(
+        source, sourceName, logger, testMode = false, importPaths, targetOs, legacyPassSelection
+    ).source
 
     /** Transcodes a source file and its named `@test` blocks into a runnable test program. */
     fun transpileTests(
@@ -18,8 +21,11 @@ class CPlusTranspiler {
         sourceName: String? = null,
         logger: CompilationLogger = SilentCompilationLogger,
         importPaths: CPlusImportPaths = CPlusImportPaths(),
-        targetOs: String = CPlusTarget.hostOs()
-    ): TranscodedTestSource = transpileInternal(source, sourceName, logger, testMode = true, importPaths, targetOs)
+        targetOs: String = CPlusTarget.hostOs(),
+        legacyPassSelection: CPlusLegacyPassSelection = CPlusLegacyPassSelection()
+    ): TranscodedTestSource = transpileInternal(
+        source, sourceName, logger, testMode = true, importPaths, targetOs, legacyPassSelection
+    )
 
     /**
      * Emits the established runnable test harness for fixtures extracted by another frontend.
@@ -67,7 +73,16 @@ class CPlusTranspiler {
         val sourceFile = extracted.first
         val testProgram = extracted.second
         val emitted = logger.pass("emit-mapped-test-c") {
-            MappedEmitter(sourceFile).emit(testProgram.source, CPlusPreamble.text)
+            // AST frontends pass their already-emitted runtime C here.  Adding the
+            // compatibility preamble a second time changes the generated token
+            // stream and can redefine the annotation macros.  Raw callers still
+            // receive the preamble when the runtime has not emitted it yet.
+            val preamble = if (runtime.text.contains("#ifndef CPLUS_ANNOTATIONS_DEFINED")) {
+                ""
+            } else {
+                CPlusPreamble.text
+            }
+            MappedEmitter(sourceFile).emit(testProgram.source, preamble)
         }
         return TranscodedTestSource(emitted, testProgram.fixtures.map { it.name }, testProgram.fixtures)
     }
@@ -105,7 +120,8 @@ class CPlusTranspiler {
         logger: CompilationLogger,
         testMode: Boolean,
         importPaths: CPlusImportPaths,
-        targetOs: String
+        targetOs: String,
+        legacyPassSelection: CPlusLegacyPassSelection
     ): TranscodedTestSource {
         val sourceFile = sourceManager.open(
             SourceId.named(sourceName ?: "<cplus-input>"),
@@ -113,46 +129,88 @@ class CPlusTranspiler {
         ).sourceFile
         val comptime = logger.pass("comptime-resolve") {
             ComptimeCompiler(sourceFile, logger, importPaths, targetOs, sourceManager)
-                .compile(resolveTestBodies = testMode)
+                .compile(
+                    resolveTestBodies = testMode,
+                    extractTests = legacyPassSelection.extractTests
+                )
         }
         val input = if (testMode) {
             logger.pass("collect-tests") { testProgram(comptime.runtime, comptime.tests) }
         } else {
             TestProgram(comptime.runtime, emptyList())
         }
+        val changedPasses = linkedSetOf<String>()
 
-        val annotated = logger.pass("collect-error-annotations") {
-            ErrorAnnotationCollector().collect(input.source)
+        val annotated = if (legacyPassSelection.enabled(CPlusLegacyPassSelection.EXTRACT_THROWS)) {
+            logger.pass("collect-error-annotations") {
+                ErrorAnnotationCollector().collect(input.source).also { result ->
+                    if (result.source.text != input.source.text) {
+                        changedPasses += CPlusLegacyPassSelection.EXTRACT_THROWS
+                    }
+                }
+            }
+        } else {
+            ErrorAnnotationsResult(input.source, emptyMap())
         }
 
-        val deferred = logger.pass("lower-defer-statements") {
-            DeferLowerer().lower(annotated.source)
-        }
+        val deferred = if (legacyPassSelection.enabled(CPlusLegacyPassSelection.LOWER_DEFER)) {
+            logger.pass("lower-defer-statements") {
+                DeferLowerer().lower(annotated.source).also { result ->
+                    if (result.text != annotated.source.text) changedPasses += CPlusLegacyPassSelection.LOWER_DEFER
+                }
+            }
+        } else annotated.source
 
         val typeNames = logger.pass("collect-struct-types") {
             StructTypeCollector().collect(deferred.text)
         }
-        val calls = logger.pass("lower-method-calls") {
-            MethodCallLowerer(typeNames).lower(deferred)
-        }
-        val structs = logger.pass("lower-struct-methods") {
-            StructLowerer().lower(calls)
-        }
-        val errors = logger.pass("lower-try-catch") {
-            TryCatchLowerer(annotated.functions).lower(structs)
-        }
-        val allocationAnalysis = logger.pass("allocation-intent-analysis") {
-            AllocationIntentAnalyzer().analyze(errors)
-        }
+        val calls = if (legacyPassSelection.enabled(CPlusLegacyPassSelection.LOWER_METHOD_CALLS)) {
+            logger.pass("lower-method-calls") {
+                MethodCallLowerer(typeNames).lower(deferred).also { result ->
+                    if (result.text != deferred.text) changedPasses += CPlusLegacyPassSelection.LOWER_METHOD_CALLS
+                }
+            }
+        } else deferred
+        val structs = if (legacyPassSelection.enabled(CPlusLegacyPassSelection.LOWER_STRUCT_METHODS)) {
+            logger.pass("lower-struct-methods") {
+                StructLowerer().lower(calls).also { result ->
+                    if (result.text != calls.text) changedPasses += CPlusLegacyPassSelection.LOWER_STRUCT_METHODS
+                }
+            }
+        } else calls
+        val errors = if (legacyPassSelection.enabled(CPlusLegacyPassSelection.LOWER_TRY_CATCH)) {
+            logger.pass("lower-try-catch") {
+                TryCatchLowerer(annotated.functions).lower(structs).also { result ->
+                    if (result.text != structs.text) changedPasses += CPlusLegacyPassSelection.LOWER_TRY_CATCH
+                }
+            }
+        } else structs
+        val allocationAnalysis = if (legacyPassSelection.enabled(CPlusLegacyPassSelection.VALIDATE_SEMANTICS)) {
+            logger.pass("allocation-intent-analysis") { AllocationIntentAnalyzer().analyze(errors) }
+        } else AllocationAnalysisResult()
         val emitted = logger.pass("emit-mapped-c") {
             MappedEmitter(sourceFile).emit(
                 errors,
                 CPlusPreamble.text,
                 allocationAnalysis,
                 comptime.compilerOptions
-            ).copy(sourceOrder = comptime.sourceOrder, sourceImports = comptime.imports)
+            ).copy(
+                sourceOrder = comptime.sourceOrder,
+                sourceImports = comptime.imports,
+                frontendPasses = legacyPasses(legacyPassSelection),
+                frontendPassesChanged = changedPasses
+            )
         }
         return TranscodedTestSource(emitted, input.fixtures.map { it.name }, input.fixtures)
+    }
+
+    private fun legacyPasses(selection: CPlusLegacyPassSelection): List<String> = buildList {
+        if (selection.enabled(CPlusLegacyPassSelection.EXTRACT_THROWS)) add(CPlusLegacyPassSelection.EXTRACT_THROWS)
+        if (selection.enabled(CPlusLegacyPassSelection.LOWER_DEFER)) add(CPlusLegacyPassSelection.LOWER_DEFER)
+        if (selection.enabled(CPlusLegacyPassSelection.LOWER_METHOD_CALLS)) add(CPlusLegacyPassSelection.LOWER_METHOD_CALLS)
+        if (selection.enabled(CPlusLegacyPassSelection.LOWER_STRUCT_METHODS)) add(CPlusLegacyPassSelection.LOWER_STRUCT_METHODS)
+        if (selection.enabled(CPlusLegacyPassSelection.LOWER_TRY_CATCH)) add(CPlusLegacyPassSelection.LOWER_TRY_CATCH)
+        if (selection.enabled(CPlusLegacyPassSelection.VALIDATE_SEMANTICS)) add(CPlusLegacyPassSelection.VALIDATE_SEMANTICS)
     }
 
     private fun testProgram(
@@ -164,12 +222,39 @@ class CPlusTranspiler {
         val assertions = tests.map { test -> test.assertions ?: testAssertions(test.body) }
         val assertionTotal = assertions.sumOf { it.size }
         val fixtures = tests.mapIndexed { index, test ->
-            TranscodedTestFixture(test.name, assertions[index].size)
+            TranscodedTestFixture(
+                name = test.name,
+                assertionCount = assertions[index].size,
+                assertionSourceSpans = assertions[index].map { assertion ->
+                    test.source.span(
+                        test.bodyStart + assertion.start,
+                        test.bodyStart + assertion.close + 1
+                    )
+                }
+            )
         }
 
         val output = MappedTextBuilder()
-        output.appendGenerated("#define main cplus_test_original_main\n")
-        output.append(runtime)
+        // A legacy runtime is emitted after the outer C-plus preamble, while an
+        // AST runtime may already contain that preamble in its mapped text. Keep
+        // the generated annotation definitions before the test-only `main` rename
+        // in both cases; otherwise the two harnesses have different preprocessing
+        // order and cannot be compared or safely composed.
+        val preambleStart = runtime.text.indexOf("#ifndef CPLUS_ANNOTATIONS_DEFINED")
+        val preambleEnd = if (preambleStart >= 0) {
+            runtime.text.indexOf("#endif", preambleStart)
+                .takeIf { it >= 0 }
+                ?.let { end -> runtime.text.indexOf('\n', end).takeIf { it >= 0 }?.plus(1) ?: runtime.text.length }
+        } else null
+        if (preambleStart >= 0 && preambleEnd != null) {
+            if (preambleStart > 0) output.append(runtime, 0, preambleStart)
+            output.append(runtime, preambleStart, preambleEnd)
+            output.appendGenerated("#define main cplus_test_original_main\n")
+            output.append(runtime, preambleEnd, runtime.text.length)
+        } else {
+            output.appendGenerated("#define main cplus_test_original_main\n")
+            output.append(runtime)
+        }
         if (runtime.text.isNotEmpty() && !runtime.text.endsWith('\n')) output.appendGenerated("\n")
         output.appendGenerated(
             """
@@ -321,7 +406,10 @@ class CPlusTranspiler {
             output.appendGenerated("static void cplus_test_$index(void) {\n    cplus_test_failure = 0;\n")
             output.append(lowerTestAssertions(test.body, assertions[index], 1, assertions[index].size))
             if (test.body.text.isNotEmpty() && !test.body.text.endsWith('\n')) output.appendGenerated("\n")
-            output.appendGenerated("cplus_test_finish:\n    ;\n}\n\n")
+            if ("cplus_test_finish:" !in test.body.text) {
+                output.appendGenerated("cplus_test_finish:\n    ;\n")
+            }
+            output.appendGenerated("}\n\n")
         }
 
         output.appendGenerated(
@@ -503,7 +591,12 @@ data class TranscodedTestSource(
     val fixtures: List<TranscodedTestFixture>
 )
 
-data class TranscodedTestFixture(val name: String, val assertionCount: Int)
+data class TranscodedTestFixture(
+    val name: String,
+    val assertionCount: Int,
+    /** Original source spans for the assertions discovered in this fixture. */
+    val assertionSourceSpans: List<SourceSpan> = emptyList()
+)
 
 class CPlusSyntaxException(
     message: String,

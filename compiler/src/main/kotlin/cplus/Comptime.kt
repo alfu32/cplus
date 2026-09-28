@@ -47,9 +47,12 @@ internal class ComptimeCompiler(
     private val tests = mutableListOf<ComptimeTestBlock>()
     private var comptimeCalls = 0
 
-    fun compile(resolveTestBodies: Boolean = false): ComptimeCompilation {
+    fun compile(
+        resolveTestBodies: Boolean = false,
+        extractTests: Boolean = true
+    ): ComptimeCompilation {
         val result = logger.pass("comptime-parse-import-evaluate") {
-            compileModule(root, ArrayDeque())
+            compileModule(root, ArrayDeque(), extractTests)
         }
         val runtime = logger.pass("comptime-materialize") {
             val output = MappedTextBuilder()
@@ -80,7 +83,11 @@ internal class ComptimeCompiler(
         )
     }
 
-    private fun compileModule(source: SourceFile, stack: ArrayDeque<Path>): ComptimeModuleResult {
+    private fun compileModule(
+        source: SourceFile,
+        stack: ArrayDeque<Path>,
+        extractTests: Boolean
+    ): ComptimeModuleResult {
         val key = source.name?.let { Paths.get(it).toAbsolutePath().normalize() }
         if (key != null) {
             modules[key]?.let { return it }
@@ -118,6 +125,9 @@ internal class ComptimeCompiler(
                     ComptimeParser(passSource).parse()
                 }
                 parsed.items.filterIsInstance<ComptimeTest>().forEach { item ->
+                    if (!extractTests) {
+                        throw syntax("@test extraction is disabled for this frontend selection", item.source, item.start)
+                    }
                     tests += ComptimeTestBlock(
                         item.name,
                         parsed.mapped.slice(item.bodyStart, item.bodyEnd),
@@ -144,7 +154,7 @@ internal class ComptimeCompiler(
                             cycleRootEdge?.location ?: passSource.span(item.start)
                         )
                     }
-                    val imported = compileModule(importedSource, stack)
+                    val imported = compileModule(importedSource, stack, extractTests)
                     if (imported.identity !in importedModules) {
                         importedModules[imported.identity] = imported
                         environment.merge(imported.environment, passSource, item.start)

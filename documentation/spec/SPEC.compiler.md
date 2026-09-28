@@ -11,9 +11,9 @@ cplus help
 cplus parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
 cplus parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
 cplus graph filename.cp [-o imports.json]
-cplus transcode filename.cp [-o some_file_name.c] [--target=TRIPLE]
-cplus compile filename.cp [-o executable] [passthrough tcc parameters]
-cplus run filename.cp [-o executable] [passthrough tcc parameters]
+cplus transcode filename.cp [-o some_file_name.c] [--frontend legacy|tree-sitter] [--target=TRIPLE]
+cplus compile filename.cp [-o executable] [--frontend legacy|tree-sitter] [passthrough tcc parameters]
+cplus run filename.cp [-o executable] [--frontend legacy|tree-sitter] [passthrough tcc parameters]
 cplus test [run] [compiler flags] filename.cp [filename2.cp ...] [exact test name ...]
 cplus test transcode [-o test.c] filename.cp
 cplus test compile [-o executable] [compiler flags] filename.cp
@@ -29,6 +29,77 @@ Use `parse --stdin` to parse unsaved editor text. The source is read from stdin;
 `graph` resolves the input through the normal C-plus comptime importer and emits `cplus.imports.v1` JSON. `dependencyOrder` lists canonical C-plus source identities in dependency-first order, ending with the requested root; `imports` contains directed `{importer, imported, location}` edges with source-mapped UTF-16 spans. It shares project, module, and standard-library resolution with compilation. The command performs normal transpilation to obtain the resolved graph, so syntax/import/materialization errors fail the command rather than returning a partial graph. Ordinary C `#include` and C `@import` directives remain compiler-managed and are not C-plus dependency edges. The default output is stdout; `-o` writes the JSON file.
 
 `transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. `transcode` accepts only `--target` among compiler options; it uses the option to choose comptime branches but does not compile. Additional arguments for `compile` and `run` are passed to the selected C compiler; for example, `-DFLAG=1` or `-Iinclude`. Code-processing commands print the C-plus transcoder version. Before each C compilation, the CLI reports whether the compiler is bundled or external and its payload/JAR or executable location.
+
+`test` runs with the legacy frontend by default for compatibility. Its `run`, `compile`, and `transcode` forms also accept `--frontend=legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate. This boundary is explicit and does not silently claim full test-front-end parity.
+
+For migration tests, fixture extraction is an independent frontend concern. The
+internal `CPlusLegacyPassSelection.extractTests` and
+`TreeSitterPassSelection.extractTests` switches default to enabled and, when
+disabled, fail at the original `@test` declaration instead of emitting unresolved
+C-plus into C. They are rollback controls, not public language syntax or a promise
+that the two harness implementations are already semantically identical.
+
+The migration differential harness compares fixture order, decoded names, and
+assertion counts across the legacy and AST frontends. It also compares normalized
+generated `cplus_test_N` function-body tokens for the bounded supported fixture-body corpus, excluding
+formatting, comments, and `#line` directives, plus the ordered original source
+lines of discovered assertions. This is a body-parity contract for accepted forms,
+not yet permission to remove the textual test extractor for unsupported forms.
+The AST fixtures are additionally passed through the explicit test-harness bridge;
+fixture names and assertion counts must survive that materialization. This validates
+the current compatibility boundary.
+
+For runtime lowering, the migration differential can also report one exercised pass:
+the full legacy/AST result must match on its bounded comparison fields, the pass must
+be observed changing both mapped outputs, and disabling it must fail closed. This is
+an acceptance primitive for building a corpus; it is not by itself a lowerer-retirement
+criterion.
+
+`comparePassSubstitution` provides a stronger migration check by enabling only the
+selected transformation and its documented prerequisites. The receiver-call case
+explicitly retains struct-method lowering because semantic receiver indexing depends
+on method declarations. The report compares normalized C, compiler options, source-line
+map coverage, and whether the selected pass changed both outputs, followed by host
+compilation and execution.
+
+Analysis-only frontend passes use a diagnostic parity contract rather than a text
+change contract. The allocation-validation comparison requires matching normalized
+diagnostic signatures and fail-closed rollback when validation is disabled.
+`compareSemanticPassSubstitution` runs the validation pass with runtime lowerers
+disabled and compares normalized allocation diagnostics, generated C/options, and
+source-line map coverage. Because validation is analysis-only, unchanged source is
+expected and is not treated as a failed pass exercise.
+The parity comparison is exact for the bounded supported-flow corpus. The legacy
+scanner is intentionally not treated as semantic authority: it may report a
+possible assignment inside a zero-or-more-iteration `while` loop even when the
+AST fixed-point analysis correctly retains the incoming domain on the
+zero-iteration path. That remains a visible migration difference until an
+independent ownership-diagnostic contract replaces both implementations; it must
+not be hidden by weakening AST flow analysis or dropping the legacy diagnostic.
+The current bounded report records `try`/`catch` as exercised and token-identical on
+the representative fixture. The AST lowerer owns compound-body/catch-body braces and
+emits a separator before the following statement so its generated C matches the
+legacy shape while retaining independent mapped lowering.
+The checked-error overlap fixtures cover consecutive and nested handlers, both
+error-return and error-out conventions, and instance methods. Unsupported embedded
+checked-call expressions remain mapped diagnostics rather than being rewritten by
+guesswork.
+
+Source-map parity is bounded by source-line coverage: every original file/line that
+appears in the legacy `SourceMap` must also appear in the AST `SourceMap`. Generated
+line numbers, columns, and additional AST-generated mapping entries are not required
+to be identical. This protects diagnostic reachability without pretending that two
+different emitters have the same layout.
+
+The compilation frontend defaults to `legacy`, preserving the established production
+transcoder. `--frontend=tree-sitter` selects the AST prototype for ordinary
+`transcode`, `compile`, `run`, and explicitly selected `test` commands; it performs comptime fixed-point
+materialization, semantic/runtime lowering, and mapped C emission through the
+Tree-sitter pipeline. A Tree-sitter parser, lowering, or unsupported-construct
+diagnostic fails the command before invoking the C compiler. The selector is a
+migration and rollback switch, not permission to remove the legacy path: retirement
+requires the finite overlap corpus and per-lowerer gates in
+[`COMPILER-FRONTEND-MIGRATION-INVENTORY.md`](../plan/COMPILER-FRONTEND-MIGRATION-INVENTORY.md).
 
 Compiler selection is: a usable bundled TinyCC route for the requested target; an explicit executable from `TCC`; system `tcc` found on `PATH`; then the command in `CC` (including simple quoted paths and arguments such as `CC='ccache gcc'`). `CC` is a fallback, not an override for an installed TinyCC; set `TCC` to choose an explicit TinyCC. When no compiler is usable, `compile`, `run`, and `test` print OS-specific setup commands. The external compiler must have the host C runtime development headers and libraries; optional libraries such as Raylib are installed separately.
 

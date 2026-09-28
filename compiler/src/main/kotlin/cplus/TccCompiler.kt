@@ -76,7 +76,7 @@ class TccCompiler {
         )
         TccCompilationResult(
             exitCode = exitCode,
-            diagnostics = TccDiagnosticParser.parse(rawDiagnostics.toString(), source)
+        diagnostics = CompilerDiagnosticParser.parse(rawDiagnostics.toString(), source)
         )
     }
 
@@ -111,7 +111,10 @@ class TccCompiler {
             }
             val exitCode = TinyCC.executeTcc(*arguments.toTypedArray())
             val outputExists = Files.isRegularFile(outputPath) && Files.size(outputPath) > 0
-            if (exitCode != 0) return TccCompilationResult(exitCode, emptyList())
+            if (exitCode != 0) {
+                println("DEBUG embedded tcc exit=$exitCode args=${arguments.joinToString(" ")}")
+                return TccCompilationResult(exitCode, emptyList())
+            }
             if (!outputExists) {
                 return TccCompilationResult(
                     1,
@@ -321,9 +324,10 @@ class TccCompiler {
             }
             val diagnostics = process.inputStream.bufferedReader().use { it.readText() }
             val exitCode = process.waitFor()
+            println("DEBUG external compiler=${compiler.executable} exit=$exitCode raw=[$diagnostics]")
             return TccCompilationResult(
                 exitCode = exitCode,
-                diagnostics = TccDiagnosticParser.parse(diagnostics, source)
+                    diagnostics = CompilerDiagnosticParser.parse(diagnostics, source)
             )
         } finally {
             Files.deleteIfExists(sourceFile)
@@ -394,7 +398,12 @@ class TccCompiler {
     }
 }
 
-private object TccDiagnosticParser {
+/**
+ * Normalizes GCC/Clang/TCC-style diagnostics and resolves generated locations through the
+ * mapped C source.  Drivers are allowed to omit columns; callers can still rely on the mapped
+ * file and line, while a supplied column is preserved.
+ */
+object CompilerDiagnosticParser {
     private val diagnosticStart = Regex(
         """(?<![A-Za-z0-9_./\\-])(?:<[^>\n]+>|[^:\n]+):\d+(?::\d+)?:\s*(?:warning|error|note|fatal error):"""
     )
@@ -416,7 +425,8 @@ private object TccDiagnosticParser {
     }
 
     private fun parseRecord(record: String, source: TranscodedSource): CompilerDiagnostic {
-        val match = diagnosticLine.matchEntire(record)
+        val firstLine = record.substringBefore('\n')
+        val match = diagnosticLine.matchEntire(firstLine)
         if (match == null) {
             return CompilerDiagnostic(DiagnosticSeverity.UNKNOWN, record, null, null, null, record)
         }
@@ -435,7 +445,11 @@ private object TccDiagnosticParser {
         } else null
         return CompilerDiagnostic(
             severity = severity,
-            message = match.groupValues[5].trim(),
+            message = buildString {
+                append(match.groupValues[5].trim())
+                val continuation = record.substringAfter('\n', "").trimEnd()
+                if (continuation.isNotEmpty()) append('\n').append(continuation)
+            },
             file = mapped?.file ?: file,
             line = mapped?.startLine ?: line,
             column = mapped?.startColumn ?: column,
