@@ -112,11 +112,14 @@ val installHostParserLibrary = tasks.register<Copy>("installHostParserLibrary") 
 
 val parserNativePayloadDirectory = layout.buildDirectory.dir("parser-native-payload")
 
-val windowsKTreeSitterVersion = "0.25.1"
-val kTreeSitterSource = layout.buildDirectory.dir("third-party/ktreesitter-$windowsKTreeSitterVersion")
-val treeSitterSource = layout.buildDirectory.dir("third-party/tree-sitter-$windowsKTreeSitterVersion")
+val kTreeSitterVersion = "0.25.1"
+val kTreeSitterSource = layout.buildDirectory.dir("third-party/ktreesitter-$kTreeSitterVersion")
+val treeSitterSource = layout.buildDirectory.dir("third-party/tree-sitter-$kTreeSitterVersion")
 val kTreeSitterBuild = layout.buildDirectory.dir("native-ktreesitter-cmake")
 val kTreeSitterOutput = layout.buildDirectory.dir("native-ktreesitter")
+val forceHostKTreeSitterBuild = providers.gradleProperty("buildKTreeSitterBase")
+    .map { it.toBoolean() }
+    .orElse(false)
 val nativeKTreeSitterLibrary = when (nativeHostOs) {
     "windows" -> "ktreesitter.dll"
     "macos" -> "libktreesitter.dylib"
@@ -151,22 +154,22 @@ fun extractPinnedZip(url: String, destination: File) {
 val buildHostKTreeSitter = tasks.register("buildHostKTreeSitter") {
     group = "build"
     description = "Builds a host KTreeSitter base JNI library for the parser runtime."
-    onlyIf { nativeHostOs == "windows" || nativeHostOs == "macos" }
+    onlyIf { forceHostKTreeSitterBuild.get() || nativeHostOs == "windows" || nativeHostOs == "macos" }
     outputs.file(kTreeSitterOutput.map { it.file(nativeKTreeSitterLibrary) })
     doLast {
         val ktreesitterArchiveRoot = kTreeSitterSource.get().asFile
         val treeSitterArchiveRoot = treeSitterSource.get().asFile
         extractPinnedZip(
-            "https://github.com/tree-sitter/kotlin-tree-sitter/archive/refs/tags/v$windowsKTreeSitterVersion.tar.gz",
+            "https://github.com/tree-sitter/kotlin-tree-sitter/archive/refs/tags/v$kTreeSitterVersion.zip",
             ktreesitterArchiveRoot
         )
         extractPinnedZip(
-            "https://github.com/tree-sitter/tree-sitter/archive/refs/tags/v$windowsKTreeSitterVersion.tar.gz",
+            "https://github.com/tree-sitter/tree-sitter/archive/refs/tags/v$kTreeSitterVersion.zip",
             treeSitterArchiveRoot
         )
 
-        val ktreesitterRoot = ktreesitterArchiveRoot.resolve("kotlin-tree-sitter-$windowsKTreeSitterVersion/ktreesitter")
-        val treeSitterRoot = treeSitterArchiveRoot.resolve("tree-sitter-$windowsKTreeSitterVersion")
+        val ktreesitterRoot = ktreesitterArchiveRoot.resolve("kotlin-tree-sitter-$kTreeSitterVersion/ktreesitter")
+        val treeSitterRoot = treeSitterArchiveRoot.resolve("tree-sitter-$kTreeSitterVersion")
         val cmakeRoot = kTreeSitterBuild.get().asFile
         cmakeRoot.mkdirs()
         val outputRoot = kTreeSitterOutput.get().asFile
@@ -221,7 +224,7 @@ val buildHostKTreeSitter = tasks.register("buildHostKTreeSitter") {
 
 val installHostKTreeSitterLibrary = tasks.register<Copy>("installHostKTreeSitterLibrary") {
     dependsOn(buildHostKTreeSitter)
-    onlyIf { nativeHostOs == "windows" || nativeHostOs == "macos" }
+    onlyIf { forceHostKTreeSitterBuild.get() || nativeHostOs == "windows" || nativeHostOs == "macos" }
     from(kTreeSitterOutput)
     into(generatedGrammarSrc.dir("jvmMain/resources/lib/$nativeHostOs/$nativeHostArch"))
     include(nativeKTreeSitterLibrary)
