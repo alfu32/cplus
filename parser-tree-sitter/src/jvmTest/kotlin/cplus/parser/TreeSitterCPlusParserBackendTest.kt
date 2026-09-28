@@ -766,7 +766,13 @@ class TreeSitterCPlusParserBackendTest {
 
             assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
             val generated = result.cSource ?: error("successful C import lowering must emit C")
-            val include = "#include \"${cFile.toRealPath()}\""
+            // Windows paths contain backslashes, which must be escaped in the
+            // generated C string literal.  Compare the emitted source rather
+            // than the raw filesystem spelling.
+            val escapedPath = cFile.toRealPath().toString()
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+            val include = "#include \"$escapedPath\""
             assertTrue(include in generated.text, generated.text)
             assertFalse("@import" in generated.text, generated.text)
             val generatedOffset = generated.text.indexOf(include)
