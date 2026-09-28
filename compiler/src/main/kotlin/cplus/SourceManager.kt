@@ -23,7 +23,12 @@ data class SourceId(val value: String) {
                     // versa), producing duplicate graph vertices and unstable order.
                     absolute.toFile().canonicalFile.toPath()
                 } else {
-                    absolute
+                    // Generated/virtual roots commonly do not exist yet. Canonicalize
+                    // their existing parent so a virtual leaf still agrees with an
+                    // imported file resolved below the same Windows short-name path.
+                    val parent = absolute.parent
+                    val canonicalParent = parent?.toFile()?.canonicalFile?.toPath()
+                    canonicalParent?.resolve(absolute.fileName) ?: absolute
                 }
             } catch (_: Exception) {
                 absolute
