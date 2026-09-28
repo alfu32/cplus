@@ -88,6 +88,43 @@ jobs:
           destination="parser-tree-sitter/build/parser-native-payload/lib/$host_os/$host_arch"
           mkdir -p "$destination"
           cp "$library_path" "$destination/$library"
+      - name: Record parser host and resource manifest
+        shell: bash
+        env:
+          PARSER_HOST: ${{ matrix.host }}
+        run: |
+          report="parser-tree-sitter/build/parser-host-report"
+          mkdir -p "$report"
+          {
+            echo "host=$PARSER_HOST"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "java=$(java -version 2>&1 | head -n 1)"
+            echo "tree_sitter=$(tree-sitter --version 2>&1 | head -n 1)"
+            echo "uname=$(uname -a 2>/dev/null || true)"
+            for compiler in cc gcc clang tcc; do
+              if command -v "$compiler" >/dev/null 2>&1; then
+                echo "compiler.$compiler=$(command -v "$compiler")"
+                "$compiler" --version 2>&1 | head -n 1 | sed "s/^/compiler.$compiler.version=/"
+              fi
+            done
+          } > "$report/host.txt"
+          find parser-tree-sitter/build/parser-native-payload -type f -print | sort |
+            while IFS= read -r file; do
+              if command -v sha256sum >/dev/null 2>&1; then
+                digest=$(sha256sum "$file" | awk '{print $1}')
+              else
+                digest=$(shasum -a 256 "$file" | awk '{print $1}')
+              fi
+              size=$(wc -c < "$file" | tr -d ' ')
+              printf '%s %s %s\n' "$digest" "$size" "$file"
+            done > "$report/resources.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tree-sitter-host-report-${{ matrix.host }}
+          path: parser-tree-sitter/build/parser-host-report/
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: tree-sitter-native-${{ matrix.host }}
@@ -129,6 +166,11 @@ jobs:
         with:
           pattern: tree-sitter-native-*
           path: parser-tree-sitter/build/parser-native-payload
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tree-sitter-host-report-*
+          path: build/parser-host-reports
           merge-multiple: true
       - uses: actions/setup-java@v4
         with:
@@ -190,6 +232,8 @@ jobs:
             parser_hosts="$(jar tf "$jar" | grep -E '^lib/(linux|macos|windows)/(x64|aarch64)/(libktreesitter-c\.so|libktreesitter-c\.dylib|ktreesitter-c\.dll)$' | sort -u | wc -l)"
             test "$parser_hosts" -eq 6
           done
+          test "$(find build/parser-host-reports -name host.txt | wc -l | tr -d ' ')" -eq 6
+          test "$(find build/parser-host-reports -name resources.txt | wc -l | tr -d ' ')" -eq 6
 
           java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" help >/dev/null
           java -Dcplus.home="$PWD/build/distribution-check/cross" -jar "$cross_jar" help >/dev/null

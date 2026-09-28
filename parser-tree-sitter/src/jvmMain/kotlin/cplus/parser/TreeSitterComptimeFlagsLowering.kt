@@ -5,6 +5,7 @@ import cplus.CPlusParseResult
 import cplus.CPlusSyntaxNode
 import cplus.MappedText
 import cplus.MappedTextBuilder
+import cplus.SourceId
 
 data class TreeSitterFlagsLoweringResult(
     val source: MappedText,
@@ -14,7 +15,11 @@ data class TreeSitterFlagsLoweringResult(
 
 /** Extracts compiler arguments from AST-recognized active module-scope `comptime flags` nodes. */
 class TreeSitterComptimeFlagsLowering {
-    fun lower(parsed: CPlusParseResult, source: MappedText): TreeSitterFlagsLoweringResult {
+    fun lower(
+        parsed: CPlusParseResult,
+        source: MappedText,
+        moduleOrder: List<SourceId> = emptyList()
+    ): TreeSitterFlagsLoweringResult {
         require(parsed.source.text == source.text) { "AST and mapped source must contain the same snapshot text" }
 
         data class Directive(val node: CPlusSyntaxNode, val replacement: CPlusSyntaxNode, val arguments: List<String>)
@@ -49,8 +54,15 @@ class TreeSitterComptimeFlagsLowering {
             )
         }
 
+        val moduleOrderByName = moduleOrder.withIndex().associate { it.value.value to it.index }
+        val orderedDirectives = directives.sortedWith(
+            compareBy<Directive> {
+                val fileName = source.originAt(it.node.span.startOffset)?.file?.name
+                moduleOrderByName[fileName] ?: Int.MAX_VALUE
+            }.thenBy { it.node.span.startOffset }
+        )
         val options = linkedSetOf<String>()
-        directives.forEach { directive ->
+        orderedDirectives.forEach { directive ->
             if (directive.arguments.isEmpty()) {
                 return TreeSitterFlagsLoweringResult(
                     source,

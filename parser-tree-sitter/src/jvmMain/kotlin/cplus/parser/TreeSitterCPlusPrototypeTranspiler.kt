@@ -106,6 +106,7 @@ class TreeSitterCPlusPrototypeTranspiler(
         var testFixtures: List<cplus.CPlusExtractedTestFixture> = emptyList()
         var allocationAnalysis = cplus.AllocationAnalysisResult()
         var sourceOrder: List<SourceId> = emptyList()
+        var compilerOptionOrder: List<SourceId> = emptyList()
         var sourceImports: List<cplus.SourceImportEdge> = emptyList()
         val conditionalPass = TreeSitterComptimeConditionalLowering()
         var conditionalPassCount = 0
@@ -160,6 +161,7 @@ class TreeSitterCPlusPrototypeTranspiler(
         }
         mapped = imports.source ?: error("successful import expansion must produce mapped source")
         sourceOrder = imports.sourceOrder
+        compilerOptionOrder = imports.compilerOptionOrder
         sourceImports = imports.sourceImports
         snapshot = snapshotFor(mapped.text)
         parsed = backend.parse(snapshot)
@@ -349,7 +351,7 @@ class TreeSitterCPlusPrototypeTranspiler(
 
             if (descendants(parsed.root).any { it.kind in CPLUS_MODULE_IMPORT_NODES }) {
                 val expandedImports = TreeSitterComptimeImportLowering(backend, sourceManager, importPaths, targetOs)
-                    .lower(parsed, mapped, source.sourceFile, sourceOrder.toSet())
+                    .lower(parsed, mapped, source.sourceFile, compilerOptionOrder.toSet())
                 if (expandedImports.parserDiagnostics.isNotEmpty()) {
                     return TreeSitterPrototypeResult(null, expandedImports.parserDiagnostics, emptyList(), emptyList())
                 }
@@ -374,6 +376,8 @@ class TreeSitterCPlusPrototypeTranspiler(
                     }
                     val newDependencies = expandedImports.sourceOrder.dropLast(1)
                     sourceOrder = (newDependencies + sourceOrder).distinct()
+                    val newCompilerOptionDependencies = expandedImports.compilerOptionOrder.dropLast(1)
+                    compilerOptionOrder = (newCompilerOptionDependencies + compilerOptionOrder).distinct()
                     sourceImports = (sourceImports + expandedImports.sourceImports).distinct()
                     mapped = expandedSource
                     snapshot = snapshotFor(mapped.text)
@@ -523,7 +527,7 @@ class TreeSitterCPlusPrototypeTranspiler(
             }
         }
         ast = CPlusAstAdapter().adapt(parsed)
-        val flagsMaterialized = TreeSitterComptimeFlagsLowering().lower(parsed, mapped)
+        val flagsMaterialized = TreeSitterComptimeFlagsLowering().lower(parsed, mapped, compilerOptionOrder)
         if (flagsMaterialized.diagnostics.isNotEmpty()) {
             return TreeSitterPrototypeResult(
                 null,

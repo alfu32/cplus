@@ -1303,7 +1303,6 @@ class TranspilerTest {
             val status = CPlusCli(output = StringBuilder(), errors = errors).run(listOf("test", source.toString()))
 
             assertEquals(1, status, errors.toString())
-            println("diagnostic test errors: $errors")
             assertTrue(errors.contains("${source.toAbsolutePath()}:2"), errors.toString())
         } finally {
             Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)

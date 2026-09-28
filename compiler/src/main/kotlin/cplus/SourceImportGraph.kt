@@ -54,6 +54,41 @@ class SourceImportGraph {
         return result
     }
 
+    /**
+     * Returns dependencies before importers while preserving edge/discovery insertion order.
+     *
+     * Source emission uses [dependencyOrder] so independent modules have a stable canonical
+     * order. Compiler options, however, are historically collected in recursive import discovery
+     * order; callers that need that compatibility must use this traversal explicitly.
+     */
+    @Synchronized
+    fun dependencyOrderInInsertionOrder(roots: Collection<SourceId> = emptyList()): List<SourceId> {
+        val vertices = (outgoing.keys + outgoing.values.flatMap { it.keys } + roots).distinct()
+        val state = mutableMapOf<SourceId, Int>()
+        val result = mutableListOf<SourceId>()
+        val path = ArrayDeque<SourceId>()
+
+        fun visit(source: SourceId) {
+            when (state[source]) {
+                2 -> return
+                1 -> {
+                    val cycle = (path.dropWhile { it != source } + source).joinToString(" -> ") { it.value }
+                    throw IllegalStateException("source import cycle: $cycle")
+                }
+            }
+            state[source] = 1
+            path.addLast(source)
+            outgoing[source].orEmpty().keys.forEach(::visit)
+            path.removeLast()
+            state[source] = 2
+            result += source
+        }
+
+        roots.forEach(::visit)
+        vertices.forEach(::visit)
+        return result
+    }
+
     private fun findPath(start: SourceId, target: SourceId): List<SourceId>? {
         val visited = mutableSetOf<SourceId>()
         fun visit(current: SourceId): List<SourceId>? {

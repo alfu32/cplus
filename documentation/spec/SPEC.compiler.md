@@ -49,6 +49,23 @@ The AST fixtures are additionally passed through the explicit test-harness bridg
 fixture names and assertion counts must survive that materialization. This validates
 the current compatibility boundary.
 
+Test-mode differential validation compares compiler options as a logical deduplicated
+set because the harness bridge does not own dependency traversal. The ordinary
+compilation differential separately compares exact dependency-first option ordering.
+For test extraction, source-map coverage is scoped to extracted assertion source lines;
+imported runtime modules may have different generated layout while retaining their own
+mapped origins.
+
+The bounded accepted fixture-body contract is the repository's ordinary C statements,
+structured control flow, C-plus method/receiver calls, `defer`, and supported checked
+calls/assertions. The standard-library fixture corpus is the executable positive
+inventory for that contract. Checked calls embedded in unsupported expression contexts
+are rejected at their original call span with no fixture or C output; this is a
+fail-closed boundary, not an implicit promise to rewrite arbitrary C expressions.
+The AST extractor is therefore classified `MIGRATED-FALLBACK`: it has parity and
+rollback evidence for the bounded contract, while the legacy scanner remains available
+until the separately tracked textual-retirement decision.
+
 For runtime lowering, the migration differential can also report one exercised pass:
 the full legacy/AST result must match on its bounded comparison fields, the pass must
 be observed changing both mapped outputs, and disabling it must fail closed. This is

@@ -7,6 +7,7 @@ import cplus.CPlusTranspiler
 import cplus.SourceSnapshot
 import cplus.TranscodedSource
 import cplus.TranscodedTestSource
+import cplus.TranscodedTestFixture
 
 /** A finite, migration-only comparison between the legacy and AST compilation paths. */
 data class TreeSitterDifferentialReport(
@@ -61,11 +62,17 @@ data class TreeSitterTestDifferentialReport(
     val harnessTokensMatch: Boolean,
     val harnessTokenDifference: String? = null,
     /** Assertion source lines remain reachable through AST extraction. */
-    val assertionSourceLinesMatch: Boolean
+    val assertionSourceLinesMatch: Boolean,
+    /** Source-declared compiler options survive test-harness materialization as a logical set. */
+    val compilerOptionsMatch: Boolean,
+    /** The AST harness retains every source line belonging to extracted assertions. */
+    val sourceMapCoverageMatch: Boolean,
+    val sourceMapCoverageMissing: Set<String> = emptySet()
 ) {
     val successful: Boolean
         get() = treeSitter.successful && astHarness != null && fixtureNamesMatch && assertionCountsMatch &&
-            harnessFixtureNamesMatch && harnessAssertionCountsMatch && harnessTokensMatch && assertionSourceLinesMatch
+            harnessFixtureNamesMatch && harnessAssertionCountsMatch && harnessTokensMatch && assertionSourceLinesMatch &&
+            compilerOptionsMatch && sourceMapCoverageMatch
 }
 
 /**
@@ -151,20 +158,24 @@ class TreeSitterCPlusDifferentialRunner(
         source: SourceSnapshot,
         targetOs: String = CPlusTarget.hostOs(),
         importPaths: CPlusImportPaths = CPlusImportPaths(),
-        targetArch: String = CPlusTarget.hostArch()
+        targetArch: String = CPlusTarget.hostArch(),
+        legacyPassSelection: CPlusLegacyPassSelection = CPlusLegacyPassSelection(),
+        treeSitterPassSelection: TreeSitterPassSelection = TreeSitterPassSelection()
     ): TreeSitterTestDifferentialReport {
         val legacy = CPlusTranspiler().transpileTests(
             source.text,
             source.id.value,
             importPaths = importPaths,
-            targetOs = targetOs
+            targetOs = targetOs,
+            legacyPassSelection = legacyPassSelection
         )
         val treeSitter = TreeSitterCPlusPrototypeTranspiler(
             backend = backend,
             sourceManager = sourceManager,
             targetOs = targetOs,
             importPaths = importPaths,
-            targetArch = targetArch
+            targetArch = targetArch,
+            passSelection = treeSitterPassSelection
         ).transpile(source)
         val legacyCounts = legacy.fixtures.map { it.name to it.assertionCount }
         val treeCounts = treeSitter.testFixtures.map { it.name to it.assertions.size }
@@ -185,6 +196,8 @@ class TreeSitterCPlusDifferentialRunner(
         val treeAssertionLines = treeSitter.testFixtures.map { fixture ->
             fixture.assertions.map { it.span.startLine }
         }
+        val requiredFixtureMap = fixtureAssertionSourceSignatures(legacy.fixtures)
+        val actualFixtureMap = sourceMapCoverageSignature(astHarness?.source)
         return TreeSitterTestDifferentialReport(
             legacy = legacy,
             treeSitter = treeSitter,
@@ -195,7 +208,10 @@ class TreeSitterCPlusDifferentialRunner(
             harnessAssertionCountsMatch = legacyCounts == harnessCounts,
             harnessTokensMatch = astHarnessTokens != null && legacyHarnessTokens == astHarnessTokens,
             harnessTokenDifference = harnessTokenDifference,
-            assertionSourceLinesMatch = legacyAssertionLines == treeAssertionLines
+            assertionSourceLinesMatch = legacyAssertionLines == treeAssertionLines,
+            compilerOptionsMatch = legacy.source.compilerOptions.sorted() == treeSitter.compilerOptions.sorted(),
+            sourceMapCoverageMatch = astHarness != null && requiredFixtureMap.all { it in actualFixtureMap },
+            sourceMapCoverageMissing = requiredFixtureMap - actualFixtureMap
         )
     }
 
@@ -480,6 +496,11 @@ class TreeSitterCPlusDifferentialRunner(
         }
         ?.toSet()
         ?: emptySet()
+
+    private fun fixtureAssertionSourceSignatures(fixtures: List<TranscodedTestFixture>): Set<String> = fixtures
+        .flatMap { fixture -> fixture.assertionSourceSpans }
+        .map { span -> "${span.file ?: "<unknown>"}:${span.startLine}" }
+        .toSet()
 
     private fun normalizeC(code: String): List<String> {
         val withoutLine = code.replace(Regex("(?m)^[ \\t]*#line[^\\r\\n]*(?:\\r?\\n|$)"), "")

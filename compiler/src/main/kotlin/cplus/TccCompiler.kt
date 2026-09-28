@@ -112,7 +112,6 @@ class TccCompiler {
             val exitCode = TinyCC.executeTcc(*arguments.toTypedArray())
             val outputExists = Files.isRegularFile(outputPath) && Files.size(outputPath) > 0
             if (exitCode != 0) {
-                println("DEBUG embedded tcc exit=$exitCode args=${arguments.joinToString(" ")}")
                 return TccCompilationResult(exitCode, emptyList())
             }
             if (!outputExists) {
@@ -324,7 +323,6 @@ class TccCompiler {
             }
             val diagnostics = process.inputStream.bufferedReader().use { it.readText() }
             val exitCode = process.waitFor()
-            println("DEBUG external compiler=${compiler.executable} exit=$exitCode raw=[$diagnostics]")
             return TccCompilationResult(
                 exitCode = exitCode,
                     diagnostics = CompilerDiagnosticParser.parse(diagnostics, source)
@@ -404,28 +402,88 @@ class TccCompiler {
  * file and line, while a supplied column is preserved.
  */
 object CompilerDiagnosticParser {
+    private val locationFile = "(?:<[^>\\n]+>|[A-Za-z]:[\\\\/][^:\\n]+|[^:\\n]+)"
     private val diagnosticStart = Regex(
-        """(?<![A-Za-z0-9_./\\-])(?:<[^>\n]+>|[^:\n]+):\d+(?::\d+)?:\s*(?:warning|error|note|fatal error):"""
+        """(?<![A-Za-z0-9_./\\-])$locationFile:\d+(?::\d+)?:\s*(?:warning|error|note|fatal error):"""
     )
     private val diagnosticLine = Regex(
-        "^(.+?):(\\d+)(?::(\\d+))?:\\s*(?:(warning|error|note|fatal error):\\s*)?(.*)$"
+        "^($locationFile):(\\d+)(?::(\\d+))?:\\s*(?:(warning|error|note|fatal error):\\s*)?(.*)$"
+    )
+    private val msvcDiagnosticStart = Regex(
+        """(?<![A-Za-z0-9_./\\-])(?:<[^>\n]+>|[^\n]+)\(\d+(?:,\d+)?\):\s*(?:warning|error|note|fatal error)\b"""
+    )
+    private val msvcDiagnosticLine = Regex(
+        "^(.+?)\\((\\d+)(?:,(\\d+))?\\):\\s*(warning|error|note|fatal error)\\b:?\\s*(.*)$"
+    )
+    private val bareDiagnosticStart = Regex(
+        "(?<![A-Za-z0-9_./\\\\-])[A-Za-z][A-Za-z0-9_.-]*:\\s*(?:warning|error|note|fatal error):"
+    )
+    private val bareDiagnosticLine = Regex(
+        "^([A-Za-z][A-Za-z0-9_.-]*):\\s*(warning|error|note|fatal error):\\s*(.*)$"
     )
 
     fun parse(raw: String, source: TranscodedSource): List<CompilerDiagnostic> {
         if (raw.isBlank()) return emptyList()
         val normalized = raw.replace("\r", "")
-        val starts = diagnosticStart.findAll(normalized).toList()
+        val starts = (diagnosticStart.findAll(normalized) +
+            msvcDiagnosticStart.findAll(normalized) +
+            bareDiagnosticStart.findAll(normalized))
+            .distinctBy { it.range.first }
+            .sortedBy { it.range.first }
+            .toList()
         if (starts.isEmpty()) return listOf(
             CompilerDiagnostic(DiagnosticSeverity.UNKNOWN, normalized.trim(), null, null, null, normalized)
         )
+        var lastLocated: CompilerDiagnostic? = null
         return starts.mapIndexed { index, start ->
             val end = starts.getOrNull(index + 1)?.range?.first ?: normalized.length
-            parseRecord(normalized.substring(start.range.first, end).trim(), source)
+            val parsed = parseRecord(normalized.substring(start.range.first, end).trim(), source)
+            val normalizedDiagnostic = if (parsed.file == null && parsed.line == null && lastLocated != null) {
+                parsed.copy(
+                    file = lastLocated?.file,
+                    line = lastLocated?.line,
+                    column = lastLocated?.column
+                )
+            } else {
+                parsed
+            }
+            if (normalizedDiagnostic.file != null && normalizedDiagnostic.line != null) {
+                lastLocated = normalizedDiagnostic
+            }
+            normalizedDiagnostic
         }
     }
 
     private fun parseRecord(record: String, source: TranscodedSource): CompilerDiagnostic {
         val firstLine = record.substringBefore('\n')
+        val msvcMatch = msvcDiagnosticLine.matchEntire(firstLine)
+        if (msvcMatch != null) {
+            val file = msvcMatch.groupValues[1]
+            val line = msvcMatch.groupValues[2].toIntOrNull()
+            val column = msvcMatch.groupValues[3].toIntOrNull()
+            val mapped = if (file == "<string>" && line != null) {
+                source.sourceMap.sourceForGeneratedLine(line) ?: source.sourceMap.sourceForSourceLine(line)
+            } else null
+            return CompilerDiagnostic(
+                severity = severityOf(msvcMatch.groupValues[4]),
+                message = diagnosticMessage(msvcMatch.groupValues[5], record),
+                file = mapped?.file ?: file,
+                line = mapped?.startLine ?: line,
+                column = mapped?.startColumn ?: column,
+                raw = record
+            )
+        }
+        val bareMatch = bareDiagnosticLine.matchEntire(firstLine)
+        if (bareMatch != null) {
+            return CompilerDiagnostic(
+                severity = severityOf(bareMatch.groupValues[2]),
+                message = diagnosticMessage(bareMatch.groupValues[3], record),
+                file = null,
+                line = null,
+                column = null,
+                raw = record
+            )
+        }
         val match = diagnosticLine.matchEntire(firstLine)
         if (match == null) {
             return CompilerDiagnostic(DiagnosticSeverity.UNKNOWN, record, null, null, null, record)
@@ -434,26 +492,30 @@ object CompilerDiagnosticParser {
         val file = match.groupValues[1]
         val line = match.groupValues[2].toIntOrNull()
         val column = match.groupValues[3].toIntOrNull()
-        val severity = when (match.groupValues[4]) {
-            "warning" -> DiagnosticSeverity.WARNING
-            "error", "fatal error" -> DiagnosticSeverity.ERROR
-            "note" -> DiagnosticSeverity.NOTE
-            else -> DiagnosticSeverity.UNKNOWN
-        }
+        val severity = severityOf(match.groupValues[4])
         val mapped = if (file == "<string>" && line != null) {
             source.sourceMap.sourceForGeneratedLine(line) ?: source.sourceMap.sourceForSourceLine(line)
         } else null
         return CompilerDiagnostic(
             severity = severity,
-            message = buildString {
-                append(match.groupValues[5].trim())
-                val continuation = record.substringAfter('\n', "").trimEnd()
-                if (continuation.isNotEmpty()) append('\n').append(continuation)
-            },
+            message = diagnosticMessage(match.groupValues[5], record),
             file = mapped?.file ?: file,
             line = mapped?.startLine ?: line,
             column = mapped?.startColumn ?: column,
             raw = record
         )
+    }
+
+    private fun severityOf(value: String): DiagnosticSeverity = when (value) {
+        "warning" -> DiagnosticSeverity.WARNING
+        "error", "fatal error" -> DiagnosticSeverity.ERROR
+        "note" -> DiagnosticSeverity.NOTE
+        else -> DiagnosticSeverity.UNKNOWN
+    }
+
+    private fun diagnosticMessage(firstLineMessage: String, record: String): String = buildString {
+        append(firstLineMessage.trim())
+        val continuation = record.substringAfter('\n', "").trimEnd()
+        if (continuation.isNotEmpty()) append('\n').append(continuation)
     }
 }

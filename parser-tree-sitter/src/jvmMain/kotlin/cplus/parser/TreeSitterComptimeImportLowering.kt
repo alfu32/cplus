@@ -25,6 +25,7 @@ data class TreeSitterComptimeImportResult(
     val parserDiagnostics: List<ParserDiagnostic> = emptyList(),
     val loweringDiagnostics: List<CPlusLoweringDiagnostic> = emptyList(),
     val sourceOrder: List<SourceId> = emptyList(),
+    val compilerOptionOrder: List<SourceId> = emptyList(),
     val sourceImports: List<SourceImportEdge> = emptyList()
 )
 
@@ -58,6 +59,19 @@ class TreeSitterComptimeImportLowering(
                 sourceImports = session.reportedEdges.toList()
             )
         }
+        val compilerOptionOrder = try {
+            session.graph.dependencyOrderInInsertionOrder(listOf(rootId))
+        } catch (error: IllegalStateException) {
+            return TreeSitterComptimeImportResult(
+                null,
+                loweringDiagnostics = listOf(CPlusLoweringDiagnostic(
+                    "CPLUS_IMPORT_CYCLE",
+                    error.message ?: "comptime import cycle",
+                    rootFile.span(0, 0)
+                )),
+                sourceImports = session.reportedEdges.toList()
+            )
+        }
         val output = MappedTextBuilder()
         order.forEachIndexed { index, sourceId ->
             val module = session.moduleTexts[sourceId] ?: return@forEachIndexed
@@ -67,6 +81,7 @@ class TreeSitterComptimeImportLowering(
         return TreeSitterComptimeImportResult(
             output.build(),
             sourceOrder = order,
+            compilerOptionOrder = compilerOptionOrder,
             sourceImports = session.reportedEdges.toList()
         )
     }

@@ -21,6 +21,7 @@ import cplus.CPlusMethodCallLoweringPass
 import cplus.CPlusStructMethodLoweringPass
 import cplus.CPlusTranspiler
 import cplus.CPlusLegacyPassSelection
+import cplus.CPlusSyntaxException
 import cplus.CPlusParserShadowRunner
 import cplus.CPlusSyntaxNode
 import cplus.CPlusParseResult
@@ -45,6 +46,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
 
 class TreeSitterCPlusParserBackendTest {
     private val backend = TreeSitterCPlusParserBackend()
@@ -534,7 +536,8 @@ class TreeSitterCPlusParserBackendTest {
                 importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
             )
             if (!report.successful) {
-                failures += "$relative: ${report.harnessTokenDifference ?: report}"
+                failures += "$relative: missing-map=${report.sourceMapCoverageMissing}; " +
+                    (report.harnessTokenDifference ?: report.toString())
             }
         }
         assertTrue(
@@ -2958,6 +2961,29 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun importedModuleCompilerOptionsRetainLegacyDiscoveryOrder() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib")) }
+            ?: error("could not locate repository stdlib from ${Path.of("").toAbsolutePath()}")
+        val sourcePath = repository.resolve("stdlib/tests/http.cp").toRealPath()
+        val stdlibRoot = repository.resolve("stdlib").toAbsolutePath().normalize()
+        val source = sources.open(SourceId.named(sourcePath.toString()), Files.readString(sourcePath))
+
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compare(
+            source,
+            targetOs = "linux",
+            importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
+        )
+
+        assertTrue(report.treeSitter.successful, report.treeSitter.loweringDiagnostics.toString())
+        assertTrue(
+            report.compilerOptionsMatch,
+            "legacy=${report.legacy.compilerOptions}; tree-sitter=${report.treeSitter.compilerOptions}"
+        )
+        assertEquals(listOf("-D_POSIX_C_SOURCE=200112L", "-lpthread"), report.treeSitter.compilerOptions)
+    }
+
+    @Test
     fun differentialRunnerComparesLegacyAndAstFixtureDiscovery() {
         val text = """
             @test "alpha" { @assert(1 == 1); @assertEquals(2, 2); }
@@ -2976,6 +3002,8 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(report.harnessAssertionCountsMatch, report.toString())
         assertTrue(report.harnessTokensMatch, report.harnessTokenDifference.orEmpty())
         assertTrue(report.assertionSourceLinesMatch, report.toString())
+        assertTrue(report.compilerOptionsMatch, report.toString())
+        assertTrue(report.sourceMapCoverageMatch, report.toString())
         assertTrue(report.successful, report.toString())
     }
 
@@ -3381,6 +3409,65 @@ class TreeSitterCPlusParserBackendTest {
                 it.syntaxKind == "cplus_test_declaration" && it.span.startLine == 1
             },
             "test declaration was not retained as a mapped rollback boundary: ${result.unsupportedNodes}"
+        )
+    }
+
+    @Test
+    fun testExtractionSubstitutionIsolatedFromRuntimeLowerers() {
+        val text = """
+            #include <stdio.h>
+            int main(void) { return 0; }
+            @test "extraction only" {
+                int value = 41;
+                value += 1;
+                @assertEquals(42, value);
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("test-extraction-substitution.cp"), text)
+        val disabledRuntimePasses = CPlusLegacyPassSelection.KNOWN_PASSES
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compareTests(
+            source,
+            legacyPassSelection = CPlusLegacyPassSelection(disabledPasses = disabledRuntimePasses),
+            treeSitterPassSelection = TreeSitterPassSelection(disabledRuntimePasses = disabledRuntimePasses)
+        )
+
+        assertTrue(report.successful, report.toString() + "\n" + report.harnessTokenDifference.orEmpty())
+        assertEquals(emptyList<String>(), report.legacy.source.frontendPasses)
+        assertEquals(emptyList<String>(), report.treeSitter.runtimePasses)
+        assertEquals(listOf("extraction only"), report.legacy.testNames)
+        assertEquals(listOf("extraction only"), report.treeSitter.testFixtures.map { it.name })
+        assertEquals(listOf(1), report.legacy.fixtures.map { it.assertionCount })
+        assertEquals(listOf(1), report.treeSitter.testFixtures.map { it.assertions.size })
+        assertTrue(report.harnessTokensMatch, report.harnessTokenDifference.orEmpty())
+        assertTrue(report.assertionSourceLinesMatch, report.toString())
+
+        val legacyFailure = assertFailsWith<CPlusSyntaxException> {
+            CPlusTranspiler().transpileTests(
+                text,
+                source.id.value,
+                legacyPassSelection = CPlusLegacyPassSelection(
+                    disabledPasses = disabledRuntimePasses,
+                    extractTests = false
+                )
+            )
+        }
+        assertEquals(3, legacyFailure.sourceSpan?.startLine)
+
+        val astRollback = TreeSitterCPlusPrototypeTranspiler(
+            backend = backend,
+            sourceManager = sources,
+            passSelection = TreeSitterPassSelection(
+                disabledRuntimePasses = disabledRuntimePasses,
+                extractTests = false
+            )
+        ).transpile(source)
+        assertFalse(astRollback.successful)
+        assertNull(astRollback.transcodedSource)
+        assertTrue(
+            astRollback.unsupportedNodes.any {
+                it.syntaxKind == "cplus_test_declaration" && it.span.startLine == 3
+            },
+            "AST extraction rollback lost the fixture boundary: ${astRollback.unsupportedNodes}"
         )
     }
 
@@ -4365,6 +4452,35 @@ class TreeSitterCPlusParserBackendTest {
             "x86_64-w64-mingw32-gcc",
             transpiled.cSource?.text ?: error("MinGW ABI output is missing")
         )
+    }
+
+    @Test
+    fun compilesPortableDialectAttributesAndStandardHeadersWithEveryHostDriver() {
+        val text = """
+            #include <stddef.h>
+            #include <stdint.h>
+            typedef struct dialect_surface_t {
+                int value;
+                pub int __attribute__((noinline)) read(borrowed *self, size_t offset) {
+                    return self->value + (int)offset;
+                }
+            } dialect_surface_t;
+            int main(void) {
+                dialect_surface_t value = {40};
+                return value.read((size_t)2) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("portable-dialect-surface.cp"), text)
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.cSource?.text ?: error("portable dialect output is missing")
+        assertTrue("__attribute__((noinline))" in generated, generated)
+        assertTrue("dialect_surface__read" in generated, generated)
+        compileAndRunC(generated)
     }
 
     @Test
@@ -6333,6 +6449,38 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun testHarnessBodyParityCoversNestedControlFlowAssertions() {
+        val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
+            runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
+        } ?: return
+        val text = """
+            int main(void) { return 0; }
+            @test "nested control flow" {
+                int score = 0;
+                if (1) {
+                    score += 1;
+                    @assert(score == 1);
+                }
+                for (int index = 0; index < 2; index++) {
+                    score += 1;
+                }
+                @assertEquals(3, score);
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("nested-control-flow-test.cp"), text)
+        val report = TreeSitterCPlusDifferentialRunner(backend, sources).compareTests(source)
+
+        assertTrue(report.successful, report.toString() + "\n" + report.harnessTokenDifference.orEmpty())
+        assertEquals(listOf("nested control flow"), report.treeSitter.testFixtures.map { it.name })
+        assertEquals(listOf(2), report.treeSitter.testFixtures.map { it.assertions.size })
+        assertTrue(report.harnessTokensMatch, report.harnessTokenDifference.orEmpty())
+        val astHarness = report.astHarness ?: error("AST harness was not generated")
+        val run = compileAndCaptureC(compiler, astHarness.source.code)
+        assertEquals(0, run.first, "nested-control-flow AST harness failed: ${run.second}")
+        assertTrue("TEST SUMMARY: 1 selected, 0 failed" in run.second, run.second)
+    }
+
+    @Test
     fun astTestHarnessRunsDeferAfterFailedAssertion() {
         val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
@@ -6537,6 +6685,39 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertTrue(text.substring(diagnostic.span.startOffset, diagnostic.span.endOffset).contains("checked()"))
         assertTrue(result.testFixtures.isEmpty(), "a rejected fixture must not be materialized into a harness")
         assertNull(result.transcodedSource, "a rejected fixture must not emit C")
+    }
+
+    @Test
+    fun astTestFixtureRejectsEveryUnsupportedCheckedCallStatementShapeAtItsCallSpan() {
+        val bodies = listOf(
+            "int value = checked();",
+            "return checked();",
+            "checked() + 1;"
+        )
+
+        bodies.forEachIndexed { index, body ->
+            val text = """
+                typedef int error_t;
+                @throws() pub error_t checked(void) { return 0; }
+                int main(void) { return 0; }
+                @test "unsupported checked shape $index" {
+                    @try { $body }
+                    @catch (error_t error) { return; }
+                }
+            """.trimIndent()
+            val source = sources.open(SourceId.named("unsupported-checked-test-shape-$index.cp"), text)
+
+            val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+            assertFalse(result.successful, "unsupported fixture shape unexpectedly succeeded: $body")
+            val diagnostic = result.loweringDiagnostics.single()
+            assertEquals("CPLUS_TRY_CALL_CONTEXT", diagnostic.code)
+            assertEquals(source.id.value, diagnostic.span.file)
+            val callOffset = text.indexOf("checked()")
+            assertEquals(callOffset, diagnostic.span.startOffset, "wrong mapped span for: $body")
+            assertTrue(result.testFixtures.isEmpty(), "rejected fixture must not be extracted: $body")
+            assertNull(result.transcodedSource, "rejected fixture must not emit C: $body")
+        }
     }
 
     private fun compileAndCaptureC(
