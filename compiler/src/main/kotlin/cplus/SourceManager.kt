@@ -12,7 +12,15 @@ data class SourceId(val value: String) {
         fun fromPath(path: Path): SourceId {
             val absolute = path.toAbsolutePath().normalize()
             val canonical = try {
-                if (Files.exists(absolute)) absolute.toRealPath() else absolute
+                if (Files.exists(absolute)) {
+                    // File#getCanonicalPath also expands Windows 8.3 short names.
+                    // Without that normalization, an imported module can be keyed by
+                    // its long path while the root is keyed by RUNNER~1 (or vice
+                    // versa), producing duplicate graph vertices and unstable order.
+                    absolute.toFile().canonicalFile.toPath()
+                } else {
+                    absolute
+                }
             } catch (_: Exception) {
                 absolute
             }
