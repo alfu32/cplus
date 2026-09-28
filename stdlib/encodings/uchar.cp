@@ -9,11 +9,8 @@
 /* Some Apple SDKs do not ship <uchar.h> even though their libc exposes the
  * wide-character conversion primitives. Keep the public C-plus facade stable
  * by providing the small C11 conversion surface it uses. */
-#if defined(__has_include)
-#  if __has_include(<uchar.h>)
-#    include <uchar.h>
-#  else
-#    include <stdint.h>
+#if defined(__APPLE__)
+#include <stdint.h>
 typedef uint16_t char16_t;
 typedef uint32_t char32_t;
 
@@ -49,13 +46,12 @@ static size_t cplus_c16rtomb(char* output, char16_t value, mbstate_t* state) {
     if (output == NULL) return 1;
     return wcrtomb(output, (wchar_t)value, state);
 }
-#    define mbrtoc16 cplus_mbrtoc16
-#    define c16rtomb cplus_c16rtomb
-#    define mbrtoc32 cplus_mbrtoc32
-#    define c32rtomb cplus_c32rtomb
-#  endif
+#define mbrtoc16 cplus_mbrtoc16
+#define c16rtomb cplus_c16rtomb
+#define mbrtoc32 cplus_mbrtoc32
+#define c32rtomb cplus_c32rtomb
 #else
-#  include <uchar.h>
+#include <uchar.h>
 #endif
 
 comptime import "stdlib:/encodings/rune.cp";

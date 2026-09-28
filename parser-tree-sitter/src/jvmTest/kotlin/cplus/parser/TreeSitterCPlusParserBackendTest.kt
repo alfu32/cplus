@@ -438,7 +438,8 @@ class TreeSitterCPlusParserBackendTest {
                 val result = TreeSitterCPlusPrototypeTranspiler(
                     backend = backend,
                     sourceManager = sources,
-                    targetOs = "linux",
+                    targetOs = hostTargetOs(),
+                    targetArch = hostTargetArch(),
                     importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
                 ).transpile(source)
                 if (!result.successful) {
@@ -490,7 +491,8 @@ class TreeSitterCPlusParserBackendTest {
                 val result = TreeSitterCPlusPrototypeTranspiler(
                     backend = backend,
                     sourceManager = sources,
-                    targetOs = "linux",
+                    targetOs = hostTargetOs(),
+                    targetArch = hostTargetArch(),
                     importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
                 ).transpile(source)
                 if (!result.successful) {
@@ -607,7 +609,8 @@ class TreeSitterCPlusParserBackendTest {
                 val result = TreeSitterCPlusPrototypeTranspiler(
                     backend = backend,
                     sourceManager = sources,
-                    targetOs = "linux",
+                    targetOs = hostTargetOs(),
+                    targetArch = hostTargetArch(),
                     importPaths = CPlusImportPaths(standardLibraryRoots = listOf(stdlibRoot))
                 ).transpile(source)
                 if (!result.successful) {
@@ -7109,6 +7112,17 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         return configured ?: defaults
     }
 
+    private fun hostTargetOs(): String = when {
+        System.getProperty("os.name").startsWith("Windows", true) -> "windows"
+        System.getProperty("os.name").startsWith("Mac", true) -> "macos"
+        else -> "linux"
+    }
+
+    private fun hostTargetArch(): String = when (System.getProperty("os.arch").lowercase()) {
+        "aarch64", "arm64" -> "arm64"
+        else -> "x86_64"
+    }
+
     private fun compileAndCaptureC(
         compiler: String,
         code: String,
@@ -7133,6 +7147,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
 
             val run = ProcessBuilder(executable.toString()).redirectErrorStream(true).start()
             val runtimeOutput = run.inputStream.bufferedReader().use { it.readText() }
+                .replace("\r\n", "\n")
             return run.waitFor() to runtimeOutput
         } finally {
             Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
@@ -7202,6 +7217,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
                 assertEquals(0, compile.waitFor(), "$compiler rejected C11 compatibility fixture:\n$output\n$code")
                 val run = ProcessBuilder(executable.toString()).redirectErrorStream(true).start()
                 val runtimeOutput = run.inputStream.bufferedReader().use { it.readText() }
+                    .replace("\r\n", "\n")
                 assertEquals(0, run.waitFor(), "$compiler-built fixture failed:\n$runtimeOutput\n$code")
             } finally {
                 Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
@@ -9528,7 +9544,9 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         val linuxX64 = materialize("linux", "x86_64")
         assertTrue("reflected_size = 24" in linuxX64, linuxX64)
         assertTrue("reflected_alignment = 8" in linuxX64, linuxX64)
-        compileAndRunC(linuxX64)
+        if (hostTargetOs() == "linux" && hostTargetArch() == "x86_64") {
+            compileAndRunC(linuxX64)
+        }
 
         val linuxArm64 = materialize("linux", "arm64")
         assertTrue("reflected_size = 24" in linuxArm64, linuxArm64)
