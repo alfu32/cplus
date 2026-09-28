@@ -21,7 +21,7 @@ comptime import "stdlib:/encodings/wchar.cp";
 comptime import "stdlib:/encodings/wctype.cp";
 ```
 
-Import only what a translation unit uses. `rune_t` is `uint32_t`, independent of platform `wchar_t`, C locale state, and `<uchar.h>`; `rune_is_scalar` rejects surrogate code points and values above `U+10FFFF`. `utf8_t` is the stable, locale-independent byte API; it does not call the C multibyte conversion functions. The `encoding_t` facade converts between this stable type and the implementation's `char32_t` at its boundary.
+Import only what a translation unit uses. `rune_t` is a 32-bit scalar storage type, independent of platform `wchar_t`, C locale state, and `<uchar.h>`; it is unsigned on ordinary targets and uses Darwin's compatible signed 32-bit `rune_t` typedef where the macOS libc reserves that name. The valid Unicode scalar range and API behavior are identical on all supported targets. `rune_is_scalar` rejects surrogate code points and values above `U+10FFFF`. `utf8_t` is the stable, locale-independent byte API; it does not call the C multibyte conversion functions. The `encoding_t` facade converts between this stable type and the implementation's `char32_t` at its boundary.
 
 ## Stable UTF-8 API
 
@@ -56,7 +56,7 @@ rune_t rune;
 size_t result = encoding_t.decode32(&rune, bytes, byte_count, &state);
 ```
 
-`encoding_t.decode16`/`encode16` call `mbrtoc16`/`c16rtomb`; `decode32`/`encode32` call `mbrtoc32`/`c32rtomb`. Decode can return zero, the number of consumed bytes, `(size_t)-1` for an encoding error, `(size_t)-2` for incomplete input, or `(size_t)-3` when another code unit is pending from the prior input. Encode returns the byte count or `(size_t)-1`. The facade sets `errno = EINVAL` and returns `(size_t)-1` if its state pointer is null; other argument and conversion behavior is delegated to libc.
+`encoding_t.decode16`/`encode16` call `mbrtoc16`/`c16rtomb`; `decode32`/`encode32` call `mbrtoc32`/`c32rtomb`. Decode can return zero, the number of consumed bytes, `(size_t)-1` for an encoding error, `(size_t)-2` for incomplete input, or `(size_t)-3` when another code unit is pending from the prior input. Encode returns the byte count or `(size_t)-1`. The facade sets `errno = EINVAL` and returns `(size_t)-1` if its state pointer is null; other argument and conversion behavior is delegated to libc. On SDKs without `<uchar.h>`, the compatibility path delegates through `mbrtowc`/`wcrtomb`; it supports the host wide-character locale and reports non-BMP UTF-16 decoding as an encoding error rather than synthesizing a pending surrogate unit.
 
 The `encoding_t` functions are not a guarantee that each target uses UTF-8. ISO C's multibyte functions use the implementation's current `LC_CTYPE` conversion rules; runtimes can differ in supported locales and extensions. Use `utf8_t` where a stable UTF-8 byte protocol is required. Neither layer provides normalization, grapheme segmentation, or complete Unicode property data.
 
@@ -74,7 +74,7 @@ The `encoding_t` functions are not a guarantee that each target uses UTF-8. ISO 
 
 The mutable `string` in `stdlib/strings/string.cp` remains byte-oriented and NUL-terminated. It does not yet enforce UTF-8, expose rune iteration/counting as string methods, or perform encoding-aware slicing and mutation. Those belong to a later text layer built on shared byte storage.
 
-The Windows runtime includes the UCRT conversion symbols and the MinGW-w64 sysroot declares them, but TinyCC's own `win32/include/uchar.h` currently shadows that sysroot header and omits the declarations. A TinyCC header patch is in progress. The UTF-8 API above is independent of that issue; defer Windows validation of `encoding_t` until the patched TinyCC JAR is available.
+The Windows runtime includes the UCRT conversion symbols and the MinGW-w64 sysroot declares them, but TinyCC's own `win32/include/uchar.h` can shadow that sysroot header. The facade uses the standard header when available and has a narrow `wchar.h`-backed compatibility path for SDKs that omit `<uchar.h>`; the UTF-8 API above remains independent of locale-specific conversion behavior.
 
 Run the facade tests with:
 

@@ -103,11 +103,32 @@ val buildNativeParser = tasks.register<Exec>("buildNativeParser") {
     outputs.dir(nativeOutputDirectory)
 }
 
-val installHostParserLibrary = tasks.register<Copy>("installHostParserLibrary") {
+val installHostParserLibrary = tasks.register("installHostParserLibrary") {
     dependsOn(buildNativeParser)
-    from(nativeOutputDirectory)
-    into(generatedGrammarSrc.dir("jvmMain/resources/lib/$nativeHostOs/$nativeHostArch"))
-    include("libktreesitter-c.so", "libktreesitter-c.dylib", "ktreesitter-c.dll")
+    val destination = generatedGrammarSrc.dir("jvmMain/resources/lib/$nativeHostOs/$nativeHostArch").get().asFile
+    inputs.dir(nativeOutputDirectory)
+    inputs.dir(layout.buildDirectory.dir("native-parser-cmake"))
+    outputs.dir(destination)
+    doLast {
+        // Multi-config generators (notably Visual Studio on Windows) place
+        // the artefact below `Release/`, while single-config generators write
+        // it directly to nativeOutputDirectory. Copy the basename explicitly
+        // so the resource loader receives `lib/.../ktreesitter-c.dll`, not a
+        // configuration subdirectory. The previous Copy task matched only
+        // the output root and silently became NO-SOURCE on Windows.
+        val names = setOf("libktreesitter-c.so", "libktreesitter-c.dylib", "ktreesitter-c.dll")
+        val roots = listOf(
+            nativeOutputDirectory.get().asFile,
+            layout.buildDirectory.dir("native-parser-cmake").get().asFile
+        )
+        val library = roots.asSequence()
+            .filter(File::isDirectory)
+            .flatMap { it.walkTopDown().asSequence() }
+            .firstOrNull { it.isFile && it.name in names }
+            ?: error("Native parser build did not produce one of: ${names.joinToString()}")
+        destination.mkdirs()
+        library.copyTo(destination.resolve(library.name), overwrite = true)
+    }
 }
 
 val parserNativePayloadDirectory = layout.buildDirectory.dir("parser-native-payload")
@@ -241,7 +262,7 @@ val installHostKTreeSitterLibrary = tasks.register<Copy>("installHostKTreeSitter
     onlyIf { forceHostKTreeSitterBuild.get() || nativeHostOs == "windows" || nativeHostOs == "macos" }
     from(kTreeSitterOutput)
     into(generatedGrammarSrc.dir("jvmMain/resources/lib/$nativeHostOs/$nativeHostArch"))
-    include(nativeKTreeSitterLibrary)
+    include("**/$nativeKTreeSitterLibrary")
 }
 
 tasks.named<Copy>("jvmProcessResources") {
@@ -261,6 +282,28 @@ tasks.withType<Test>().configureEach {
 }
 
 val jvmTestTask = tasks.named<Test>("jvmTest") {
+    // Fail before the suite starts if native resources were built but not
+    // copied into the classpath layout consumed by the generated loader.
+    doFirst {
+        // Kotlin Multiplatform's JVM resource processing writes to
+        // `processedResources/jvm/main`, which is the directory placed on the
+        // test runtime classpath (rather than the conventional Java
+        // `resources/jvm/main` location).
+        val resourceRoot = layout.buildDirectory.dir("processedResources/jvm/main/lib/$nativeHostOs/$nativeHostArch").get().asFile
+        val parserLibrary = when (nativeHostOs) {
+            "windows" -> "ktreesitter-c.dll"
+            "macos" -> "libktreesitter-c.dylib"
+            else -> "libktreesitter-c.so"
+        }
+        require(resourceRoot.resolve(parserLibrary).isFile) {
+            "Tree-sitter parser JNI resource is missing: ${resourceRoot.resolve(parserLibrary)}"
+        }
+        if (nativeHostOs == "windows" || nativeHostOs == "macos") {
+            require(resourceRoot.resolve(nativeKTreeSitterLibrary).isFile) {
+                "KTreeSitter runtime JNI resource is missing: ${resourceRoot.resolve(nativeKTreeSitterLibrary)}"
+            }
+        }
+    }
     useJUnitPlatform {
         excludeTags("frontend-benchmark")
     }

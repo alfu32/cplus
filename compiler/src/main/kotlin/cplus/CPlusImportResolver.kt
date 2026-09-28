@@ -49,7 +49,21 @@ class CPlusImportResolver(private val importPaths: CPlusImportPaths = CPlusImpor
                 if (confined && !resolved.startsWith(normalizedRoot)) {
                     throw CPlusImportResolutionException("import path escapes its configured root: '$requestedPath'")
                 }
-                if (Files.isRegularFile(resolved)) return resolved
+                if (Files.isRegularFile(resolved)) {
+                    // Keep emitted absolute C includes and SourceId values
+                    // stable on platforms whose temporary directory is a
+                    // symlink (macOS commonly exposes /var through /private).
+                    // The old lexical path could differ from Path.toRealPath()
+                    // even though both referred to the same file.
+                    val canonical = try { resolved.toRealPath() } catch (_: Exception) { resolved }
+                    if (confined) {
+                        val canonicalRoot = try { normalizedRoot.toRealPath() } catch (_: Exception) { normalizedRoot }
+                        if (!canonical.startsWith(canonicalRoot)) {
+                            throw CPlusImportResolutionException("import path escapes its configured root: '$requestedPath'")
+                        }
+                    }
+                    return canonical
+                }
             }
         }
         throw CPlusImportResolutionException("imported file does not exist: '$requestedPath'")
