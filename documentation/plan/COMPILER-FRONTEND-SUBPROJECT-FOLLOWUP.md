@@ -58,7 +58,7 @@ These are the subproject-level tasks used for progress reporting. The detailed a
 | FE-SUB-03 | Finish bounded comptime reflection            | FE-SUB-01            |        DONE | Structured annotations and iterable rules are specified, materialized, bounded, and mapped; unsupported forms fail closed                                              |
 | FE-SUB-04 | Define typed scalar/ABI semantics             | FE-SUB-03            |        DONE | Integer widths, promotions, conversions, suffixes, and encoding boundaries have one target-aware contract and tests; external compiler confirmation is tracked separately |
 | FE-SUB-05 | Finish declarator and scope resolution        | FE-SUB-01            |        DONE | Complex declarators, calling conventions, lexical comptime scope, and mapped ambiguity/cycle diagnostics are covered                                                   |
-| FE-SUB-06 | Establish the supported compiler/ABI matrix   | FE-SUB-05            |        OPEN | Declared host/target combinations compile, link, run, or are explicitly unsupported with diagnostics                                                                   |
+| FE-SUB-06 | Establish the supported compiler/ABI matrix   | FE-SUB-05            |        DONE | Tagged CI run `36499127737` executes portable-dialect compile/run and mapped-diagnostic checks on Linux/macOS/Windows x86_64/arm64; cross-target ABI/link behavior remains an explicit separate boundary |
 | FE-SUB-07 | Build the finite differential corpus          | FE-SUB-03, FE-SUB-05 |        DONE | `frontend-v1.tsv` and `frontend-v1-contract.tsv` freeze 29 normative, 26 boundary, and 16 overlap cases; existing overlap fixtures compare output, options, runtime, maps, and diagnostics                                                                 |
 | FE-SUB-08 | Retire textual lowerers one at a time         | FE-SUB-07            |        OPEN | Each lowerer has an independent toggle, parity gate, rollback window, and removal decision                                                                             |
 
@@ -66,7 +66,7 @@ These are the subproject-level tasks used for progress reporting. The detailed a
 
 Work on one queue item at a time unless it is marked external. Update this queue after every completed acceptance unit.
 
-1. `P5-11`: collect the remaining six-host compiler/ABI evidence independently in CI.
+1. `P5-11`: separate cross-target compiler/ABI and platform-SDK evidence from the completed six-host host-compiler gate.
 2. `P6-11` / `CF-19` / `CF-20`: future textual-lowerer retirement decisions; keep the legacy path during phases 1–8.
 
 Do not add a new queue item for a spelling variant. Add it under the nearest acceptance unit unless it introduces a new semantic invariant, evidence class, or source-map rule.
@@ -231,7 +231,7 @@ The semantic model preserves the complete binding shape needed by all consuming 
 | SP52-02   | Define shipped host/target compiler and ABI combinations                   | EXTERNAL | `CPlusTarget.shippedTargetIds`, alias normalization tests, and six-host compiler/ABI execution report                                                               |
 | SP52-03   | Verify platform headers, attributes, calling conventions, and flags        |     DONE | Portable standard-header/dialect fixture, GNU attributes, Microsoft calling-convention spellings, nested callback qualifiers, and optional MinGW x86_64 compilation |
 | SP52-04   | Normalize compiler diagnostics while preserving original source maps       | EXTERNAL | CompilerDiagnosticParser tests, local cross-driver mapped diagnostics, and CI cross-host evidence                                                                   |
-| SP52-05   | Execute the matrix in CI and attach results to the Phase 5 gate            | EXTERNAL | Workflow artifacts                                                                                                                                                  |
+| SP52-05   | Execute the matrix in CI and attach results to the Phase 5 gate            |    DONE | Tagged CI run `36499127737`; each six-host parser job ran the named portable-dialect and mapped-diagnostic checks and uploaded host/resource/benchmark reports. Cross-target ABI/link evidence remains separate. |
 
 ### Definition of done
 
@@ -506,5 +506,6 @@ All supported receiver expressions have a resolved type and exact C lowering; or
 | 2026-09-29 | Validated the complete tagged frontend/distribution pipeline | Tagged run `36497458333` for `0.5.42` passed TinyCC retrieval, editor plugin packaging, all six Tree-sitter parser hosts, Gradle/CLI tests, both application distributions, six preserved parser-host reports, and GitHub release publication. This closes the repeated hosted CI/release gate without changing compiler behavior or removing the legacy frontend | Phase 1–8 local and hosted acceptance is green; legacy textual fallback and future external compiler/ABI coverage remain intentionally retained/open per the migration plan |
 | 2026-09-29 | Added representative frontend benchmarks to every parser host | The existing opt-in `:parser-tree-sitter:benchmarkFrontend` task now runs on all six CI host/architecture jobs and its standard-stream output is uploaded beside each host report. This advances the Phase 7 performance gate without promoting Tree-sitter or changing the legacy default | Tagged run `0.5.43` must verify benchmark completion and preserve the six benchmark logs in the host-report artifacts |
 | 2026-09-29 | Validated cross-host frontend benchmarks and release publication | Tagged run `36499127737` for `0.5.43` passed the benchmark-inclusive six-host parser matrix, editor packaging, CLI distributions, and GitHub release publication. The Phase 7 representative-source/incremental-tree evidence is now closed for the supported host matrix; benchmark measurements remain directional rather than a promotion budget | Tree-sitter promotion, terminal formatting replacement, legacy retention, and broader C/compiler parity remain separate open migration gates |
+| 2026-09-29 | Closed the six-host host-compiler matrix | Tagged run `36499127737` passed parser/resource, portable-dialect compile/run, mapped-diagnostic, and benchmark steps on Linux/macOS/Windows x86_64/arm64; reports were retained per host | FE-SUB-06 and SP52-05 are DONE for host coverage. Cross-target ABI/link and platform SDK evidence remains a separately bounded external concern |
 
 For each next task: record the source fixture, implementation commit/change, exact Gradle/CLI command, result, elapsed engineering time, and whether the parent acceptance condition changed. Then update both this log and the parent row in `COMPILER-FRONTEND-IMPLEMENTATION.md`.

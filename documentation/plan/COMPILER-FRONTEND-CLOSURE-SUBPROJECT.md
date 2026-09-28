@@ -31,7 +31,7 @@ Points are relative sizing units, not engineer-days. A task closes only with its
 | CF-07 | declarators | Finish complex pointer/array/function binding shapes | none | DONE | 4 | Identifier-outward recursive constructor model, method/function depth law, emitted C, host compile/run, optional MinGW checks |
 | CF-08 | declarators | Finish calling-convention and attribute target evidence | CF-07 | DONE | 4 | Explicit compiler-delegated ABI table, host GNU fixtures, MinGW x86_64 accepted-spelling fixture, and preservation-only boundary |
 | CF-09 | scope | Resolve comptime lexical scope, shadowing, generated names, and collisions | CF-01, CF-07 | DONE | 4 | Finite lexical-scope specification; arity overloads; parameter/loop shadowing; generated-pass visibility; mapped duplicate, ambiguity, cycle, and collision errors |
-| CF-10 | targets | Verify the six shipped host/architecture compiler matrix | CF-04, CF-07 | OPEN-EXTERNAL | 6 | Linux/macOS/Windows x86_64/arm64 compile, link, parser/resource logs |
+| CF-10 | targets | Verify the six shipped host/architecture compiler matrix | CF-04, CF-07 | DONE | 6 | Tagged CI run `36499127737` executes the parser/resource, portable-dialect compile/run, and mapped-diagnostic regressions on Linux/macOS/Windows x86_64/arm64; cross-target ABI/link behavior remains explicitly outside this host-matrix task |
 | CF-11 | corpus | Inventory normative examples and expected materializations | CF-02, CF-03, CF-04, CF-05 | DONE | 2 | `documentation/corpus/frontend-v1.tsv` plus `frontend-v1-contract.tsv` link all 29 normative cases to executable evidence and declare `materialize` as their result contract |
 | CF-12 | corpus | Add malformed, unsupported, limit, cycle, and map fixtures | CF-06, CF-09 | DONE | 4 | The 26 boundary rows link the existing mapped-diagnostic fixtures; the corpus gate verifies their specification markers, unique IDs, evidence methods, and `mapped-diagnostic` result contract |
 | CF-13 | corpus | Freeze the finite legacy-overlap corpus | CF-11, CF-12 | DONE | 4 | The 16 overlap rows and contract freeze the migration-only comparison set; README records that comparisons normalize token output while separately asserting options, maps, diagnostics, and runtime |
@@ -60,9 +60,10 @@ Total: **22 tasks / 86 points**. `CF-01` through `CF-18` are complete for their 
 | C6 — retirement | CF-19..CF-20 | Each textual lowerer has its own parity and rollback decision | none |
 | C7 — promotion | CF-21..CF-22 | Repository acceptance and promotion decision are recorded | none |
 
-The C4 finite corpus gate is complete locally. The next local batch is **C5**:
-inventory remaining scanner/textual entry points and make the AST backend selectable
-per pass, while external six-host evidence proceeds independently under `CF-10`.
+The C4 finite corpus gate and the six-host host-compiler gate are complete. The next
+local batch is **C6**: review the independent textual-lowerer retirement decisions;
+cross-target ABI/link evidence remains a separate unsupported/externally owned
+boundary and must not be inferred from host-matrix success.
 
 ## Definition of done
 
@@ -122,6 +123,7 @@ Each entry records the task ID, exact evidence, result, and next dependency. Imp
 | 2026-09-28 | CF-22 / Phase 7 | `./gradlew build --no-daemon --max-workers=1` passes after the compiler-facing metadata addition, including CLI distributions, compiler/parser checks, all tests, and 104/104 grammar parses | Local build/package acceptance remains green; cross-host and promotion evidence remain external |
 | 2026-09-28 | CF-07 / CF-09 | Reconciled the Phase-5 checklist with the existing bounded evidence: recursive pointer/array/function declarators, callable returns, calling-convention/pointer modifiers, lexical shadowing, generated-name visibility, arity binding, and mapped collision/cycle/unsupported-shape diagnostics are covered by the semantic and parser fixtures | The supported declarator and comptime-name/scope contract is complete; full C declarator/evaluator parity and six-host compiler evidence remain outside the bounded local gate |
 | 2026-09-28 | CF-17 / CF-19 / CF-20 | Reconciled the per-pass differential gate: the finite runtime set (throws, defer, struct methods, receiver calls, try/catch) compares normalized C, compiler options, source-map coverage, host compile/run behavior, and rollback/failure spans; test extraction and allocation validation have separate reports | Bounded pass parity is complete with legacy rollback retained; textual retirement remains intentionally separate from the phases-1–8 migration |
+| 2026-09-29 | CF-10 | Tagged CI run `36499127737` passed the parser/resource, portable-dialect compile/run, and mapped-diagnostic steps on all six shipped host/architecture combinations; each parser-host job records its report and benchmark artifact | CF-10 is DONE for host compiler/parser coverage. Cross-target ABI/link behavior and platform-specific external SDKs remain a separate boundary, not an unverified implication of this result |
 
 ## Update protocol
 
