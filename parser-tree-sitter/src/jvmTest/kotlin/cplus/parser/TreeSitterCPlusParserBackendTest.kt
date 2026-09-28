@@ -3130,7 +3130,7 @@ class TreeSitterCPlusParserBackendTest {
             "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
         )
         val code = result.transcodedSource?.code ?: error("AST frontend did not emit C")
-        val compilers = listOf("cc", "gcc", "clang", "tcc").distinct().filter { compiler ->
+        val compilers = cplusTestCompilers(listOf("cc", "gcc", "clang", "tcc")).distinct().filter { compiler ->
             runCatching {
                 ProcessBuilder(compiler, "--version").start().let { process ->
                     process.inputStream.use { it.readBytes() }
@@ -3994,7 +3994,7 @@ class TreeSitterCPlusParserBackendTest {
         val generated = result.transcodedSource ?: error("prototype did not create mapped compiler input")
         val expectedLine = text.lines().indexOfFirst { "missing_cplus_symbol" in it } + 1
         val expectedColumn = text.lines()[expectedLine - 1].indexOf("missing_cplus_symbol") + 1
-        val compilers = listOf("cc", "gcc", "clang", "tcc").distinct().filter { compiler ->
+        val compilers = cplusTestCompilers(listOf("cc", "gcc", "clang", "tcc")).distinct().filter { compiler ->
             runCatching { ProcessBuilder(compiler, "--version").start().waitFor() == 0 }.getOrDefault(false)
         }
         if (compilers.isEmpty()) return
@@ -7060,6 +7060,15 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         }
     }
 
+    private fun cplusTestCompilers(defaults: List<String>): List<String> {
+        val configured = System.getenv("CPLUS_TEST_COMPILER")
+            ?.split(',')
+            ?.map(String::trim)
+            ?.filter(String::isNotEmpty)
+            ?.takeIf { it.isNotEmpty() }
+        return configured ?: defaults
+    }
+
     private fun compileAndCaptureC(
         compiler: String,
         code: String,
@@ -7131,7 +7140,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         includeDirectories: List<Path> = emptyList(),
         compilerOptions: List<String> = emptyList()
     ) {
-        val compilers = listOf("cc", "gcc", "clang").distinct().filter { compiler ->
+        val compilers = cplusTestCompilers(listOf("cc", "gcc", "clang")).distinct().filter { compiler ->
             runCatching { ProcessBuilder(compiler, "--version").start().waitFor() == 0 }.getOrDefault(false)
         }
         if (compilers.isEmpty()) return
@@ -7202,7 +7211,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         compilerOptions: List<String>,
         context: String
     ) {
-        val compilers = listOf("cc", "gcc", "clang").distinct().filter { compiler ->
+        val compilers = cplusTestCompilers(listOf("cc", "gcc", "clang")).distinct().filter { compiler ->
             runCatching { ProcessBuilder(compiler, "--version").start().waitFor() == 0 }.getOrDefault(false)
         }
         if (compilers.isEmpty()) return
@@ -7220,7 +7229,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     private fun assertC11Syntax(code: String, label: String) {
-        val compilers = listOf("cc", "gcc", "clang").distinct().filter { compiler ->
+        val compilers = cplusTestCompilers(listOf("cc", "gcc", "clang")).distinct().filter { compiler ->
             runCatching { ProcessBuilder(compiler, "--version").start().waitFor() == 0 }.getOrDefault(false)
         }
         if (compilers.isEmpty()) return

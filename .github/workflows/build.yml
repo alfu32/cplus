@@ -12,8 +12,6 @@ permissions:
 jobs:
   parser-host-matrix:
     name: Test Tree-sitter parser (${{ matrix.host }})
-    needs:
-      - prepare-tinycc
 
     strategy:
       fail-fast: false
@@ -37,11 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: tinycc-cli-payloads
-          path: lib
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -57,6 +50,9 @@ jobs:
         shell: bash
         env:
           PARSER_HOST: ${{ matrix.host }}
+          CC: clang
+          CXX: clang++
+          CPLUS_TEST_COMPILER: clang
         run: |
           npm install --global tree-sitter-cli@0.25.10
           if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -72,6 +68,9 @@ jobs:
         shell: bash
         env:
           PARSER_HOST: ${{ matrix.host }}
+          CC: clang
+          CXX: clang++
+          CPLUS_TEST_COMPILER: clang
         run: |
           ./gradlew \
             :parser-tree-sitter:jvmTest \
@@ -114,7 +113,7 @@ jobs:
             echo "java=$(java -version 2>&1 | head -n 1)"
             echo "tree_sitter=$(tree-sitter --version 2>&1 | head -n 1)"
             echo "uname=$(uname -a 2>/dev/null || true)"
-            for compiler in cc gcc clang tcc; do
+            for compiler in clang; do
               if command -v "$compiler" >/dev/null 2>&1; then
                 echo "compiler.$compiler=$(command -v "$compiler")"
                 "$compiler" --version 2>&1 | head -n 1 | sed "s/^/compiler.$compiler.version=/"
@@ -199,6 +198,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes tcc
       - name: Run Gradle tests
+        env:
+          CC: clang
+          CXX: clang++
+          TCC: clang
+          CPLUS_TEST_COMPILER: clang
         run: ./gradlew test --no-daemon
       - name: Build cross-runtime application ZIP (no sysroots)
         run: ./gradlew "-Prelease=$RELEASE_VERSION" -Ptarget=cross bundleDist --no-daemon
