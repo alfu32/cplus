@@ -50,6 +50,21 @@ class TreeSitterCPlusParserBackendTest {
     private val backend = TreeSitterCPlusParserBackend()
     private val sources = SourceManager()
 
+    private fun deleteRecursively(path: Path) {
+        repeat(10) { attempt ->
+            try {
+                if (Files.exists(path)) {
+                    Files.walk(path).use { entries ->
+                        entries.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+                    }
+                }
+                return
+            } catch (_: Exception) {
+                if (attempt < 9) Thread.sleep(100)
+            }
+        }
+    }
+
     @Test
     fun everyNamedGrammarNodeHasAnExplicitStableAstCategory() {
         val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
@@ -3110,7 +3125,7 @@ class TreeSitterCPlusParserBackendTest {
                     "$compiler diagnostic did not point at source line 3:\n$diagnostics"
                 )
             } finally {
-                Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+                deleteRecursively(temporaryDirectory)
             }
         }
     }
@@ -6515,7 +6530,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
                 val run = ProcessBuilder(executable.toString()).start()
                 assertEquals(0, run.waitFor(), run.errorStream.bufferedReader().use { it.readText() })
             } finally {
-                Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+                deleteRecursively(temporaryDirectory)
             }
         }
     }
@@ -7099,7 +7114,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         } catch (_: Exception) {
             return false
         } finally {
-            Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            deleteRecursively(temporaryDirectory)
         }
     }
 
@@ -7150,7 +7165,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
                 .replace("\r\n", "\n")
             return run.waitFor() to runtimeOutput
         } finally {
-            Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            deleteRecursively(temporaryDirectory)
         }
     }
 
@@ -7220,7 +7235,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
                     .replace("\r\n", "\n")
                 assertEquals(0, run.waitFor(), "$compiler-built fixture failed:\n$runtimeOutput\n$code")
             } finally {
-                Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+                deleteRecursively(temporaryDirectory)
             }
         }
     }
@@ -7237,7 +7252,7 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             val output = compile.inputStream.bufferedReader().use { it.readText() }
             assertEquals(0, compile.waitFor(), "$compiler rejected cross-target C11 fixture:\n$output\n$code")
         } finally {
-            Files.walk(temporaryDirectory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            deleteRecursively(temporaryDirectory)
         }
     }
 
@@ -9438,7 +9453,11 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertTrue("reflected_long_size = 8" in generated.code, generated.code)
         assertTrue("reflected_pointer_size = 8" in generated.code, generated.code)
         assertTrue("reflected_alias_size = 8" in generated.code, generated.code)
-        compileAndRunC(generated.code)
+        // The fixture materializes the Linux x86_64 ABI. Windows uses LLP64
+        // (`long` is 32-bit), so execute it only on an LP64 host.
+        if (hostTargetOs() != "windows") {
+            compileAndRunC(generated.code)
+        }
 
         val windowsSource = sources.open(SourceId.named("ast-comptime-size-alignment-windows.cp"), text)
         val windows = TreeSitterCPlusPrototypeTranspiler(

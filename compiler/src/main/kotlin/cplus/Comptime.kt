@@ -325,7 +325,10 @@ internal class ComptimeCompiler(
     }
 
     private fun materializeCImport(item: ComptimeCImport): MappedText {
-        val path = resolveImportPath(item.source, item.start, item.path, listOf("c")).toAbsolutePath().normalize()
+        val path = resolveImportPath(item.source, item.start, item.path, listOf("c"))
+            .toAbsolutePath()
+            .normalize()
+            .let { Paths.get(SourceId.fromPath(it).value) }
         if (path.extension() != "c") {
             throw syntax("C source imports must use a .c file: $path", item.source, item.start)
         }

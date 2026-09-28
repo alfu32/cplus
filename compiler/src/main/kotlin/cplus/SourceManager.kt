@@ -3,11 +3,15 @@ package cplus
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 
 /** Stable key for a source unit. File IDs are normalized absolute paths; virtual IDs are caller-named. */
 data class SourceId(val value: String) {
     companion object {
-        fun named(value: String): SourceId = SourceId(value)
+        fun named(value: String): SourceId {
+            val path = runCatching { Paths.get(value) }.getOrNull()
+            return if (path != null && Files.exists(path)) fromPath(path) else SourceId(value)
+        }
 
         fun fromPath(path: Path): SourceId {
             val absolute = path.toAbsolutePath().normalize()
