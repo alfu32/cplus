@@ -204,6 +204,44 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun frontendCorpusManifestIsCompleteAndReferencesExecutableEvidence() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isRegularFile(it.resolve("documentation/corpus/frontend-v1.tsv")) }
+            ?: error("could not locate frontend corpus from ${Path.of("").toAbsolutePath()}")
+        val manifest = repository.resolve("documentation/corpus/frontend-v1.tsv")
+        val testSource = Files.readString(
+            repository.resolve("parser-tree-sitter/src/jvmTest/kotlin/cplus/parser/TreeSitterCPlusParserBackendTest.kt")
+        )
+        val rows = Files.readAllLines(manifest)
+            .filter { it.isNotBlank() && !it.startsWith("#") }
+            .mapIndexed { index, line ->
+                val fields = line.split('\t')
+                assertEquals(5, fields.size, "manifest line ${index + 1} must have five tab-separated fields: $line")
+                fields
+            }
+
+        assertEquals(68, rows.size, "frontend-v1.tsv case count changed; update the frozen count intentionally")
+        assertEquals(rows.size, rows.map { it[0] }.toSet().size, "frontend corpus IDs must be unique")
+        assertEquals(
+            mapOf("normative" to 29, "boundary" to 25, "overlap" to 14),
+            rows.groupingBy { it[1] }.eachCount(),
+            "frontend corpus categories changed; update the frozen counts intentionally"
+        )
+        val expectedPrefixes = mapOf("normative" to "N", "boundary" to "B", "overlap" to "O")
+        rows.forEach { (id, category, specification, marker, evidence) ->
+            assertTrue(id.matches(Regex("[NBO][0-9]{3}")), "invalid corpus ID '$id'")
+            assertTrue(id.startsWith(expectedPrefixes.getValue(category)), "$id has the wrong category prefix")
+            val specPath = repository.resolve(specification)
+            assertTrue(Files.isRegularFile(specPath), "$id references missing specification $specification")
+            assertTrue(marker in Files.readString(specPath), "$id marker '$marker' is absent from $specification")
+            assertTrue(
+                Regex("""\bfun\s+${Regex.escape(evidence)}\s*\(""").containsMatchIn(testSource),
+                "$id references missing executable evidence method '$evidence'"
+            )
+        }
+    }
+
+    @Test
     fun prototypeTranscodesMemoryAndFileModulesToHostC11() {
         val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
             .firstOrNull { Files.isDirectory(it.resolve("stdlib")) }
@@ -3363,8 +3401,14 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
         assertEquals(listOf("select"), semantic.resolvedCalls.map { it.methodName })
         val method = semantic.symbols.single { it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "select" }
-        assertEquals(2, method.declaratorLayers.count { it == CPlusDeclaratorLayer.FUNCTION })
-        assertEquals(1, method.declaratorLayers.count { it == CPlusDeclaratorLayer.POINTER })
+        assertEquals(
+            listOf(
+                CPlusDeclaratorLayer.FUNCTION,
+                CPlusDeclaratorLayer.POINTER,
+                CPlusDeclaratorLayer.FUNCTION
+            ),
+            method.declaratorLayers
+        )
 
         val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
         assertTrue(transpiled.successful, "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}")
@@ -3524,6 +3568,53 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun compilesDocumentedMingwX64CallingConventionsWhenTheTargetCompilerIsAvailable() {
+        val text = """
+            #include <windows.h>
+            typedef struct windows_supported_abi_t {
+                pub int __cdecl cdecl_method(borrowed *self) { return 1; }
+                pub int __stdcall stdcall_method(borrowed *self) { return 2; }
+                pub int __fastcall fastcall_method(borrowed *self) { return 3; }
+                pub int __thiscall thiscall_method(borrowed *self) { return 4; }
+                pub int WINAPI winapi_method(borrowed *self) { return 5; }
+                pub __declspec(noinline) int noinline_method(borrowed *self) { return 6; }
+            } windows_supported_abi_t;
+        """.trimIndent()
+        val source = sources.open(SourceId.named("mingw-x64-supported-abi.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        val methods = semantic.symbols
+            .filter { it.kind == CPlusSymbolKind.INSTANCE_METHOD }
+            .associateBy { it.name }
+        mapOf(
+            "cdecl_method" to "__cdecl",
+            "stdcall_method" to "__stdcall",
+            "fastcall_method" to "__fastcall",
+            "thiscall_method" to "__thiscall",
+            "winapi_method" to "WINAPI"
+        ).forEach { (name, spelling) ->
+            assertEquals(listOf(spelling), methods.getValue(name).declaratorQualifiers.map { it.spelling })
+        }
+        assertEquals(
+            listOf("__declspec(noinline)"),
+            methods.getValue("noinline_method").declaratorQualifiers.map { it.spelling }
+        )
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(
+            transpiled.successful,
+            "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}"
+        )
+        compileCOnlyIfAvailable(
+            "x86_64-w64-mingw32-gcc",
+            transpiled.cSource?.text ?: error("MinGW ABI output is missing")
+        )
+    }
+
+    @Test
     fun retainsMicrosoftCallingConventionOnNestedCallbackParameters() {
         val text = """
             typedef struct callback_abi_t {
@@ -3610,10 +3701,15 @@ class TreeSitterCPlusParserBackendTest {
                     static int value = 11;
                     return &value;
                 }
+                pub int **read_indirect(borrowed *self) {
+                    static int value = 13;
+                    static int *pointer = &value;
+                    return &pointer;
+                }
             } pointer_return_t;
             int main(void) {
                 pointer_return_t value;
-                return *value.read() == 11 ? 0 : 1;
+                return *value.read() == 11 && **value.read_indirect() == 13 ? 0 : 1;
             }
         """.trimIndent()
         val source = sources.open(SourceId.named("pointer-return-method.cp"), text)
@@ -3626,8 +3722,19 @@ class TreeSitterCPlusParserBackendTest {
             it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "read"
         }
         assertEquals(
-            listOf(CPlusDeclaratorLayer.POINTER, CPlusDeclaratorLayer.FUNCTION),
+            listOf(CPlusDeclaratorLayer.FUNCTION, CPlusDeclaratorLayer.POINTER),
             method.declaratorLayers
+        )
+        val indirect = semantic.symbols.single {
+            it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "read_indirect"
+        }
+        assertEquals(
+            listOf(
+                CPlusDeclaratorLayer.FUNCTION,
+                CPlusDeclaratorLayer.POINTER,
+                CPlusDeclaratorLayer.POINTER
+            ),
+            indirect.declaratorLayers
         )
 
         val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
@@ -3662,9 +3769,9 @@ class TreeSitterCPlusParserBackendTest {
         }
         assertEquals(
             listOf(
-                CPlusDeclaratorLayer.ARRAY,
+                CPlusDeclaratorLayer.FUNCTION,
                 CPlusDeclaratorLayer.POINTER,
-                CPlusDeclaratorLayer.FUNCTION
+                CPlusDeclaratorLayer.ARRAY
             ),
             method.declaratorLayers
         )
@@ -3798,10 +3905,10 @@ class TreeSitterCPlusParserBackendTest {
         }
         assertEquals(
             listOf(
-                CPlusDeclaratorLayer.ARRAY,
-                CPlusDeclaratorLayer.ARRAY,
+                CPlusDeclaratorLayer.FUNCTION,
                 CPlusDeclaratorLayer.POINTER,
-                CPlusDeclaratorLayer.FUNCTION
+                CPlusDeclaratorLayer.ARRAY,
+                CPlusDeclaratorLayer.ARRAY
             ),
             method.declaratorLayers
         )
@@ -3815,6 +3922,50 @@ class TreeSitterCPlusParserBackendTest {
         assertTrue("matrix_return__grid" in generated, generated)
         compileAndRunC(generated)
         compileCOnlyIfAvailable("x86_64-w64-mingw32-gcc", generated)
+    }
+
+    @Test
+    fun composesDeclaratorLayersRecursivelyAndEquallyForMethodsAndFunctions() {
+        val methodDeclarations = (1..8).joinToString("\n") { depth ->
+            val dimensions = "[2]".repeat(depth)
+            "pub int (*grid_${depth}(borrowed *self))$dimensions;"
+        }
+        val functionDeclarations = (1..8).joinToString("\n") { depth ->
+            val dimensions = "[2]".repeat(depth)
+            "int (*plain_grid_${depth}(void))$dimensions { return 0; }"
+        }
+        val text = """
+            typedef struct recursive_declarator_t {
+                $methodDeclarations
+            } recursive_declarator_t;
+            $functionDeclarations
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("recursive-declarator-algebra.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+
+        assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
+        (1..8).forEach { depth ->
+            val method = semantic.symbols.single {
+                it.kind == CPlusSymbolKind.INSTANCE_METHOD && it.name == "grid_$depth"
+            }
+            val function = semantic.symbols.single {
+                it.kind == CPlusSymbolKind.FUNCTION && it.name == "plain_grid_$depth"
+            }
+            val expected = listOf(CPlusDeclaratorLayer.FUNCTION, CPlusDeclaratorLayer.POINTER) +
+                List(depth) { CPlusDeclaratorLayer.ARRAY }
+            assertEquals(expected, method.declaratorLayers, "method depth $depth")
+            assertEquals(expected, function.declaratorLayers, "function depth $depth")
+        }
+
+        val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+        assertTrue(
+            transpiled.successful,
+            "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}"
+        )
+        compileAndRunC(transpiled.cSource?.text ?: error("recursive declarator output is missing"))
     }
 
     @Test
@@ -5896,6 +6047,58 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         } ?: return
         val run = compileAndCaptureC(compiler, generated.code, generated.compilerOptions)
         assertEquals(0, run.first, run.second)
+    }
+
+    @Test
+    fun resolvesScalarComptimeOverloadsByArityAndLetsParametersShadowModuleValues() {
+        val text = """
+            comptime int @value = 100;
+            comptime int @select(int value) { return value + 1; }
+            comptime int @select(int value, int increment) { return value + increment; }
+            int selected_one = comptime select(2);
+            int selected_two = comptime select(40, 2);
+            int module_value = comptime value;
+            int main(void) {
+                return selected_one == 3 && selected_two == 42 && module_value == 100 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("scalar-comptime-overload-scope.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("scalar overloads should materialize")
+        assertTrue("int selected_one = 3" in generated.code, generated.code)
+        assertTrue("int selected_two = 42" in generated.code, generated.code)
+        assertTrue("int module_value = 100" in generated.code, generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
+    fun diagnosesDuplicateComptimeParameterNamesAtTheSecondDeclaration() {
+        val text = """
+            comptime function @make(type T, type T) { return T; }
+            comptime make(int, int);
+        """.trimIndent()
+        val snapshot = sources.open(SourceId.named("comptime-duplicate-parameter.cp"), text)
+        val parsed = backend.parse(snapshot)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val resolution = CPlusComptimeResolver().resolve(
+            CPlusComptimeIndexer().index(CPlusAstAdapter().adapt(parsed))
+        )
+
+        val diagnostic = resolution.diagnostics.single {
+            it.code == "CPLUS_COMPTIME_DUPLICATE_PARAMETER"
+        }
+        val first = text.indexOf("type T")
+        val second = text.indexOf("type T", first + 1)
+        assertEquals(second, diagnostic.span.startOffset)
+        assertEquals(first, diagnostic.relatedSpan?.startOffset)
+        assertTrue(resolution.bindings.isNotEmpty(), "binding remains observable beside the fail-closed diagnostic")
     }
 
     @Test
@@ -8426,6 +8629,38 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
     }
 
     @Test
+    fun nestedReflectedFieldBindingsShadowAndRestoreTheOuterBinding() {
+        val text = """
+            typedef struct outer_t { int outer_name; } outer_t;
+            typedef struct inner_t { int inner_name; } inner_t;
+            comptime code @emit_name(string @scope, string @name) {
+                return @code { _Static_assert(sizeof(@name) > 0, @scope); };
+            }
+            comptime {
+                @for field in outer_t.fields {
+                    @for field in inner_t.fields {
+                        comptime emit_name("inner", field.name);
+                    }
+                    comptime emit_name("outer", field.name);
+                }
+            }
+            int main(void) { return 0; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-comptime-nested-field-shadow.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertTrue(
+            result.successful,
+            "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}"
+        )
+        val generated = result.transcodedSource ?: error("shadowed reflected bindings should materialize")
+        assertTrue(Regex("""sizeof\s*\(\s*"inner_name"\s*\)\s*>\s*0\s*,\s*"inner"""").containsMatchIn(generated.code), generated.code)
+        assertTrue(Regex("""sizeof\s*\(\s*"outer_name"\s*\)\s*>\s*0\s*,\s*"outer"""").containsMatchIn(generated.code), generated.code)
+        compileAndRunC(generated.code)
+    }
+
+    @Test
     fun prototypeRejectsUnsupportedNestedFieldLoopIterableAtItsSourceSpan() {
         val text = """
             typedef struct ownership_t { borrowed char* input; } ownership_t;
@@ -8939,6 +9174,33 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
             assertEquals("CPLUS_COMPTIME_ENTITY_COLLISION", diagnostic.code)
             assertEquals(text.indexOf(invocationText), diagnostic.span.startOffset)
         }
+    }
+
+    @Test
+    fun generatedComptimeDeclarationsEnterTheModuleScopeOnTheNextPass() {
+        val text = """
+            int generated_value;
+            comptime code @outer() {
+                return @code {
+                    comptime function @inner() {
+                        return int generated_value(void) { return 42; }
+                    }
+                    comptime inner();
+                };
+            }
+            comptime outer();
+        """.trimIndent()
+        val source = sources.open(SourceId.named("generated-comptime-module-collision.cp"), text)
+
+        val result = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
+
+        assertFalse(result.successful, "generated module declarations must share the module namespace")
+        val diagnostic = result.loweringDiagnostics.single {
+            it.code == "CPLUS_COMPTIME_ENTITY_COLLISION"
+        }
+        assertEquals(source.id.value, diagnostic.span.file)
+        assertEquals(text.indexOf("comptime inner()"), diagnostic.span.startOffset)
+        assertTrue(result.transcodedSource == null, "a generated-name collision must fail before C emission")
     }
 
     @Test

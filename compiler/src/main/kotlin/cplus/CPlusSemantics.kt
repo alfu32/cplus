@@ -2,7 +2,13 @@ package cplus
 
 enum class CPlusSymbolKind { STRUCT, TYPE_ALIAS, FIELD, INSTANCE_METHOD, STATIC_METHOD, FUNCTION }
 
-/** Ordered C declarator binding layers, from the declared base outward. */
+/**
+ * Ordered C declarator binding layers, from the declared identifier outward.
+ *
+ * The finite constructors compose recursively: `int (*value[2])(int)` is
+ * `[ARRAY, POINTER, FUNCTION]`, while `int *(*value)(int)` is
+ * `[POINTER, FUNCTION, POINTER]`.
+ */
 enum class CPlusDeclaratorLayer { POINTER, ARRAY, FUNCTION }
 
 enum class CPlusThrowsConvention { ERROR_RETURN, ERROR_OUT_PARAMETER }
@@ -164,18 +170,7 @@ class CPlusSemanticAnalyzer {
             val declarator = node.children.firstOrNull { it.fieldName == "declarator" } ?: return null
             val layers = declarator.declaratorLayers()
             if (layers.firstOrNull() != CPlusDeclaratorLayer.FUNCTION) return null
-            val nameStart = declarator.cplusNamedFunctionDeclarator()
-                ?.children?.firstOrNull { it.syntaxKind == "identifier" }
-                ?.span?.startOffset
-                ?: return null
-            val sourcePointerCount = ast.source.text
-                .substring(typeNode.span.endOffset, nameStart)
-                .count { it == '*' }
-            val returnLayers = layers.drop(1).toMutableList()
-            repeat((sourcePointerCount - returnLayers.count { it == CPlusDeclaratorLayer.POINTER }).coerceAtLeast(0)) {
-                returnLayers.add(0, CPlusDeclaratorLayer.POINTER)
-            }
-            return CallableReturn(baseType, returnLayers)
+            return CallableReturn(baseType, layers.drop(1))
         }
 
         runtimeNodes.asSequence()
@@ -355,7 +350,7 @@ class CPlusSemanticAnalyzer {
                                     throwsAnnotation?.toThrowsMetadata(throwsParameterName),
                                     declaratorLayers = methodNode.children
                                         .firstOrNull { it.fieldName == "declarator" }
-                                        ?.cplusMethodDeclaratorLayers(ast.source.text).orEmpty(),
+                                        ?.declaratorLayers().orEmpty(),
                                     declaratorQualifiers = methodNode.declarationQualifiers(ast.source.text)
                                 )
                                 symbols += symbol
@@ -952,8 +947,21 @@ class CPlusSemanticAnalyzer {
         sequenceOf(this) + descendants()
 
 private fun CPlusAstNode.declaratorLayers(): List<CPlusDeclaratorLayer> {
+        val root = this
         val layers = mutableListOf<CPlusDeclaratorLayer>()
         var current = this
+        fun result(): List<CPlusDeclaratorLayer> {
+            val identifierOutward = layers.asReversed()
+            if (root.syntaxKind != "cplus_method_declarator") return identifierOutward
+
+            // The compact direct-return branch stores `*` as structural
+            // children of the C-plus wrapper rather than manufacturing a
+            // pointer_declarator. Those stars are outside the named function
+            // layer, so they follow FUNCTION in identifier-outward order.
+            val directReturnPointers = root.children.count { it.syntaxKind == "*" }
+            return identifierOutward +
+                List(directReturnPointers) { CPlusDeclaratorLayer.POINTER }
+        }
         while (true) {
             when (current.syntaxKind) {
                 "pointer_declarator" -> layers += CPlusDeclaratorLayer.POINTER
@@ -964,9 +972,9 @@ private fun CPlusAstNode.declaratorLayers(): List<CPlusDeclaratorLayer> {
                 "abstract_function_declarator" -> layers += CPlusDeclaratorLayer.FUNCTION
             }
             if (current.syntaxKind in setOf("identifier", "field_identifier", "type_identifier")) {
-                return layers.asReversed()
+                return result()
             }
-            current = current.nextDeclaratorChild() ?: return layers.asReversed()
+            current = current.nextDeclaratorChild() ?: return result()
         }
     }
 
@@ -985,44 +993,6 @@ private fun CPlusAstNode.declarationBindingRoot(): CPlusAstNode? {
         child.syntaxKind in DECLARATOR_KINDS && child.span.startOffset < child.span.endOffset
     }
     return roots.firstOrNull { it.fieldName == "declarator" } ?: roots.firstOrNull()
-}
-
-/**
- * Recover pointer layers from the compact C-plus method declarator branch.
- *
- * The grammar intentionally keeps a direct pointer-return method such as
- * `int *read(...)` in `cplus_method_declarator` rather than creating a
- * `pointer_declarator` node.  The return-type resolver already accounts for
- * those source-level stars; symbols must retain the same binding shape for
- * downstream receiver/declarator consumers.
- */
-private fun CPlusAstNode.cplusMethodDeclaratorLayers(source: String): List<CPlusDeclaratorLayer> {
-    val layers = declaratorLayers()
-    if (syntaxKind != "cplus_method_declarator") return layers
-    val function = cplusNamedFunctionDeclarator() ?: return layers
-    // When a method returns a pointer to an array, the extension wrapper is
-    // rooted at the outer array declarator.  Normalize that traversal back to
-    // the public binding order (base -> array -> pointer -> function) before
-    // applying the compact direct-pointer recovery below.
-    val normalizedLayers = if (
-        layers.firstOrNull() == CPlusDeclaratorLayer.FUNCTION &&
-        layers.lastOrNull() == CPlusDeclaratorLayer.ARRAY
-    ) {
-        layers.asReversed()
-    } else {
-        layers
-    }
-    if (normalizedLayers != layers) return normalizedLayers
-    val hasExplicitPointerNodeBeforeName = descendantsAndSelf().any {
-        it.syntaxKind == "pointer_declarator" && it.span.endOffset <= function.span.startOffset
-    }
-    if (hasExplicitPointerNodeBeforeName) return layers
-    val prefix = source.substring(span.startOffset, function.span.startOffset)
-    val pointerCount = prefix.count { it == '*' }
-    val existingPointerCount = layers.count { it == CPlusDeclaratorLayer.POINTER }
-    val missingPointerCount = (pointerCount - existingPointerCount).coerceAtLeast(0)
-    if (missingPointerCount == 0) return layers
-    return List(missingPointerCount) { CPlusDeclaratorLayer.POINTER } + layers
 }
 
 private fun CPlusAstNode.declaratorPrefixPointerLayers(root: CPlusAstNode): List<CPlusDeclaratorLayer> {

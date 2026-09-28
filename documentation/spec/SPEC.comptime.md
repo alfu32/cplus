@@ -90,6 +90,31 @@ int count = comptime item_count;
 
 Comptime imports and generator declarations are declared at file scope. Comptime invocations may also appear in a top-level `comptime { ... }` expansion block. The experimental Tree-sitter frontend additionally accepts scalar value declarations there; this prototype treats the block as a translation-unit expansion group, not a runtime C block, so its comptime names enter the translation-unit comptime environment and runtime declarations returned by invocations are inserted at the invocation position. This block-scalar extension is not yet supported by the production legacy evaluator. A comptime declaration or invocation inside an ordinary runtime function is not a supported local binding or expansion site and is diagnosed at its original span (`CPLUS_COMPTIME_VALUE_SCOPE`, `CPLUS_COMPTIME_FLAGS_SCOPE`, or `CPLUS_COMPTIME_INVOCATION_SCOPE`, as applicable). A runtime-scope invocation must not bind to a module generator, because materializing it there would insert a declaration into a C function body. A comptime function name is declared with `@`; an invocation introduced by `comptime` uses the plain symbol name. In ordinary C-plus expressions, `@name` remains an explicit comptime reference, while `comptime expression` evaluates a scalar expression. Therefore `int answer = answer;` is runtime C-plus, `comptime int answer = 21;` declares a comptime-only value, and `int runtime_answer = comptime answer;` materializes it in runtime source. The marker applies through the surrounding C expression delimiter (such as `;`, `,`, `)`, or `]`).
 
+The compile-time scope model is finite and lexical:
+
+- Active imported and root declarations form one module environment in dependency
+  order. Callable generators overload by `(name, arity)` only; parameter types do
+  not form an overload key. A duplicate signature is an error.
+- Scalar values occupy the scalar-value namespace and must have unique names.
+  Calls and values remain syntactically distinct (`name(...)` versus `name`).
+- Generator parameters form one lexical function scope, must have unique names,
+  may shadow module scalar values, and disappear after the return expression/body.
+- An `@for` binding exists only in its loop body. A nested loop may shadow the same
+  name; leaving it restores the outer binding.
+- A top-level `comptime { ... }` is an expansion group, not a nested symbol scope.
+- Materialized declarations are reparsed and enter the same module environment on
+  the following pass. They therefore participate in duplicate, ambiguity, cycle,
+  and generated-runtime-name checks exactly like source declarations.
+- Runtime function/struct bodies are not comptime declaration scopes in the current
+  language version; active comptime constructs there fail before binding.
+
+Duplicate parameters report `CPLUS_COMPTIME_DUPLICATE_PARAMETER` at the repeated
+parameter with the first declaration as a related span. Duplicate/ambiguous callable
+signatures, unresolved names, wrong arity, scalar dependency cycles, import cycles,
+and runtime entity/tag collisions likewise fail deterministically with mapped
+diagnostics. Raw C declarations emitted by a general `@code` fragment are ultimately
+subject to the selected C compiler's ordinary and tag namespace rules.
+
 For this scope rule, the Tree-sitter prototype reports `CPLUS_COMPTIME_DECLARATION_SCOPE` for
 runtime-scope generator declarations, `CPLUS_COMPTIME_BLOCK_SCOPE` for `comptime { ... }`, and
 `CPLUS_COMPTIME_CONDITIONAL_SCOPE` for `@if`/`@else` expansions. These diagnostics are emitted

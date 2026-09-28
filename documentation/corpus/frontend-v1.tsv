@@ -1,0 +1,70 @@
+# cplus.frontend.corpus.v1
+# id	category	specification	section-marker	evidence-test
+N001	normative	documentation/spec/SPEC.language.md	## Annotations	retainsQualifiedMethodParameterDeclaratorsAndNestedCallbacks
+N002	normative	documentation/spec/SPEC.language.md	## Struct Methods	indexesMethodsAndResolvesExplicitInstanceAndStaticReceivers
+N003	normative	documentation/spec/SPEC.grammar.md	### Declarator semantic model	composesDeclaratorLayersRecursivelyAndEquallyForMethodsAndFunctions
+N004	normative	documentation/spec/SPEC.language.md	## `defer`	lowersDeferredStatementsInReverseOrderAndKeepsMovedSourceOrigins
+N005	normative	documentation/spec/SPEC.errors.md	## Try and catch	prototypeLowersCheckedCallsAndNestedTryCatchWithRuntimeErrorPropagation
+N006	normative	documentation/spec/SPEC.language.md	## Tests	prototypeExtractsNamedTestsWithoutEmittingThemIntoProgramC
+N007	normative	documentation/spec/SPEC.language.md	## Source Mapping	externalCompilersReportGeneratedMethodErrorsAtTheOriginalCPlusLine
+N008	normative	documentation/spec/SPEC.comptime.md	### Repeated expansion passes	prototypeMaterializesNestedCodeFragmentsAcrossThreeMappedPasses
+N009	normative	documentation/spec/SPEC.comptime.md	### Comptime values and functions	prototypeMaterializesScalarComptimeValuesFromAstAndPreservesOrigins
+N010	normative	documentation/spec/SPEC.comptime.md	### Comptime values and functions	prototypeEvaluatesPureScalarComptimeFunctionsFromAst
+N011	normative	documentation/spec/SPEC.comptime.md	### Comptime blocks	prototypeResolvesScalarDeclarationsInsideTopLevelComptimeBlocks
+N012	normative	documentation/spec/SPEC.comptime.md	### Imports	prototypeExpandsComptimeModulesOnceInDependencyOrderWithMappedOrigins
+N013	normative	documentation/spec/SPEC.comptime.md	### Compiler flags	prototypeCollectsUniqueCompilerFlagsFromTheSelectedTargetBranch
+N014	normative	documentation/spec/SPEC.comptime.md	### Runtime test declarations	prototypeMaterializesScalarComptimeAndExtractsTestFixtures
+N015	normative	documentation/spec/SPEC.comptime.md	### Types, generics, and reflection	prototypeMaterializesGenericStructTypeAndSpecializationAlias
+N016	normative	documentation/spec/SPEC.comptime.md	### Types, generics, and reflection	prototypeIteratesReflectedStructFieldsAndMaterializesTypedCodeEntities
+N017	normative	documentation/spec/SPEC.comptime.md	### Types, generics, and reflection	prototypeIteratesReflectedFieldAnnotationsAsMappedNestedComptimeLoop
+N018	normative	documentation/spec/SPEC.comptime.md	### Types, generics, and reflection	prototypeReflectsAggregateLayoutAcrossSupportedTargetAbis
+N019	normative	documentation/spec/SPEC.comptime.md	### Entity-returning comptime functions	prototypeMaterializesNonGenericFunctionAndVariableEntitiesWithMappedOrigins
+N020	normative	documentation/spec/SPEC.comptime.md	### Entity-returning comptime functions	prototypeMaterializesMixedGenericTypeAndScalarParameters
+N021	normative	documentation/spec/SPEC.comptime.md	### Generated declarations across passes	generatedComptimeDeclarationsEnterTheModuleScopeOnTheNextPass
+N022	normative	documentation/spec/SPEC.comptime.md	The compile-time scope model is finite and lexical	resolvesScalarComptimeOverloadsByArityAndLetsParametersShadowModuleValues
+N023	normative	documentation/spec/SPEC.comptime.md	The compile-time scope model is finite and lexical	nestedReflectedFieldBindingsShadowAndRestoreTheOuterBinding
+N024	normative	documentation/spec/SPEC.comptime.md	### Typed integer declarations (prototype boundary)	prototypeMaterializesTheFullUnsignedLongLongDomain
+N025	normative	documentation/spec/SPEC.comptime.md	### Scalar value	prototypeMaterializesComptimeStringsAsTargetStableUtf8Bytes
+N026	normative	documentation/spec/SPEC.compiler.md	### Calling conventions and declaration attributes	compilesDocumentedMingwX64CallingConventionsWhenTheTargetCompilerIsAvailable
+N027	normative	documentation/spec/SPEC.compiler.md	## Diagnostics and Passes	prototypeLoweringDiagnosticsMapBackToOriginalSourceAfterReparse
+N028	normative	documentation/spec/SPEC.grammar.md	## Phase-1 proof of life	provesLiveCPlusSyntaxNodeInventoryForGrammarProof
+N029	normative	documentation/spec/SPEC.grammar.md	## Phase-2 generated-C proof	prototypeTranscodesEveryRepositoryCPlusSourceWithoutActiveComptimeSyntax
+B001	boundary	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	reportsRecoveredSyntaxWithSourceMappedSpans
+B002	boundary	documentation/spec/SPEC.comptime.md	## Reliability Rules and Limitations	prototypeRejectsComptimeImportCyclesAtTheRequestingSourceSpan
+B003	boundary	documentation/spec/SPEC.comptime.md	## Reliability Rules and Limitations	prototypeReportsMalformedModuleImportedByGeneratedCodeAtTheDependencySpan
+B004	boundary	documentation/spec/SPEC.comptime.md	## Reliability Rules and Limitations	prototypeStopsNestedCodeExpansionAtTheConfiguredPassLimit
+B005	boundary	documentation/spec/SPEC.comptime.md	## Reliability Rules and Limitations	entityMaterializerEnforcesItsGeneratedSourceSizeLimitAtTheInvocation
+B006	boundary	documentation/spec/SPEC.comptime.md	## Reliability Rules and Limitations	prototypeDiagnosesBoundEntityInvocationWhenMaterializationMakesNoProgress
+B007	boundary	documentation/spec/SPEC.comptime.md	The compile-time scope model is finite and lexical	diagnosesDuplicateComptimeParameterNamesAtTheSecondDeclaration
+B008	boundary	documentation/spec/SPEC.comptime.md	The compile-time scope model is finite and lexical	diagnosesDuplicateAndAmbiguousComptimeGeneratorSignatures
+B009	boundary	documentation/spec/SPEC.comptime.md	The compile-time scope model is finite and lexical	diagnosesUnresolvedAndWrongArityComptimeInvocationsAtTheirSpans
+B010	boundary	documentation/spec/SPEC.comptime.md	The compile-time scope model is finite and lexical	prototypeRejectsComptimeGeneratorDeclarationInsideRuntimeFunctionAtItsSourceSpan
+B011	boundary	documentation/spec/SPEC.comptime.md	The compile-time scope model is finite and lexical	prototypeRejectsEntityComptimeInvocationInsideRuntimeFunctionAtItsSourceSpan
+B012	boundary	documentation/spec/SPEC.comptime.md	### Compiler flags	prototypeRejectsCompilerFlagsInsideRuntimeFunctionBodies
+B013	boundary	documentation/spec/SPEC.comptime.md	### Typed integer declarations (prototype boundary)	prototypeRejectsIntegerLiteralsBeyondUnsignedLongLongAtTheirSourceSpan
+B014	boundary	documentation/spec/SPEC.comptime.md	### Comptime values and functions	prototypeRejectsUnsupportedComptimeScalarCastsWithMappedDiagnostics
+B015	boundary	documentation/spec/SPEC.comptime.md	### Scalar value	prototypeRejectsUnsupportedPrefixedComptimeStringLiteralsAtTheirSourceSpans
+B016	boundary	documentation/spec/SPEC.comptime.md	### Types, generics, and reflection	prototypeRejectsUnsupportedAggregateLayoutShapesWithMappedDiagnostics
+B017	boundary	documentation/spec/SPEC.comptime.md	### Types, generics, and reflection	prototypeRejectsScalarAnnotationProjectionAsAnIterable
+B018	boundary	documentation/spec/SPEC.comptime.md	### Types, generics, and reflection	prototypeRejectsUnknownStructuredAnnotationMembersAtTheirSourceSpan
+B019	boundary	documentation/spec/SPEC.comptime.md	### Entity-returning comptime functions	prototypeRejectsUnsupportedEntityGeneratorParameterTypesAtTheirSourceSpan
+B020	boundary	documentation/spec/SPEC.comptime.md	### Generated declarations across passes	prototypeRejectsGeneratedEntitiesCollidingWithOrdinaryCIdentifiers
+B021	boundary	documentation/spec/SPEC.errors.md	## Supported subset and diagnostics	astThrowsPassRejectsInvalidReturnAndErrorOutSignatures
+B022	boundary	documentation/spec/SPEC.errors.md	## Supported subset and diagnostics	astTryLoweringRejectsEmbeddedCheckedCallExpressionsWithOriginalSpan
+B023	boundary	documentation/spec/SPEC.language.md	## Struct Methods	diagnosesInstanceMethodsWithoutTheRequiredSelfReceiver
+B024	boundary	documentation/spec/SPEC.language.md	## Struct Methods	diagnosesStaticAndInstanceCallsWithTheWrongReceiverKind
+B025	boundary	documentation/spec/SPEC.language.md	## Struct Methods	validatesMethodAccessOperatorsAndSinglePointerReceiverDepth
+O001	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterMethodLoweringProduceTheSameRuntimeBehavior
+O002	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterAgreeOnStaticFactoriesAndPointerReceivers
+O003	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterPreserveCommonCFunctionPointerAndControlFlowBehavior
+O004	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterPreserveC11DeclarationAndInitializerBehavior
+O005	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterOutputsForSupportedRepositoryModulesCompileAsC11
+O006	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterDeferLoweringPreserveReverseExecutionOrder
+O007	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterCheckedCallsAgreeOnSuccessAndCaughtFailure
+O008	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterAgreeOnErrorOutFunctionsAndMethods
+O009	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterRuntimePassesComposeAcrossMethodsCheckedCallsAndDefer
+O010	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterModuleImportsAgreeOnRuntimeAndSourceOrigins
+O011	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterImportedCompilerErrorsNameTheOriginalModuleLine
+O012	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterMethodErrorsMapToTheSameOriginalSourceLine
+O013	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterTestDiscoveryProduceTheSameRunnableFixtures
+O014	overlap	documentation/spec/SPEC.grammar.md	## Phase-2 mismatch policy	legacyAndTreeSitterAgreeOnPlatformConditionalCodeAndCompilerFlags

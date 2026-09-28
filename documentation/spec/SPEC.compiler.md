@@ -48,6 +48,29 @@ The shipped cross-runtime distribution names the supported host/architecture pai
 
 `-Ptarget=cross` packages all six TinyCC runtime payloads without libc sysroots; `-Ptarget=none`/`bare` packages no compiler runtime and uses the selected external compiler. This table describes C-plus target normalization and packaging availability, not a guarantee that every platform library or linker flag exists on every host. The compiler must still report an unsupported target or missing library instead of silently selecting another ABI.
 
+### Calling conventions and declaration attributes
+
+C-plus parses and source-preservingly emits C declarator attributes and calling
+conventions. It does not emulate a convention, erase an unknown modifier, or silently
+substitute another ABI. Final acceptance belongs to the selected C compiler/target.
+
+| Spelling | Declared support boundary | Evidence |
+|---|---|---|
+| no modifier | portable supported C subset | local `cc`, GCC, and Clang compile/run fixtures |
+| `__attribute__((noinline))` | GNU-compatible compilers | complex function-pointer-return method compile/run |
+| `__attribute__((sysv_abi))` | GCC/Clang targets that implement that ABI attribute (notably x86/x86_64) | semantic retention plus local host compile/run |
+| `__declspec(noinline)` | Windows GNU-compatible target compiler | MinGW x86_64 object fixture |
+| `__cdecl`, `__stdcall`, `__fastcall`, `__thiscall` | MinGW x86_64 accepted spellings; their x64 machine-level distinctions are compiler-defined | MinGW x86_64 object fixture |
+| `WINAPI` | Windows headers must define it; normally maps to the platform API convention | `<windows.h>` MinGW x86_64 object fixture |
+| `__vectorcall`, `__clrcall` | parsed and preserved, but unsupported by the tested MinGW GCC; usable only when the selected compiler accepts them | preservation fixture; downstream compiler rejection is intentional |
+| `__restrict`, `__sptr`, `__uptr`, `_unaligned`, `__unaligned` | parsed and retained on their pointer layer; target acceptance is compiler-defined | semantic spelling/layer fixtures |
+
+The same modifier remains attached to nested callback and returned-callable
+declarators. Unsupported target combinations are ordinary downstream C compiler
+errors and retain C-plus source mapping. Six-host/architecture compiler evidence is
+tracked separately from the language/parser contract; a local MinGW result does not
+claim Windows arm64 support.
+
 `test` runs all `@test` blocks by default; `test run` is equivalent. Compiler flags may appear before or after source paths, and `-v0`, `-v1`, or `-v2` may be placed before or after the command. Flags from all input files and CLI arguments are logically deduplicated and passed to each test compilation. Generated test C carries one consolidated `cplus compiler flags` comment, matching ordinary transpilation. `test compile` and `test transcode` currently accept one source file because each generated test harness owns a `main` function. Test-name filters remain exact and case-sensitive:
 
 ```sh

@@ -120,6 +120,28 @@ enforcement. C declarator binding order is preserved: an array of function point
 is not a pointer to an array, and a pointer to a multidimensional array remains
 distinct in the AST.
 
+### Declarator semantic model
+
+The semantic model is finite even though valid declarators can be nested without a
+fixed depth. It has three recursive binding constructors: `POINTER`, `ARRAY`, and
+`FUNCTION`. Layers are recorded from the declared identifier outward, matching the
+order in which an expression consumes them:
+
+| Declaration | Layers |
+|---|---|
+| `int *value` | `POINTER` |
+| `int (*values)[2]` | `POINTER, ARRAY` |
+| `int (*callbacks[2])(int)` | `ARRAY, POINTER, FUNCTION` |
+| `int *(*factory)(void)` | `POINTER, FUNCTION, POINTER` |
+| method `int (*row(*self))[2]` | `FUNCTION, POINTER, ARRAY` |
+
+Parentheses select composition; they do not add a semantic layer. Qualifiers and
+calling conventions are retained as source-spanned declarator metadata rather than
+new binding constructors. C-plus methods and ordinary C functions use the same
+ordering. Method return layers are everything after the first `FUNCTION`; no source
+text scan or declarator-shape exception is permitted. Unsupported grammar shapes
+must fail closed instead of being guessed from punctuation.
+
 ## Comptime declarations and expressions
 
 The keyword-led forms are:

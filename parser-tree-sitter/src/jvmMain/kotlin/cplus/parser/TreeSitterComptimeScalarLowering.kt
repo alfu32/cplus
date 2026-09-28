@@ -386,11 +386,12 @@ class TreeSitterComptimeScalarLowering(
     ) {
         val diagnostics = mutableListOf<CPlusLoweringDiagnostic>()
         private val byName = linkedMapOf<String, ValueDeclaration>()
-        private val functionsByName = linkedMapOf<String, ScalarFunctionDeclaration>()
+        private val functionsBySignature = linkedMapOf<Pair<String, Int>, ScalarFunctionDeclaration>()
+        private val functionsByName = linkedMapOf<String, MutableList<ScalarFunctionDeclaration>>()
         private val values = linkedMapOf<String, Scalar>()
         private val failedValues = linkedSetOf<String>()
         private val visiting = linkedSetOf<String>()
-        private val activeFunctions = linkedSetOf<String>()
+        private val activeFunctions = linkedSetOf<Pair<String, Int>>()
 
         init {
             declarations.forEach { declaration ->
@@ -403,12 +404,15 @@ class TreeSitterComptimeScalarLowering(
                 }
             }
             scalarFunctions.forEach { function ->
-                if (functionsByName.putIfAbsent(function.name, function) != null) {
+                val signature = function.name to function.parameterNames.size
+                if (functionsBySignature.putIfAbsent(signature, function) != null) {
                     diagnostics += diagnostic(
                         "CPLUS_COMPTIME_SCALAR_FUNCTION_DUPLICATE",
-                        "duplicate scalar comptime function '${function.name}'",
+                        "duplicate scalar comptime function '${function.name}' with ${function.parameterNames.size} parameter(s)",
                         function.node.span
                     )
+                } else {
+                    functionsByName.getOrPut(function.name, ::mutableListOf) += function
                 }
             }
         }
@@ -910,26 +914,31 @@ class TreeSitterComptimeScalarLowering(
                 ?: node.children.firstOrNull { it.kind == "identifier" }
                 ?: return unsupported(node)
             val name = textOf(callee).removePrefix("@")
-            val function = functionsByName[name]
-                ?: return fail(
+            val arguments = node.children.firstOrNull { it.kind == "argument_list" }
+                ?.children.orEmpty()
+                .filter { it.named && it.kind != "comment" }
+            val namedFunctions = functionsByName[name].orEmpty()
+            if (namedFunctions.isEmpty()) {
+                return fail(
                     "CPLUS_COMPTIME_SCALAR_FUNCTION_NAME",
                     "unknown scalar comptime function '$name'",
                     callee
                 )
-            val arguments = node.children.firstOrNull { it.kind == "argument_list" }
-                ?.children.orEmpty()
-                .filter { it.named && it.kind != "comment" }
-            if (arguments.size != function.parameterNames.size) {
+            }
+            val signature = name to arguments.size
+            val function = functionsBySignature[signature]
+            if (function == null) {
+                val arities = namedFunctions.map { it.parameterNames.size }.distinct().sorted().joinToString(" or ")
                 return fail(
                     "CPLUS_COMPTIME_SCALAR_FUNCTION_ARITY",
-                    "scalar comptime function '$name' expects ${function.parameterNames.size} argument(s), got ${arguments.size}",
+                    "scalar comptime function '$name' expects $arities argument(s), got ${arguments.size}",
                     node
                 )
             }
-            if (name in activeFunctions) {
+            if (signature in activeFunctions) {
                 return fail(
                     "CPLUS_COMPTIME_SCALAR_FUNCTION_RECURSION",
-                    "recursive scalar comptime function '$name' is not supported",
+                    "recursive scalar comptime function '$name' with ${arguments.size} parameter(s) is not supported",
                     node
                 )
             }
@@ -948,10 +957,10 @@ class TreeSitterComptimeScalarLowering(
                     convertFunctionIntegerValue(function, index, value, argument) ?: return null
                 }
             }
-            activeFunctions += name
+            activeFunctions += signature
             val functionLocals = function.parameterNames.zip(argumentValues).toMap()
             val result = evaluate(function.returnExpression, functionLocals)
-            activeFunctions -= name
+            activeFunctions -= signature
             if (result == null) return null
             if (function.resultType == "string") {
                 return if (result is Scalar.String) result else fail(

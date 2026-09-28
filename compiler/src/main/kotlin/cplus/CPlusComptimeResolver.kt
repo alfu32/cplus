@@ -61,6 +61,25 @@ class CPlusComptimeResolver {
             )
         }
 
+        declarations.forEach { declaration ->
+            declaration.parameters
+                .filter { !it.name.isNullOrBlank() }
+                .groupBy { it.name!! }
+                .values
+                .filter { it.size > 1 }
+                .forEach { duplicates ->
+                    val first = duplicates.first()
+                    duplicates.drop(1).forEach { duplicate ->
+                        diagnostics += CPlusComptimeResolutionDiagnostic(
+                            "CPLUS_COMPTIME_DUPLICATE_PARAMETER",
+                            "comptime generator '${declaration.symbol}' declares parameter '${first.name}' more than once",
+                            duplicate.span,
+                            first.span
+                        )
+                    }
+                }
+        }
+
         val declarationsBySignature = declarations.groupBy { Signature(it.symbol!!, it.parameters.size) }
         declarationsBySignature.values.filter { it.size > 1 }.forEach { duplicates ->
             val first = duplicates.first()
