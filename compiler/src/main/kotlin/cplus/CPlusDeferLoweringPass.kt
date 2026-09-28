@@ -2,7 +2,22 @@ package cplus
 
 data class CPlusLoweringDiagnostic(val code: String, val message: String, val span: SourceSpan)
 
-data class CPlusLoweringResult(val source: MappedText, val diagnostics: List<CPlusLoweringDiagnostic>)
+/** A declaration synthesized from a structured AST transformation. */
+data class CPlusSynthesizedDeclaration(
+    val kind: CPlusAstKind,
+    val ownerType: String?,
+    val sourceName: String,
+    val generatedName: String,
+    val isStatic: Boolean,
+    val sourceSpan: SourceSpan,
+    val mappedText: MappedText
+)
+
+data class CPlusLoweringResult(
+    val source: MappedText,
+    val diagnostics: List<CPlusLoweringDiagnostic>,
+    val synthesizedDeclarations: List<CPlusSynthesizedDeclaration> = emptyList()
+)
 
 /** AST-backed, source-map-preserving lowering of function-scoped defer statements. */
 class CPlusDeferLoweringPass {

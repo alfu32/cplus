@@ -31,6 +31,7 @@ import cplus.ParserDiagnosticSeverity
 import cplus.SourceSnapshot
 import cplus.CPlusLoweringDiagnostic
 import cplus.CPlusLoweringResult
+import cplus.CPlusSynthesizedDeclaration
 import cplus.AllocationIntent
 import cplus.AllocationOwnership
 import cplus.AllocationSymbolKind
@@ -2199,7 +2200,18 @@ class TreeSitterCPlusParserBackendTest {
                     passOrder += "first"
                     CPlusLoweringResult(
                         MappedText.generated("int intermediate;\n", source.originAt(0)),
-                        emptyList()
+                        emptyList(),
+                        listOf(
+                            CPlusSynthesizedDeclaration(
+                                kind = CPlusAstKind.FUNCTION_DECLARATION,
+                                ownerType = "item_t",
+                                sourceName = "source",
+                                generatedName = "item__source",
+                                isStatic = false,
+                                sourceSpan = ast.root.span,
+                                mappedText = source
+                            )
+                        )
                     )
                 },
                 CPlusAstLoweringStep("second") { ast, source ->
@@ -2223,6 +2235,8 @@ class TreeSitterCPlusParserBackendTest {
         assertEquals("int final_value;\n", result.source.text)
         assertEquals(result.source.text, result.ast.source.text)
         assertEquals(initial.id.value, result.source.originAt(0)?.file?.name)
+        assertEquals(listOf("item__source"), result.synthesizedDeclarations.map { it.generatedName })
+        assertEquals(initial.id.value, result.synthesizedDeclarations.single().sourceSpan.file)
 
         val failureOrder = mutableListOf<String>()
         val failed = pipeline.run(
@@ -2233,7 +2247,18 @@ class TreeSitterCPlusParserBackendTest {
                     failureOrder += "stop"
                     CPlusLoweringResult(
                         source,
-                        listOf(CPlusLoweringDiagnostic("TEST_FAILURE", "intentional", ast.root.span))
+                        listOf(CPlusLoweringDiagnostic("TEST_FAILURE", "intentional", ast.root.span)),
+                        listOf(
+                            CPlusSynthesizedDeclaration(
+                                kind = CPlusAstKind.FUNCTION_DECLARATION,
+                                ownerType = "item_t",
+                                sourceName = "discarded",
+                                generatedName = "item__discarded",
+                                isStatic = false,
+                                sourceSpan = ast.root.span,
+                                mappedText = source
+                            )
+                        )
                     )
                 },
                 CPlusAstLoweringStep("must-not-run") { _, source ->
@@ -2246,6 +2271,7 @@ class TreeSitterCPlusParserBackendTest {
         assertFalse(failed.successful)
         assertEquals(listOf("stop"), failureOrder)
         assertEquals(listOf("stop"), failed.trace.map { it.stepId })
+        assertTrue(failed.synthesizedDeclarations.isEmpty())
 
         val parserFailureOrder = mutableListOf<String>()
         val parseFailed = pipeline.run(
@@ -4345,11 +4371,20 @@ class TreeSitterCPlusParserBackendTest {
             typedef struct widget_t {
                 int value;
                 pub const widget_t* transform(
-                    borrowed mut *self,
+                    borrowed const *self,
                     borrowed const widget_t * restrict source,
                     borrowed int (*callback)(const widget_t *value)
                 ) {
                     return callback(source) == self->value ? self : source;
+                }
+                pub int inspect(borrowed volatile * restrict self) {
+                    return self->value;
+                }
+                pub int inspect_gnu(borrowed * __restrict self) {
+                    return self->value;
+                }
+                static pub int identity(int value) {
+                    return value;
                 }
             } widget_t;
 
@@ -4359,14 +4394,15 @@ class TreeSitterCPlusParserBackendTest {
 
             int main(void) {
                 widget_t value = { 7 };
-                return value.transform(&value, read_widget) == &value ? 0 : 1;
+                return value.transform(&value, read_widget) == &value && value.inspect() == 7 && value.inspect_gnu() == 7 ? 0 : 1;
             }
         """.trimIndent()
         val source = sources.open(SourceId.named("qualified-method-parameters.cp"), text)
 
         val parsed = backend.parse(source)
         assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
-        val semantic = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(parsed))
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val semantic = CPlusSemanticAnalyzer().analyze(ast)
         assertTrue(semantic.diagnostics.isEmpty(), semantic.diagnostics.toString())
 
         val method = semantic.symbols.single {
@@ -4391,12 +4427,44 @@ class TreeSitterCPlusParserBackendTest {
             method.parameters[2].declaratorLayers
         )
 
+        val structuredLowering = CPlusStructMethodLoweringPass().lower(
+            ast,
+            MappedText.identity(source.sourceFile)
+        )
+        assertTrue(structuredLowering.diagnostics.isEmpty(), structuredLowering.diagnostics.toString())
+        assertEquals(
+            listOf("widget__transform", "widget__inspect", "widget__inspect_gnu", "widget__identity"),
+            structuredLowering.synthesizedDeclarations.map { it.generatedName }
+        )
+        assertTrue(structuredLowering.synthesizedDeclarations.all { it.kind == CPlusAstKind.FUNCTION_DECLARATION })
+        assertEquals(
+            listOf(false, false, false, true),
+            structuredLowering.synthesizedDeclarations.map { it.isStatic }
+        )
+        assertTrue(structuredLowering.synthesizedDeclarations.all { it.ownerType == "widget_t" })
+
         val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
         assertTrue(
             transpiled.successful,
             "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}"
         )
-        compileAndRunC(transpiled.cSource?.text ?: error("qualified method output is missing"))
+        val generated = transpiled.cSource?.text ?: error("qualified method output is missing")
+        assertEquals(
+            listOf("widget__transform", "widget__inspect", "widget__inspect_gnu", "widget__identity"),
+            transpiled.synthesizedDeclarations.map { it.generatedName }
+        )
+        assertTrue(
+            transpiled.synthesizedDeclarations.all { it.sourceSpan.file == source.id.value },
+            transpiled.synthesizedDeclarations.toString()
+        )
+        assertEquals(
+            transpiled.synthesizedDeclarations.map { it.generatedName },
+            transpiled.transcodedSource?.synthesizedDeclarations?.map { it.generatedName }
+        )
+        assertTrue("const widget_t *self" in generated, generated)
+        assertTrue("volatile widget_t *restrict self" in generated, generated)
+        assertTrue("widget_t *__restrict self" in generated, generated)
+        compileAndRunC(generated)
     }
 
     @Test

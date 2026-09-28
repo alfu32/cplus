@@ -19,7 +19,9 @@ data class CPlusAstLoweringPipelineResult(
     val ast: CPlusAst,
     val loweringDiagnostics: List<CPlusLoweringDiagnostic>,
     val parserDiagnostics: List<ParserDiagnostic>,
-    val trace: List<CPlusAstLoweringTrace>
+    val trace: List<CPlusAstLoweringTrace>,
+    /** Declarations synthesized by structured passes, retained across reparses. */
+    val synthesizedDeclarations: List<CPlusSynthesizedDeclaration> = emptyList()
 ) {
     val successful: Boolean
         get() = loweringDiagnostics.isEmpty() && parserDiagnostics.isEmpty()
@@ -47,6 +49,7 @@ class CPlusAstLoweringPipeline {
         var ast = initialAst
         var source = initialSource
         val trace = mutableListOf<CPlusAstLoweringTrace>()
+        val synthesizedDeclarations = mutableListOf<CPlusSynthesizedDeclaration>()
 
         for (step in steps) {
             val inputLength = source.text.length
@@ -63,8 +66,12 @@ class CPlusAstLoweringPipeline {
                     ast,
                     lowered.diagnostics,
                     emptyList(),
-                    trace
+                    trace,
+                    synthesizedDeclarations
                 )
+            }
+            synthesizedDeclarations += lowered.synthesizedDeclarations.map { declaration ->
+                declaration.copy(sourceSpan = source.toOriginalSpan(declaration.sourceSpan))
             }
 
             if (lowered.source.text != source.text) {
@@ -78,7 +85,8 @@ class CPlusAstLoweringPipeline {
                         parsed.diagnostics.map { diagnostic ->
                             diagnostic.copy(span = source.toOriginalSpan(diagnostic.span))
                         },
-                        trace
+                        trace,
+                        synthesizedDeclarations
                     )
                 }
                 ast = CPlusAstAdapter().adapt(parsed)
@@ -87,6 +95,13 @@ class CPlusAstLoweringPipeline {
             }
         }
 
-        return CPlusAstLoweringPipelineResult(source, ast, emptyList(), emptyList(), trace)
+        return CPlusAstLoweringPipelineResult(
+            source,
+            ast,
+            emptyList(),
+            emptyList(),
+            trace,
+            synthesizedDeclarations
+        )
     }
 }

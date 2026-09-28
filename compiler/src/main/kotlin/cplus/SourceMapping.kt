@@ -228,7 +228,9 @@ data class TranscodedSource(
     /** Ordered frontend passes that produced this source; used by migration diagnostics. */
     val frontendPasses: List<String> = emptyList(),
     /** Transformation passes that changed the mapped source; semantic-only passes are absent. */
-    val frontendPassesChanged: Set<String> = emptySet()
+    val frontendPassesChanged: Set<String> = emptySet(),
+    /** Structured declarations synthesized by AST lowering, when the selected frontend provides them. */
+    val synthesizedDeclarations: List<CPlusSynthesizedDeclaration> = emptyList()
 )
 
 /** Emits C-plus text and inserts compiler-visible source locations at mapped line boundaries. */

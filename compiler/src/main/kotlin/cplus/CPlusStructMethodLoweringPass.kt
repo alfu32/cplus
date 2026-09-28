@@ -3,6 +3,10 @@ package cplus
 /** Extracts grammar-recognized methods from struct bodies and emits ordinary C function definitions. */
 class CPlusStructMethodLoweringPass {
     private data class RangeReplacement(val start: Int, val end: Int, val content: MappedText)
+    private data class LoweredMethod(
+        val sourceMethod: CPlusAstNode,
+        val declaration: CPlusSynthesizedDeclaration
+    )
 
     fun lower(ast: CPlusAst, source: MappedText): CPlusLoweringResult {
         require(ast.source.text == source.text) { "AST and mapped source must contain the same snapshot text" }
@@ -21,7 +25,7 @@ class CPlusStructMethodLoweringPass {
         if (methods.isEmpty()) return CPlusLoweringResult(source, emptyList())
 
         val diagnostics = mutableListOf<CPlusLoweringDiagnostic>()
-        val methodsByTypeDefinition = linkedMapOf<CPlusAstNode, MutableList<Pair<CPlusAstNode, MappedText>>>()
+        val methodsByTypeDefinition = linkedMapOf<CPlusAstNode, MutableList<LoweredMethod>>()
         methods.forEach { method ->
             val containingStruct = generateSequence(parents[method]) { parents[it] }
                 .firstOrNull { it.syntaxKind == "struct_specifier" }
@@ -70,7 +74,7 @@ class CPlusStructMethodLoweringPass {
             }
             try {
                 val loweredMethod = lowerMethodFromAst(method, source, typeName, isStatic)
-                methodsByTypeDefinition.getOrPut(typeDefinition, ::mutableListOf) += method to loweredMethod
+                methodsByTypeDefinition.getOrPut(typeDefinition, ::mutableListOf) += loweredMethod
             } catch (failure: CPlusSyntaxException) {
                 diagnostics += CPlusLoweringDiagnostic(
                     "CPLUS_METHOD_MALFORMED",
@@ -84,20 +88,27 @@ class CPlusStructMethodLoweringPass {
         val replacements = linkedMapOf<CPlusAstNode, MappedText>()
         val insertionsAfter = linkedMapOf<CPlusAstNode, MappedText>()
         methodsByTypeDefinition.forEach { (typeDefinition, loweredMethods) ->
-            loweredMethods.forEach { (method, _) ->
-                replacements[method] = MappedText.generated("", source.originAt(method.span.startOffset))
+            loweredMethods.forEach { loweredMethod ->
+                replacements[loweredMethod.sourceMethod] = MappedText.generated(
+                    "",
+                    source.originAt(loweredMethod.sourceMethod.span.startOffset)
+                )
             }
             val insertion = MappedTextBuilder()
             insertion.appendGenerated("\n", source.originAt(typeDefinition.span.endOffset))
-            loweredMethods.forEachIndexed { index, (_, loweredMethod) ->
-                if (index > 0) insertion.appendGenerated("\n\n", loweredMethod.firstOrigin())
-                insertion.append(loweredMethod)
+            loweredMethods.forEachIndexed { index, loweredMethod ->
+                if (index > 0) insertion.appendGenerated("\n\n", loweredMethod.declaration.mappedText.firstOrigin())
+                insertion.append(loweredMethod.declaration.mappedText)
             }
             insertion.appendGenerated("\n", source.originAt(typeDefinition.span.endOffset))
             insertionsAfter[typeDefinition] = insertion.build()
         }
         return try {
-            CPlusLoweringResult(CPlusMappedAstEmitter().emit(ast, source, replacements, insertionsAfter), emptyList())
+            CPlusLoweringResult(
+                source = CPlusMappedAstEmitter().emit(ast, source, replacements, insertionsAfter),
+                diagnostics = emptyList(),
+                synthesizedDeclarations = methodsByTypeDefinition.values.flatten().map { it.declaration }
+            )
         } catch (failure: IllegalArgumentException) {
             CPlusLoweringResult(
                 source,
@@ -111,7 +122,7 @@ class CPlusStructMethodLoweringPass {
         source: MappedText,
         typeName: String,
         isStatic: Boolean
-    ): MappedText {
+    ): LoweredMethod {
         val access = method.children.firstOrNull { it.syntaxKind == "cplus_access_modifier" }
             ?: throw CPlusSyntaxException("method in struct $typeName is missing an access modifier")
         val declarator = method.children.firstOrNull { it.fieldName == "declarator" }
@@ -167,9 +178,21 @@ class CPlusStructMethodLoweringPass {
                 .map { source.text.substring(it.span.startOffset, it.span.endOffset) }
                 .toList()
             val receiverPrefix = receiverAnnotations.joinToString(" ")
+            val star = receiver.descendantsAndSelf()
+                .firstOrNull { it.syntaxKind == "*" }
+                ?: throw CPlusSyntaxException("instance method $methodName receiver must be a pointer")
+            val beforeStar = source.text.substring(receiver.span.startOffset, star.span.startOffset)
+            val afterStar = source.text.substring(star.span.endOffset, receiver.span.endOffset)
+            val baseQualifiers = C_QUALIFIER.findAll(beforeStar).map { it.value }.toList()
+            val pointerQualifiers = C_POINTER_QUALIFIER.findAll(afterStar).map { it.value }.toList()
             val receiverText = buildString {
                 if (receiverPrefix.isNotEmpty()) append(receiverPrefix).append(' ')
-                append(typeName).append(" *self")
+                if (baseQualifiers.isNotEmpty()) append(baseQualifiers.joinToString(" ")).append(' ')
+                append(typeName).append(" *")
+                if (pointerQualifiers.isNotEmpty()) {
+                    append(' ').append(pointerQualifiers.joinToString(" ")).append(' ')
+                }
+                append("self")
             }
             replacements += RangeReplacement(
                 receiver.span.startOffset,
@@ -181,7 +204,19 @@ class CPlusStructMethodLoweringPass {
         val declarationOrigin = source.originAt(access.span.startOffset)
         if (isStatic) output.appendGenerated("static ", declarationOrigin)
         appendReplacedRange(output, source, access.span.startOffset, method.span.endOffset, replacements)
-        return output.build()
+        val generatedName = "${typeStem(typeName)}__$methodName"
+        return LoweredMethod(
+            sourceMethod = method,
+            declaration = CPlusSynthesizedDeclaration(
+                kind = CPlusAstKind.FUNCTION_DECLARATION,
+                ownerType = typeName,
+                sourceName = methodName,
+                generatedName = generatedName,
+                isStatic = isStatic,
+                sourceSpan = method.span,
+                mappedText = output.build()
+            )
+        )
     }
 
     private fun appendReplacedRange(
@@ -204,6 +239,14 @@ class CPlusStructMethodLoweringPass {
     }
 
     private fun typeStem(typeName: String): String = if (typeName.endsWith("_t")) typeName.dropLast(2) else typeName
+
+    private companion object {
+        /** Qualifiers before the inferred pointer qualify the pointed-to struct. */
+        val C_QUALIFIER = Regex("\\b(const|volatile|_Atomic)\\b")
+
+        /** Qualifiers after the inferred `*` qualify the receiver pointer itself. */
+        val C_POINTER_QUALIFIER = Regex("\\b(restrict|__restrict|__restrict__|__sptr|__uptr|_unaligned|__unaligned)\\b")
+    }
 }
 
 private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =

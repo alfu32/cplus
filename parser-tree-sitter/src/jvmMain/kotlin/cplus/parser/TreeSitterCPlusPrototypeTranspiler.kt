@@ -45,7 +45,9 @@ data class TreeSitterPrototypeResult(
     /** Runtime AST passes actually executed, in order, for migration reports. */
     val runtimePasses: List<String> = emptyList(),
     /** Runtime AST passes that changed mapped source; semantic-only passes are absent. */
-    val runtimePassesChanged: Set<String> = emptySet()
+    val runtimePassesChanged: Set<String> = emptySet(),
+    /** Structured declarations synthesized by runtime AST passes. */
+    val synthesizedDeclarations: List<cplus.CPlusSynthesizedDeclaration> = emptyList()
 ) {
     val successful: Boolean
         get() = cSource != null && parserDiagnostics.isEmpty() && loweringDiagnostics.isEmpty() && unsupportedNodes.isEmpty()
@@ -694,7 +696,8 @@ class TreeSitterCPlusPrototypeTranspiler(
                     val result = CPlusStructMethodLoweringPass().lower(stageAst, stageSource)
                     cplus.CPlusLoweringResult(
                         result.source,
-                        result.diagnostics.map { it.withMappedSpan(stageSource, it.span) }
+                        result.diagnostics.map { it.withMappedSpan(stageSource, it.span) },
+                        result.synthesizedDeclarations
                     )
                 }
             )
@@ -826,7 +829,8 @@ class TreeSitterCPlusPrototypeTranspiler(
                 frontendPassesChanged = runtimeLowering.trace
                     .filter { it.sourceChanged }
                     .map { it.stepId }
-                    .toSet()
+                    .toSet(),
+                synthesizedDeclarations = runtimeLowering.synthesizedDeclarations
             )
         return TreeSitterPrototypeResult(
             hygienicGeneratedC,
@@ -844,7 +848,8 @@ class TreeSitterCPlusPrototypeTranspiler(
             runtimeLowering.trace
                 .filter { it.sourceChanged }
                 .map { it.stepId }
-                .toSet()
+                .toSet(),
+            runtimeLowering.synthesizedDeclarations
         )
     }
 
