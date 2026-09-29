@@ -37,6 +37,7 @@ class CPlusLspServer(
     private val openDocuments = ConcurrentHashMap.newKeySet<String>()
     private val importsByDocument = LinkedHashMap<String, LinkedHashSet<String>>()
     private val importersByDocument = LinkedHashMap<String, LinkedHashSet<String>>()
+    private val activeReadView = ThreadLocal<ReadView?>()
     /** Cancellations received before a request instance has been dispatched. */
     private val preCancelledRequests = ConcurrentHashMap.newKeySet<String>()
     private val seenRequestIds = ConcurrentHashMap.newKeySet<String>()
@@ -157,14 +158,27 @@ class CPlusLspServer(
         if (id == null) return
         val key = id.encode()
         rememberBounded(seenRequestIds, key)
-        val state = RequestState(key)
+        val readView = withReadState {
+            ReadView(
+                documents = documents.toMap(),
+                importsByDocument = importsByDocument.mapValues { (_, imports) -> imports.toSet() }
+            )
+        }
+        val state = RequestState(key, readView)
         val cancelledBeforeDispatch = preCancelledRequests.remove(key)
         if (cancelledBeforeDispatch) state.cancelled.set(true)
         requestStates[key] = state
         val future = try {
             requestExecutor.submit {
                 try {
-                    if (!state.cancelled.get()) withReadState { work(state) }
+                    if (!state.cancelled.get()) withReadState {
+                        activeReadView.set(state.readView)
+                        try {
+                            work(state)
+                        } finally {
+                            activeReadView.remove()
+                        }
+                    }
                 } finally {
                     requestStates.remove(key, state)
                 }
@@ -211,6 +225,12 @@ class CPlusLspServer(
             lock.unlock()
         }
     }
+
+    private fun readDocuments(): Map<String, LspDocument> =
+        activeReadView.get()?.documents ?: documents
+
+    private fun readImportsByDocument(): Map<String, Set<String>> =
+        activeReadView.get()?.importsByDocument ?: importsByDocument
 
     private inline fun <T> withWriteState(action: () -> T): T {
         val lock = stateLock.writeLock()
@@ -459,13 +479,13 @@ class CPlusLspServer(
     }
 
     private fun documentSymbols(uri: String?): String {
-        val document = uri?.let(documents::get) ?: return "[]"
+        val document = uri?.let(readDocuments()::get) ?: return "[]"
         return document.symbols.joinToString(",", "[", "]") { symbol -> symbol.toJson() }
     }
 
     private fun workspaceSymbols(query: String): String {
         val normalized = query.trim().lowercase()
-        return documents.values.asSequence()
+        return readDocuments().values.asSequence()
             .flatMap { document -> document.symbols.asSequence().map { displaySymbol(it, document.uri) } }
             .filter { normalized.isEmpty() || it.name.lowercase().contains(normalized) }
             .sortedWith(compareBy<LspSymbol> { it.name.lowercase() }.thenBy { it.uri }.thenBy { it.selection.startOffset })
@@ -473,7 +493,7 @@ class CPlusLspServer(
     }
 
     private fun completions(request: Json.Object): String {
-        val document = request.uri()?.let(documents::get) ?: return "{\"isIncomplete\":false,\"items\":[]}"
+        val document = request.uri()?.let(readDocuments()::get) ?: return "{\"isIncomplete\":false,\"items\":[]}"
         val prefix = document.wordAt(request.position())
         val offset = document.snapshot.offsetAt(request.position())
         val receiverAccess = offset?.let { receiverAccess(document, it) }
@@ -501,7 +521,7 @@ class CPlusLspServer(
     }
 
     private fun hover(request: Json.Object): String {
-        val document = request.uri()?.let(documents::get) ?: return "null"
+        val document = request.uri()?.let(readDocuments()::get) ?: return "null"
         val symbol = symbolAt(request) ?: return "null"
         val value = "`${symbol.detail}`"
         return "{\"contents\":{\"kind\":\"markdown\",\"value\":${Json.string(value)}},\"range\":${symbol.rangeJson()}}"
@@ -520,7 +540,7 @@ class CPlusLspServer(
      * bounded closure is the same visibility boundary used by completion/definition.
      */
     private fun references(request: Json.Object): String {
-        val document = request.uri()?.let(documents::get) ?: return "[]"
+        val document = request.uri()?.let(readDocuments()::get) ?: return "[]"
         val selected = symbolAt(request)
         val target = selected?.name ?: document.wordAt(request.position())
         if (target.isEmpty()) return "[]"
@@ -529,7 +549,7 @@ class CPlusLspServer(
             ?.values?.get("includeDeclaration") as? Json.BooleanValue
         val visible = visibleSymbols(document).toList()
         return reachableDocuments(document.uri).asSequence()
-            .mapNotNull(documents::get)
+            .mapNotNull(readDocuments()::get)
             .flatMap { candidate ->
                 candidate.ast.root.identifierOccurrences()
                     .filter { it.node.kind == CPlusAstKind.IDENTIFIER }
@@ -613,7 +633,7 @@ class CPlusLspServer(
     }
 
     private fun symbolAt(request: Json.Object): LspSymbol? {
-        val document = request.uri()?.let(documents::get) ?: return null
+        val document = request.uri()?.let(readDocuments()::get) ?: return null
         document.symbolAt(request.position())?.let { return it }
         val word = document.wordAt(request.position())
         if (word.isEmpty()) return null
@@ -859,7 +879,7 @@ class CPlusLspServer(
     private fun visibleSymbols(document: LspDocument): Sequence<LspSymbol> {
         val reachable = reachableDocuments(document.uri)
         return reachable.asSequence()
-            .mapNotNull(documents::get)
+            .mapNotNull(readDocuments()::get)
             .flatMap { candidate -> candidate.symbols.asSequence().map { displaySymbol(it, candidate.uri) } }
             .distinctBy { it.uri to it.selection.startOffset }
     }
@@ -871,7 +891,7 @@ class CPlusLspServer(
      * the path spelling the client supplied (including symlink and drive forms).
      */
     private fun displaySymbol(symbol: LspSymbol, fallbackUri: String): LspSymbol {
-        val displayUri = documents.keys.firstOrNull { candidate ->
+        val displayUri = readDocuments().keys.firstOrNull { candidate ->
             sameSourceUri(candidate, symbol.uri)
         } ?: fallbackUri
         return if (displayUri == symbol.uri) symbol else symbol.copy(uri = displayUri)
@@ -884,7 +904,7 @@ class CPlusLspServer(
         while (pending.isNotEmpty()) {
             val uri = pending.removeFirst()
             if (!reachable.add(uri)) continue
-            pending.addAll(importsByDocument[uri].orEmpty())
+            pending.addAll(readImportsByDocument()[uri].orEmpty())
         }
         return reachable
     }
@@ -932,7 +952,7 @@ class CPlusLspServer(
         var current = typeName
         val seen = mutableSetOf<String>()
         while (seen.add(current)) {
-            val alias = documents.values.asSequence()
+            val alias = readDocuments().values.asSequence()
                 .flatMap { it.symbols.asSequence() }
                 .firstOrNull { it.kind == 26 && it.name == current } ?: break
             val underlying = Regex("typedef\\s+(?:struct\\s+|union\\s+)?([A-Za-z_][A-Za-z0-9_]*)")
@@ -966,15 +986,12 @@ class CPlusLspServer(
     private fun respond(id: Json?, result: String) = write("{\"jsonrpc\":\"2.0\",\"id\":${id?.encode() ?: "null"},\"result\":$result}")
 
     private fun respondForDocument(id: Json?, request: Json.Object, state: RequestState, result: () -> String) {
-        val uri = request.uri()
-        val version = uri?.let { documents[it]?.version }
         val encodedId = id?.encode()
         if (state.cancelled.get() || wasCancelled(encodedId)) return
         val payload = result()
         // Cancellation may arrive while parsing or indexing is in progress. Do
         // not publish a response that became obsolete during that work.
         if (state.cancelled.get() || wasCancelled(encodedId)) return
-        if (uri != null && documents[uri]?.version != version) return
         respond(id, payload)
     }
 
@@ -1027,10 +1044,15 @@ class CPlusLspServer(
 
 private data class ReceiverAccess(val typeName: String?, val operator: String)
 
-private class RequestState(val key: String) {
+private class RequestState(val key: String, val readView: ReadView) {
     val cancelled = AtomicBoolean(false)
     val future = AtomicReference<Future<*>>()
 }
+
+private data class ReadView(
+    val documents: Map<String, LspDocument>,
+    val importsByDocument: Map<String, Set<String>>
+)
 
 private data class DeclaredType(val typeName: String, val pointerDepth: Int, val arrayDepth: Int)
 
