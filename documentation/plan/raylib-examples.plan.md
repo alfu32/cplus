@@ -7,10 +7,10 @@
 - [x] Asteroids — vector movement, rotation, wraparound, projectile/entity lifecycle.
 - [ ] Galaga / Galaxian — formation enemies plus attack trajectories.
 - [ ] Centipede — segmented enemy motion over a grid.
-- [ ] Frogger — lanes, moving obstacles, collision zones.
-- [ ] Q*bert — graph/grid traversal with tile state changes.
-- [ ] Bomberman — grid world, timers, explosions, propagation.
-- [ ] Lode Runner — platform/grid mechanics, AI pursuit.
+- [x] Frogger — lanes, moving obstacles, collision zones.
+- [x] Q*bert — graph/grid traversal with tile state changes.
+- [x] Bomberman — grid world, timers, explosions, propagation.
+- [x] Lode Runner — platform/grid mechanics, AI pursuit.
 - [ ] Sokoban — pure deterministic puzzle state, no clock required.
 - [ ] Minesweeper — board generation, reveal propagation, flags.
 - [ ] Connect Four — tiny discrete board-state machine.
@@ -20,14 +20,14 @@
 - [ ] Lunar Lander — continuous physics with thrust and gravity.
 - [ ] Missile Command — targeting, explosions, projectile interception.
 - [ ] Defender — scrolling world and multiple entity systems.
-- [ ] Jetpac — platform movement, pickups, enemies.
+- [x] Jetpac — platform movement, pickups, enemies.
 - [ ] Prince-of-Persia-like platformer — animation/state-machine heavy.
 - [ ] Dr. Mario / Puyo Puyo — falling pieces plus matching/chain reactions.
 - [ ] Columns — falling-block variant with match-three rules.
 - [ ] Bejeweled-style match-3 — board mutation, cascades, animation.
 - [ ] Lights Out — tiny graph/state transformation puzzle.
 - [x] Conway's Game of Life — pure clock-driven cellular automaton.
-- [ ] Langton's Ant — tiny state machine on a grid.
+- [x] Langton's Ant — tiny state machine on a grid.
 - [ ] Breakthrough / Othello — compact turn-based board games.
 - [x] 2048         → pure state transform 
 - [x] Tetris       → grid + gravity
