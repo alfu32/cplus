@@ -38,9 +38,10 @@ recovered AST fragment; an error records a construct that could not be fully
 resolved, but the emitter preserves the original text or the best available
 lowering so that later C compilation can provide additional diagnostics. Every
 diagnostic carries severity, code, message, and the original `.cp` URI/range
-when a source map is available. Only fatal infrastructure failures—such as an
-unreadable input, an invalid output destination, or a pass that cannot produce
-a coherent source stream—stop transcoding. `compile`, `run`, and `test` still
+when a source map is available. Ordinary mapped errors do not stop
+transcoding. Only implicitly fatal conditions—such as the transcoder crashing,
+an unreadable input, an invalid output destination, or a pass that cannot
+produce a coherent source stream—stop generation. `compile`, `run`, and `test` still
 return the downstream compiler/runtime status; a non-fatal transcoder
 diagnostic alone does not prevent generated C from being written.
 

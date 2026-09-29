@@ -85,7 +85,8 @@ Subphases:
 5. Emit a warning for recovered or unsupported AST fragments that have no
    normalized compiler mapping/resolution, while preserving compiler/parser
    errors as errors with their mapped source ranges. Diagnostics must not stop
-   code generation unless the source stream or pass is fatally unusable.
+   code generation unless an implicitly fatal condition occurs, such as a
+   transcoder crash or an unusable source stream/pass.
 
 Gate: valid, malformed, edited, closed, and Unicode-containing documents have
 stable diagnostics and positions; unsupported AST fragments are visible as
@@ -216,7 +217,7 @@ status is only a summary; work is considered converged when every row below is
 | LSP-5  | 5.6c.2 function-pointer compatibility  | DONE        | Match direct function values to compatible function-pointer overloads using return type and callback arity                 | 5.6c            |
 | LSP-5  | 5.6d write/reference effects           | OPEN        | Distinguish reads, writes, declarations, and callback/function-pointer references                                                      | 5.6e            |
 | LSP-5  | 5.6e comptime parity                   | OPEN        | Expose generated declarations, scopes, aliases, and source origins consistently in all semantic features                               | LSP-5 gate      |
-| LSP-2  | 2.5 unsupported-AST diagnostics        | OPEN        | Classify recovered/unsupported AST fragments as warnings with mapped ranges; preserve compiler/parser failures as errors, continue emission for recoverable cases, and verify both severities in every editor adapter | 2.1–2.4 |
+| LSP-2  | 2.5 unsupported-AST diagnostics        | OPEN        | Classify recovered/unsupported AST fragments as warnings with mapped ranges; preserve compiler/parser failures as errors, continue emission for recoverable cases, and verify both severities in every editor adapter; implicitly fatal transcoder crashes may stop generation | 2.1–2.4 |
 | LSP-7  | 7.6a sustained throughput              | DONE        | 60-second gate completed 2,202 rounds and 46,242 document requests on Linux/JDK 21                                                     | 7.7 host matrix |
 | LSP-7  | 7.6b fairness/starvation               | DONE        | Every sustained round completed its post-cancellation tail request without starvation                                                  | 7.7 host matrix |
 | LSP-7  | 7.6c memory budget                     | DONE        | 60-second run stayed within the 64 MiB post-GC growth ceiling, reporting a −567,968 byte delta                                         | 7.7 host matrix |

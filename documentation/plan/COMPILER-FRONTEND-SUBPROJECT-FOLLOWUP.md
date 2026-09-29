@@ -42,7 +42,7 @@ This is the planning view. The tables below are the evidence ledger; they descri
 - `EXTERNAL` means the repository is configured but a supported CI host or release environment must provide the evidence.
 - New edge cases stay under the nearest task unless they introduce a new invariant. That rule keeps the scope finite.
 - Every completed task records its command, fixture, source-map/diagnostic expectation where applicable, and date in the follow-up log.
-- Diagnostics are non-blocking by default: warnings and recoverable errors must retain mapped source locations and allow code generation to continue; only fatal input/output or incoherent-pass failures may stop emission.
+- Diagnostics are non-blocking by default: warnings and recoverable errors must retain mapped source locations and allow code generation to continue; implicitly fatal conditions, including a transcoder crash or incoherent pass, may stop emission.
 
 ## Subproject charter
 
