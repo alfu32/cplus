@@ -43,6 +43,19 @@ tasks.test {
     })
 }
 
+tasks.register<Test>("benchmarkLsp") {
+    group = "verification"
+    description = "Measures cold in-memory LSP protocol session latency."
+    dependsOn(tasks.testClasses)
+    testClassesDirs = tasks.test.get().testClassesDirs
+    classpath = tasks.test.get().classpath
+    useJUnitPlatform {
+        includeTags("lsp-benchmark")
+    }
+    testLogging.showStandardStreams = true
+    outputs.upToDateWhen { false }
+}
+
 tasks.jar {
     manifest {
         attributes["Main-Class"] = "cplus.MainKt"

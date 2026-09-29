@@ -44,7 +44,17 @@ class CPlusLspServer(
         try {
             while (true) {
             val message = readMessage() ?: return
-            val request = runCatching { Json.parse(message) as? Json.Object }.getOrNull() ?: continue
+            val parsed = try {
+                Json.parse(message)
+            } catch (_: Exception) {
+                respondError(null, -32700, "invalid JSON")
+                continue
+            }
+            val request = parsed as? Json.Object
+            if (request == null) {
+                respondError(null, -32600, "request must be a JSON object")
+                continue
+            }
             val method = request.string("method")
             if (method == null) {
                 request.values["id"]?.let { respondError(it, -32600, "request method is required") }
@@ -336,7 +346,18 @@ class CPlusLspServer(
     private fun completions(request: Json.Object): String {
         val document = request.uri()?.let(documents::get) ?: return "{\"isIncomplete\":false,\"items\":[]}"
         val prefix = document.wordAt(request.position())
-        val names = (CPLUS_KEYWORDS.asSequence() + document.symbols.asSequence().map { it.name })
+        val offset = document.snapshot.offsetAt(request.position())
+        val receiver = offset?.let { receiverType(document, it) }
+        val visible = visibleSymbols(document).toList()
+        val receiverScopes = receiver?.let { typeName ->
+            visible.filter { it.name == typeName && it.kind == 23 }.map { it.scope }
+        }.orEmpty()
+        val symbols = visible.asSequence().filter { symbol ->
+            receiver == null || symbol.ownerName == receiver ||
+                (symbol.name != receiver && receiverScopes.any { it.contains(symbol.selection) })
+        }
+        val keywordNames = if (receiver == null) CPLUS_KEYWORDS.asSequence() else emptySequence()
+        val names = (keywordNames + symbols.map { it.name })
             .filter { prefix.isEmpty() || it.startsWith(prefix) }
             .distinct()
             .sorted()
@@ -364,21 +385,88 @@ class CPlusLspServer(
         val word = document.wordAt(request.position())
         if (word.isEmpty()) return null
         val offset = document.snapshot.offsetAt(request.position()) ?: return null
-        val candidates = documents.values.asSequence()
-            .flatMap { candidate -> candidate.symbols.asSequence() }
+        val candidates = visibleSymbols(document)
             .filter { it.name == word }
             .toList()
-        receiverType(document, offset)?.let { receiverType ->
-            candidates.firstOrNull { it.ownerName == receiverType }?.let { return it }
+        val callArity = callArity(document.snapshot.text, offset)
+        val orderedCandidates = if (callArity == null) candidates else {
+            candidates.sortedWith(compareBy<LspSymbol> {
+                parameterArity(it)?.let { arity -> kotlin.math.abs(arity - callArity) } ?: Int.MAX_VALUE
+            }.thenBy { it.selection.startOffset })
         }
-        return candidates
+        receiverType(document, offset)?.let { receiverType ->
+            orderedCandidates.firstOrNull { it.ownerName == receiverType }?.let { return it }
+        }
+        return orderedCandidates
             .filter { it.uri == document.uri && it.scope.contains(offset) }
             .sortedWith(compareBy<LspSymbol> { it.scope.size() }.thenByDescending { it.selection.startOffset })
             .firstOrNull()
-            ?: candidates
+            ?: orderedCandidates
                 .filter { it.uri == document.uri && it.selection.startOffset <= offset }
                 .maxByOrNull { it.selection.startOffset }
-            ?: candidates.firstOrNull()
+            ?: orderedCandidates.firstOrNull()
+    }
+
+    private fun callArity(text: String, offset: Int): Int? {
+        var cursor = offset.coerceIn(0, text.length)
+        while (cursor < text.length && text[cursor].isIdentifierPart()) cursor++
+        while (cursor < text.length && text[cursor].isWhitespace()) cursor++
+        if (cursor >= text.length || text[cursor] != '(') return null
+        var depth = 0
+        var arguments = 0
+        var sawToken = false
+        var index = cursor + 1
+        while (index < text.length) {
+            when (text[index]) {
+                '(' , '[', '{' -> depth++
+                ')' -> if (depth == 0) return if (sawToken) arguments + 1 else 0 else depth--
+                ']' , '}' -> if (depth > 0) depth--
+                ',' -> if (depth == 0) arguments++
+                else -> if (!text[index].isWhitespace()) sawToken = true
+            }
+            index++
+        }
+        return null
+    }
+
+    private fun parameterArity(symbol: LspSymbol): Int? {
+        if (symbol.kind !in setOf(6, 12)) return null
+        val open = symbol.detail.indexOf('(')
+        val close = symbol.detail.indexOf(')', open + 1)
+        if (open < 0 || close < 0) return null
+        val parameters = symbol.detail.substring(open + 1, close).trim()
+        if (parameters.isEmpty() || parameters == "void") return 0
+        var depth = 0
+        var count = 1
+        parameters.forEach { character ->
+            when (character) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> if (depth > 0) depth--
+                ',' -> if (depth == 0) count++
+            }
+        }
+        return count
+    }
+
+    /** Symbols visible from a document are local symbols plus its resolved import closure. */
+    private fun visibleSymbols(document: LspDocument): Sequence<LspSymbol> {
+        val reachable = reachableDocuments(document.uri)
+        return reachable.asSequence()
+            .mapNotNull(documents::get)
+            .flatMap { candidate -> candidate.symbols.asSequence() }
+            .distinctBy { it.uri to it.selection.startOffset }
+    }
+
+    private fun reachableDocuments(root: String): Set<String> {
+        val reachable = linkedSetOf<String>()
+        val pending = ArrayDeque<String>()
+        pending += root
+        while (pending.isNotEmpty()) {
+            val uri = pending.removeFirst()
+            if (!reachable.add(uri)) continue
+            pending.addAll(importsByDocument[uri].orEmpty())
+        }
+        return reachable
     }
 
     private fun receiverType(document: LspDocument, offset: Int): String? {
@@ -392,7 +480,7 @@ class CPlusLspServer(
                 .minByOrNull { it.scope.size() }
                 ?.ownerName
         }
-        return document.symbols
+        return visibleSymbols(document)
             .asSequence()
             .filter { it.name == receiver && it.kind == 13 && it.selection.startOffset <= offset }
             .sortedWith(compareBy<LspSymbol> { !it.scope.contains(offset) }.thenByDescending { it.selection.startOffset })
@@ -439,8 +527,8 @@ class CPlusLspServer(
         respond(id, payload)
     }
 
-    private fun respondError(id: Json, code: Int, message: String) =
-        write("{\"jsonrpc\":\"2.0\",\"id\":${id.encode()},\"error\":{\"code\":$code,\"message\":${Json.string(message)}}}")
+    private fun respondError(id: Json?, code: Int, message: String) =
+        write("{\"jsonrpc\":\"2.0\",\"id\":${id?.encode() ?: "null"},\"error\":{\"code\":$code,\"message\":${Json.string(message)}}}")
 
     private fun write(message: String) {
         synchronized(output) {
@@ -568,7 +656,12 @@ private object LspSymbolIndex {
                         parsedText.substring(node.span.startOffset, node.span.endOffset)
                             .replace(Regex("\\s+"), " ").trim().take(160),
                         mapSpan(node.span), mapSpan(nameNode.span), mapSpan(nestedScope),
-                        ownerName.takeIf { node.kind == CPlusAstKind.METHOD_DECLARATION }
+                        ownerName.takeIf {
+                            node.kind == CPlusAstKind.METHOD_DECLARATION ||
+                                node.kind == CPlusAstKind.FIELD_DECLARATION ||
+                                (node.kind == CPlusAstKind.VARIABLE_DECLARATION &&
+                                    node.syntaxKind == "field_declaration")
+                        }
                     )
                 }
             }
@@ -626,6 +719,9 @@ private fun SourceSpan.toRangeJson(): String =
 
 private fun SourceSpan.contains(offset: Int): Boolean =
     offset in startOffset until endOffset
+
+private fun SourceSpan.contains(other: SourceSpan): Boolean =
+    file == other.file && startOffset <= other.startOffset && other.endOffset <= endOffset
 
 private fun SourceSpan.size(): Int = (endOffset - startOffset).coerceAtLeast(0)
 

@@ -66,7 +66,8 @@ Subphases:
 1. Implement `Content-Length` frame reading and writing.
 2. Implement `initialize`, `initialized`, `shutdown`, and `exit`.
 3. Return standard `-32600`, `-32601`, and `-32602` errors without terminating
-   the server; ignore or report malformed notifications safely.
+   the server; malformed JSON returns `-32700` with a null ID, and valid
+   non-object messages return `-32600`.
 4. Keep stdout protocol-clean; diagnostics and operational logs go to stderr.
 
 Gate: fragmented frames, multiple messages, malformed requests, shutdown, and
@@ -191,9 +192,11 @@ loop until their local acceptance tests pass.
 
 ## Current execution plan
 
-The active work is deliberately limited to the local LSP slice. Complete these
-items in order; do not start release packaging or CI integration until the
-listed local gate passes.
+The local implementation sequence through client construction and launch
+recovery is complete. The remaining work is evidence-oriented: close the
+interactive IntelliJ fixture, record the reliability/performance measurements,
+then validate release-host discovery. Do not treat a locally packaged artifact
+as proof of supported-host release behavior.
 
 | Order | Work item                                                | Depends on | Acceptance gate                                                                                                          |
 |-------|----------------------------------------------------------|------------|--------------------------------------------------------------------------------------------------------------------------|
@@ -209,11 +212,12 @@ listed local gate passes.
 | 10    | LSP-7: reliability and performance evidence              | LSP-6      | Framing fuzz cases, restart behavior, and corpus latency measurements are recorded                                       |
 | 11    | LSP-8: distribution discovery and release packaging      | LSP-7      | Bare and bundled distributions launch `cplus lsp` with clean stdout                                                      |
 
-The current code has completed items 1–9 locally for adapter construction and
-packaging. Item 9 still needs an interactive IntelliJ protocol fixture and
-client restart coverage before it can close completely. Items 10–11 remain
-planned work; the adapters are not a substitute for reliability or release
-evidence.
+The current code has completed items 1–9 locally for adapter construction,
+restart behavior, and packaging. Item 9 still needs an interactive IntelliJ
+protocol fixture and client restart coverage before it can close completely.
+Items 10–11 remain active evidence work: broader framing/position/recovery
+fuzzing, corpus latency measurements, and supported-host release validation.
+The adapters are not a substitute for reliability or release evidence.
 
 ## Current status ledger
 
@@ -224,10 +228,10 @@ evidence.
 | LSP-2 | DONE        | Open/change/close snapshots publish parser diagnostics locally                                                                                                                                                                                                |
 | LSP-3 | DONE        | Normalized-AST structural symbols are indexed locally                                                                                                                                                                                                         |
 | LSP-4 | DONE-LOCAL  | Symbols, completion, hover, and definition pass the local protocol fixture                                                                                                                                                                                    |
-| LSP-5 | IN PROGRESS | Open-document `workspace/symbol`, bounded imports, dependency invalidation, lexical/receiver lookup, evaluator-backed comptime symbols, cancellation/revision guards, and bounded cooperative scheduling are implemented; broader semantic resolution remains |
-| LSP-6 | DONE-LOCAL | VS Code, Vim, and IntelliJ have opt-in adapters that launch the shared `cplus lsp` process; IntelliJ 2026.2.2 packaging/tests pass. Interactive parity and release packaging remain separate gates |
-| LSP-7 | IN PROGRESS | Cancellation, fair bounded scheduling, deterministic fragmented-frame coverage, malformed-frame recovery, UTF-16 position coverage, bounded VS Code/Vim restart recovery, IntelliJ platform-managed restart action, and CLI incremental parse-session reuse are implemented; add broader recovery fuzzing and performance evidence |
-| LSP-8 | IN PROGRESS | `:cli:fatJar`, VS Code VSIX, IntelliJ plugin, and Vim archives build locally; extracted bare and six-host cross-runtime `cplus-0.5.47` launchers start `cplus lsp` with clean JSON-RPC stdout. Supported-host release validation and interactive IntelliJ coverage remain |
+| LSP-5 | IN PROGRESS | Open-document `workspace/symbol`, bounded imports, import-closure visibility for completion/definition, receiver-aware member completion, dependency invalidation, lexical/receiver lookup, evaluator-backed comptime symbols, cancellation/revision guards, and bounded cooperative scheduling are implemented; broader semantic resolution remains |
+| LSP-6 | DONE-LOCAL | VS Code, Vim, and IntelliJ have opt-in adapters that launch the shared `cplus lsp` process; IntelliJ command construction covers configured executables and quoted `java -jar` paths, and IntelliJ 2026.2.2 packaging/tests pass. Interactive parity and release packaging remain separate gates |
+| LSP-7 | IN PROGRESS | Cancellation, fair bounded scheduling, 128 deterministic fragmented-frame runs, 64 malformed-frame/recovery runs, UTF-16 position coverage, bounded VS Code/Vim restart recovery, IntelliJ platform-managed restart action, and CLI incremental parse-session reuse are implemented. Opt-in `:cli:benchmarkLsp` reports a local median of 3.922 ms for three cold in-memory sessions over seven samples; cross-host and memory evidence remain |
+| LSP-8 | IN PROGRESS | `editorArtifacts` rebuilds the versioned VS Code `0.5.47` VSIX, IntelliJ 2026.2.2 plugin, and Vim archives; VS Code npm smoke and headless Vim LSP/outline fixtures pass. Extracted bare and six-host cross-runtime `cplus-0.5.47` launchers start `cplus lsp` with clean JSON-RPC stdout. Supported-host release validation and interactive IntelliJ coverage remain |
 
 Local verification command:
 

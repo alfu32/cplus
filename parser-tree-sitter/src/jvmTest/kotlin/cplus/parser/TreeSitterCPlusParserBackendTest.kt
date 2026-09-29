@@ -6585,6 +6585,59 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
     }
 
     @Test
+    fun astCEmitterPreservesStructuredControlFlowAndLabels() {
+        val text = """
+            #include <stdio.h>
+            int main(void) {
+                int value = 0;
+                do {
+                    value++;
+                } while (value < 2);
+                switch (value) {
+                    case 1:
+                        value = 10;
+                        break;
+                    case 2:
+                        value = 20;
+                        break;
+                    default:
+                        value = -1;
+                }
+                if (value == 20) {
+                    goto done;
+                } else if (value < 0) {
+                    return 1;
+                } else {
+                    value = 0;
+                }
+            done:
+                return value == 20 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-c-emitter-control-flow.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val emission = CPlusAstCEmitter().emit(
+            CPlusAstAdapter().adapt(parsed),
+            MappedText.identity(source.sourceFile)
+        )
+
+        assertTrue(emission.diagnostics.isEmpty(), emission.diagnostics.toString())
+        val generated = emission.source ?: error("complete AST should emit C")
+        assertTrue("do {" in generated.text, generated.text)
+        assertTrue("} while (value < 2);" in generated.text, generated.text)
+        assertTrue("switch (value)" in generated.text, generated.text)
+        assertTrue("case 2:" in generated.text, generated.text)
+        assertTrue("default:" in generated.text, generated.text)
+        assertTrue("} else if (value < 0)" in generated.text, generated.text)
+        assertTrue("done:" in generated.text, generated.text)
+        val reparsed = backend.parse(sources.open(SourceId.named("ast-c-emitter-control-flow.c"), generated.text))
+        assertTrue(reparsed.diagnostics.isEmpty(), reparsed.diagnostics.toString())
+        compileAndRunC(generated.text)
+    }
+
+    @Test
     fun extractsMethodsAndCompilesTheResultingPlainCWithSystemCcWhenAvailable() {
         val text = """
             typedef struct counter_t {

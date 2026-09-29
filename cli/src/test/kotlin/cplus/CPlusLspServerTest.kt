@@ -75,7 +75,7 @@ class CPlusLspServerTest {
         ).joinToString("") { frame(it) }
         val bytes = messages.toByteArray(StandardCharsets.UTF_8)
 
-        repeat(32) { seed ->
+        repeat(128) { seed ->
             val output = ByteArrayOutputStream()
             CPlusLspServer(
                 ChunkedInputStream(bytes, Random(seed).nextInt(1, 19)),
@@ -85,6 +85,36 @@ class CPlusLspServerTest {
             assertTrue(response.contains("\"id\":1,\"result\":{"), "initialize failed for seed $seed")
             assertTrue(response.contains("\"id\":2,\"result\":["), "symbols failed for seed $seed")
             assertTrue(response.contains("\"name\":\"fragmented_t\""), "symbol missing for seed $seed")
+            assertTrue(response.contains("\"id\":3,\"result\":null"), "shutdown failed for seed $seed")
+        }
+    }
+
+    @Test
+    fun recoversFromMalformedFramesUnderArbitraryFragmentation() {
+        val uri = "file:///fragmented-recovery.cp"
+        val source = "int main(void) { return 0; }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            frame("{malformed"),
+            frame("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"),
+            frame("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}"),
+            frame("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/documentSymbol\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"}}}"),
+            frame("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}")
+        ).joinToString("")
+        val bytes = messages.toByteArray(StandardCharsets.UTF_8)
+
+        repeat(64) { seed ->
+            val output = ByteArrayOutputStream()
+            CPlusLspServer(
+                ChunkedInputStream(bytes, Random(seed + 10_000).nextInt(1, 23)),
+                output
+            ).serve()
+            val response = output.toString(StandardCharsets.UTF_8)
+            assertTrue(response.contains("\"code\":-32700"), "parse error missing for seed $seed")
+            assertTrue(response.contains("\"id\":1,\"result\":{"), "initialize failed for seed $seed")
+            assertTrue(response.contains("\"id\":2,\"result\":["), "symbols failed for seed $seed")
             assertTrue(response.contains("\"id\":3,\"result\":null"), "shutdown failed for seed $seed")
         }
     }
@@ -130,6 +160,23 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun rejectsValidNonObjectJsonAndContinuesTheSession() {
+        val messages = listOf(
+            frame("[]"),
+            frame("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"),
+            frame("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":null}")
+        ).joinToString("")
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":null,\"error\":{\"code\":-32600"), response)
+        assertTrue(response.contains("\"id\":1,\"result\":{"), response)
+        assertTrue(response.contains("\"id\":2,\"result\":null"), response)
+    }
+
+    @Test
     fun resolvesTheNearestLexicalDeclarationForAReference() {
         val uri = "file:///scope.cp"
         val source = "int f(void) {\n" +
@@ -156,6 +203,30 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesAnOverloadedFunctionByCallArity() {
+        val uri = "file:///overload.cp"
+        val source = "int choose(int value) { return value; }\n" +
+            "int choose(int first, int second) { return first + second; }\n" +
+            "int main(void) { return choose(1, 2); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val callPosition = source.lines()[2].indexOf("choose")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$callPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":1,"), response)
+    }
+
+    @Test
     fun resolvesAReceiverMethodAgainstTheDeclaredStructType() {
         val uri = "file:///receiver.cp"
         val source = "typedef struct counter_t {\n" +
@@ -163,14 +234,28 @@ class CPlusLspServerTest {
             "    int value;\n" +
             "} counter_t;\n" +
             "typedef counter_t counter_alias_t;\n" +
-            "int main(void) { counter_alias_t c; return c.get(); }\n"
+            "int main(void) { counter_alias_t c; counter_alias_t *pointer = &c; return c.get() + c.value + pointer->get() + pointer->value; }\n"
         val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val mainLine = source.lines()[5]
+        val methodPosition = mainLine.indexOf('.') + 1
+        val fieldPosition = mainLine.indexOf("value") + 2
+        val methodReference = mainLine.indexOf("get")
+        val pointerMethodReference = mainLine.lastIndexOf("get")
+        val pointerFieldPosition = mainLine.lastIndexOf("value") + 2
         val messages = listOf(
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
             "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
                 "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
-                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":5,\"character\":46}}}",
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":5,\"character\":$methodReference}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":5,\"character\":$methodPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":5,\"character\":$fieldPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":5,\"character\":$pointerMethodReference}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":5,\"character\":$pointerFieldPosition}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
         ).joinToString("") { frame(it) }
         val output = ByteArrayOutputStream()
@@ -180,6 +265,13 @@ class CPlusLspServerTest {
         val response = output.toString(StandardCharsets.UTF_8)
         assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\""), response)
         assertTrue(response.contains("\"start\":{\"line\":1,\"character\":12}"))
+        assertTrue(response.contains("\"id\":4,\"result\":{\"isIncomplete\":false"), response)
+        assertTrue(response.contains("\"label\":\"get\""), response)
+        assertTrue(!response.contains("\"label\":\"return\""), response)
+        assertTrue(response.contains("\"id\":5,\"result\":{\"isIncomplete\":false"), response)
+        assertTrue(response.contains("\"label\":\"value\""), response)
+        assertTrue(response.contains("\"id\":6,\"result\":[{\"uri\":\"$uri\""), response)
+        assertTrue(response.contains("\"id\":7,\"result\":{\"isIncomplete\":false"), response)
     }
 
     @Test
@@ -347,6 +439,38 @@ class CPlusLspServerTest {
         assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"manifest_import_t\""))
         assertTrue(response.contains("\"uri\":\"${dependency.toUri()}\""), response)
         assertTrue(response.contains("\"id\":4,\"result\":[{\"uri\":\"${dependency.toUri()}\""))
+    }
+
+    @Test
+    fun resolvesCompletionAndDefinitionOnlyThroughTheOpenDocumentImportClosure(@TempDir directory: Path) {
+        val dependency = directory.resolve("dependency.cp")
+        Files.writeString(dependency, "int imported_function(int value) { return value + 1; }\n")
+        val unrelated = directory.resolve("unrelated.cp")
+        Files.writeString(unrelated, "int hidden_function(void) { return 0; }\n")
+        val root = directory.resolve("main.cp")
+        val uri = root.toUri().toString()
+        val source = "comptime import \"dependency.cp\";\nint main(void) { return imported_function(1); }\n"
+        fun encode(value: String) = value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val reference = source.indexOf("imported_function", source.indexOf("int main")) - source.indexOf('\n') - 1
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"${directory.toUri()}\"}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"${encode(source)}\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":1,\"character\":$reference}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":1,\"character\":$reference}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"${dependency.toUri()}\""), response)
+        assertTrue(response.contains("\"id\":3,\"result\":{\"isIncomplete\":false"), response)
+        assertTrue(response.contains("\"label\":\"imported_function\""), response)
+        assertTrue(!response.contains("\"label\":\"hidden_function\""), response)
     }
 
     private class ChunkedInputStream(

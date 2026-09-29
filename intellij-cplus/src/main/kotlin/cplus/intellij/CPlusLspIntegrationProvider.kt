@@ -25,12 +25,12 @@ private class CPlusLspServerDescriptor(project: Project) : ProjectWideLspClientD
 
     override fun createCommandLine(): GeneralCommandLine {
         val configured = CPlusSettings.getInstance().current().languageServerCommand.trim()
-        val command = splitCommand(configured.ifEmpty { "cplus" })
-        require(command.isNotEmpty()) { "C-plus language server command must not be empty" }
-        return GeneralCommandLine(command + "lsp")
+        return GeneralCommandLine(CPlusLspCommand.arguments(configured.ifEmpty { "cplus" }))
     }
+}
 
-    private fun splitCommand(command: String): List<String> {
+internal object CPlusLspCommand {
+    fun arguments(command: String): List<String> {
         val result = mutableListOf<String>()
         val current = StringBuilder()
         var quote: Char? = null
@@ -55,6 +55,7 @@ private class CPlusLspServerDescriptor(project: Project) : ProjectWideLspClientD
         }
         if (escaped) current.append('\\')
         if (current.isNotEmpty()) result += current.toString()
-        return result
+        require(result.isNotEmpty()) { "C-plus language server command must not be empty" }
+        return result + "lsp"
     }
 }
