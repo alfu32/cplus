@@ -550,9 +550,12 @@ class CPlusLspServer(
             .filter { it.name == word }
             .toList()
         val callArity = callArity(document.snapshot.text, offset)
+        val callArguments = callArguments(document.snapshot.text, offset)
         val orderedCandidates = if (callArity == null) candidates else {
             candidates.sortedWith(compareBy<LspSymbol> {
-                parameterArity(it)?.let { arity -> kotlin.math.abs(arity - callArity) } ?: Int.MAX_VALUE
+                overloadScore(document, it, callArguments)
+                    ?: parameterArity(it)?.let { arity -> 100 + kotlin.math.abs(arity - callArity) }
+                    ?: Int.MAX_VALUE
             }.thenBy { it.selection.startOffset })
         }
         receiverType(document, offset)?.let { receiverType ->
@@ -569,25 +572,107 @@ class CPlusLspServer(
     }
 
     private fun callArity(text: String, offset: Int): Int? {
+        return callArguments(text, offset)?.size
+    }
+
+    private fun callArguments(text: String, offset: Int): List<String>? {
         var cursor = offset.coerceIn(0, text.length)
         while (cursor < text.length && text[cursor].isIdentifierPart()) cursor++
         while (cursor < text.length && text[cursor].isWhitespace()) cursor++
         if (cursor >= text.length || text[cursor] != '(') return null
         var depth = 0
-        var arguments = 0
-        var sawToken = false
+        var start = cursor + 1
+        val arguments = mutableListOf<String>()
         var index = cursor + 1
         while (index < text.length) {
             when (text[index]) {
                 '(' , '[', '{' -> depth++
-                ')' -> if (depth == 0) return if (sawToken) arguments + 1 else 0 else depth--
+                ')' -> if (depth == 0) {
+                    val last = text.substring(start, index).trim()
+                    if (last.isNotEmpty()) arguments += last
+                    return arguments
+                } else depth--
                 ']' , '}' -> if (depth > 0) depth--
-                ',' -> if (depth == 0) arguments++
-                else -> if (!text[index].isWhitespace()) sawToken = true
+                ',' -> if (depth == 0) {
+                    arguments += text.substring(start, index).trim()
+                    start = index + 1
+                }
             }
             index++
         }
         return null
+    }
+
+    private fun overloadScore(document: LspDocument, symbol: LspSymbol, arguments: List<String>?): Int? {
+        if (arguments == null) return null
+        val parameters = parameterTypes(symbol) ?: return null
+        if (parameters.size != arguments.size) return null
+        return parameters.zip(arguments).sumOf { (parameter, argument) ->
+            typeMatchScore(document, parameter, argument)
+        }
+    }
+
+    private fun parameterTypes(symbol: LspSymbol): List<TypeShape>? {
+        if (symbol.kind !in setOf(6, 12)) return null
+        val open = symbol.detail.indexOf('(')
+        val close = symbol.detail.indexOf(')', open + 1)
+        if (open < 0 || close < 0) return null
+        val parameters = symbol.detail.substring(open + 1, close).trim()
+        if (parameters.isEmpty() || parameters == "void") return emptyList()
+        val result = mutableListOf<String>()
+        var depth = 0
+        var start = 0
+        parameters.forEachIndexed { index, character ->
+            when (character) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> if (depth > 0) depth--
+                ',' -> if (depth == 0) {
+                    result += parameters.substring(start, index).trim()
+                    start = index + 1
+                }
+            }
+        }
+        result += parameters.substring(start).trim()
+        return result.mapNotNull(::typeShape)
+    }
+
+    private fun typeMatchScore(document: LspDocument, expected: TypeShape, argument: String): Int {
+        val actual = expressionType(document, argument) ?: return 50
+        val expectedBase = resolveTypeAlias(expected.base)
+        val actualBase = resolveTypeAlias(actual.base)
+        return when {
+            expectedBase == actualBase && expected.pointerDepth == actual.pointerDepth -> 0
+            expectedBase == actualBase -> 10
+            expected.pointerDepth == actual.pointerDepth -> 20
+            else -> 40
+        }
+    }
+
+    private fun typeShape(declaration: String): TypeShape? {
+        val cleaned = declaration
+            .replace(Regex("\\b(borrowed|owned|mut|const|volatile|restrict)\\b"), " ")
+            .trim()
+        val pointerDepth = cleaned.count { it == '*' }
+        val base = Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)")
+            .find(cleaned)?.groupValues?.get(1) ?: return null
+        return TypeShape(base, pointerDepth)
+    }
+
+    private fun expressionType(document: LspDocument, expression: String): TypeShape? {
+        val value = expression.trim()
+        if (value.matches(Regex("[0-9]+"))) return TypeShape("int", 0)
+        if (value.matches(Regex("[0-9]+\\.[0-9]+"))) return TypeShape("double", 0)
+        if (value.startsWith("\"") && value.endsWith("\"")) return TypeShape("char", 1)
+        if (value.startsWith("'") && value.endsWith("'")) return TypeShape("int", 0)
+        val address = value.removePrefix("&").takeIf { value.startsWith("&") }
+        val name = address ?: value
+        if (!name.matches(IDENTIFIER)) return null
+        val variable = visibleSymbols(document)
+            .filter { it.kind == 13 && it.name == name }
+            .sortedWith(compareBy<LspSymbol> { !it.scope.contains(document.snapshot.text.indexOf(value)) })
+            .firstOrNull() ?: return null
+        val declared = declaredTypeInfo(variable) ?: return null
+        return TypeShape(resolveTypeAlias(declared.typeName), declared.pointerDepth + if (address != null) 1 else 0)
     }
 
     private fun parameterArity(symbol: LspSymbol): Int? {
@@ -768,6 +853,8 @@ class CPlusLspServer(
 private data class ReceiverAccess(val typeName: String?, val operator: String)
 
 private data class DeclaredType(val typeName: String, val pointerDepth: Int)
+
+private data class TypeShape(val base: String, val pointerDepth: Int)
 
 private data class LspDocument(
     val uri: String,
