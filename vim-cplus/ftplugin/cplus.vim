@@ -15,6 +15,14 @@ command! -buffer CPlusCheck call cplus#Check()
 command! -buffer CPlusParse call cplus#Parse()
 command! -buffer CPlusSymbols call cplus#Symbols()
 command! -buffer CPlusImportGraph call cplus#ImportGraph()
+command! -buffer CPlusLspStart call cpluslsp#Start()
+command! -buffer CPlusLspStop call cpluslsp#Stop()
+command! -buffer CPlusLspRestart call cpluslsp#Restart()
+command! -buffer CPlusLspSync call cpluslsp#SyncCurrent()
+
+if get(g:, 'cplus_lsp_enable', 0)
+  call cpluslsp#Start()
+endif
 
 if get(g:, 'cplus_check_on_write', 0)
   augroup cplus_buffer_check

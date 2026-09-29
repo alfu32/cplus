@@ -4,6 +4,7 @@
     <vendor>c-plus contributors</vendor>
     <description><![CDATA[Syntax highlighting, completion, and lightweight IntelliSense for C-plus.]]></description>
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lsp</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow id="C-plus" anchor="bottom" factoryClass="cplus.intellij.CPlusOutputToolWindowFactory" />
@@ -17,8 +18,13 @@
         <completion.contributor language="C-plus" implementationClass="cplus.intellij.CPlusCompletionContributor" />
         <gotoDeclarationHandler implementationClass="cplus.intellij.CPlusGotoDeclarationHandler" />
         <runLineMarkerContributor language="C-plus" implementationClass="cplus.intellij.CPlusTestRunLineMarkerContributor" />
+        <platform.lsp.integrationProvider implementation="cplus.intellij.CPlusLspIntegrationProvider" />
     </extensions>
     <actions>
+        <action id="cplus.restartLanguageServer" class="cplus.intellij.CPlusRestartLspAction"
+                text="Restart C-plus Language Server" description="Restart the configured C-plus language server">
+            <add-to-group group-id="ToolsMenu" anchor="last" />
+        </action>
         <action id="cplus.showImportGraph" class="cplus.intellij.CPlusShowImportGraphAction"
                 text="Show C-plus Import Graph" description="Resolve imports and open an imported C-plus source">
             <add-to-group group-id="EditorPopupMenu" anchor="last" />

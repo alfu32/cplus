@@ -20,15 +20,16 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
         var runnerCommand: String = "cplus run",
         var testProgram: String = "cplus test",
         var parserCommand: String = "",
-        var importGraphCommand: String = "cplus graph"
+        var importGraphCommand: String = "cplus graph",
+        var languageServerCommand: String = "cplus"
     )
 
     private var state = State()
     override fun getState(): State = state
     override fun loadState(state: State) { this.state = state }
     fun current(): State = state
-    fun update(compiler: String, runner: String, program: String, parser: String, importGraph: String) {
-        state = State(compiler, runner, program, parser, importGraph)
+    fun update(compiler: String, runner: String, program: String, parser: String, importGraph: String, languageServer: String) {
+        state = State(compiler, runner, program, parser, importGraph, languageServer)
     }
 
     companion object {
@@ -43,6 +44,7 @@ class CPlusSettingsConfigurable : Configurable {
     private var testProgram = JTextField()
     private var parser = JTextField()
     private var importGraph = JTextField()
+    private var languageServer = JTextField()
 
     override fun getDisplayName(): String = "C-plus"
 
@@ -52,13 +54,15 @@ class CPlusSettingsConfigurable : Configurable {
         testProgram = JTextField(CPlusSettings.getInstance().current().testProgram)
         parser = JTextField(CPlusSettings.getInstance().current().parserCommand)
         importGraph = JTextField(CPlusSettings.getInstance().current().importGraphCommand)
+        languageServer = JTextField(CPlusSettings.getInstance().current().languageServerCommand)
         return JPanel(GridBagLayout()).apply {
             val fields = listOf(
                 "Compiler command" to compiler,
                 "Runner command" to runner,
                 "Test program command" to testProgram,
                 "Parser command (optional)" to parser,
-                "Import graph command" to importGraph
+                "Import graph command" to importGraph,
+                "Language server command" to languageServer
             )
             fields.forEachIndexed { row, (label, field) ->
                 val labelConstraints = GridBagConstraints().apply {
@@ -83,12 +87,13 @@ class CPlusSettingsConfigurable : Configurable {
         val state = CPlusSettings.getInstance().current()
         return compiler.text != state.compilerCommand || runner.text != state.runnerCommand ||
             testProgram.text != state.testProgram || parser.text != state.parserCommand ||
-            importGraph.text != state.importGraphCommand
+            importGraph.text != state.importGraphCommand || languageServer.text != state.languageServerCommand
     }
 
     override fun apply() {
         CPlusSettings.getInstance().update(
-            compiler.text.trim(), runner.text.trim(), testProgram.text.trim(), parser.text.trim(), importGraph.text.trim()
+            compiler.text.trim(), runner.text.trim(), testProgram.text.trim(), parser.text.trim(), importGraph.text.trim(),
+            languageServer.text.trim()
         )
     }
 
@@ -99,6 +104,7 @@ class CPlusSettingsConfigurable : Configurable {
         testProgram.text = state.testProgram
         parser.text = state.parserCommand
         importGraph.text = state.importGraphCommand
+        languageServer.text = state.languageServerCommand
     }
 
     override fun disposeUIResources() { panel = null }

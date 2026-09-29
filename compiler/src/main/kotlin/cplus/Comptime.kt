@@ -1059,6 +1059,31 @@ internal class ComptimeCompiler(
     }
 }
 
+/**
+ * Materializes C-plus for tooling consumers such as the LSP without exposing
+ * the evaluator's internal environment. The returned source retains origins
+ * for every generated character so clients can map declarations back to the
+ * invocation that produced them.
+ */
+data class CPlusToolMaterialization(
+    val source: SourceFile,
+    val mapping: MappedText
+)
+
+fun materializeCPlusForTools(
+    source: SourceFile,
+    importPaths: CPlusImportPaths = CPlusImportPaths(),
+    targetOs: String = CPlusTarget.hostOs()
+): CPlusToolMaterialization {
+    val runtime = ComptimeCompiler(
+        root = source,
+        logger = SilentCompilationLogger,
+        importPaths = importPaths,
+        targetOs = targetOs
+    ).compile(resolveTestBodies = false, extractTests = true).runtime
+    return CPlusToolMaterialization(SourceFile(runtime.text, source.name, runtime), runtime)
+}
+
 /** Returns the first source span owned by the legacy comptime parser, if any. */
 internal fun firstLegacyComptimeItemSpan(source: SourceFile): SourceSpan? =
     ComptimeParser(source).parse().items.minByOrNull { it.start }?.let { source.span(it.start, it.end) }

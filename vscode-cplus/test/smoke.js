@@ -32,6 +32,11 @@ for (const value of ["assertEquals", "CPLUS_TEST_ASSERT_EQUALS", "comptime\\\\s+
 }
 
 const packageManifest = JSON.parse(readFileSync("package.json", "utf8"));
+assert.equal(packageManifest.contributes.configuration.properties["cplus.languageServer"].default, false);
+assert.ok(packageManifest.contributes.configuration.properties["cplus.languageServerCommand"]);
+assert.ok(readFileSync("out/lspClient.js", "utf8").includes("textDocument/publishDiagnostics"));
+assert.ok(readFileSync("out/lspClient.js", "utf8").includes("restarting once"));
+assert.ok(packageManifest.contributes.commands.some((command) => command.command === "cplus.restartLanguageServer"));
 const cplusIconTheme = packageManifest.contributes.iconThemes.find((theme) => theme.id === "cplus-file-icons");
 assert.ok(cplusIconTheme, "C-plus file icon theme must be contributed");
 const iconTheme = JSON.parse(readFileSync("icons/cplus-icon-theme.json", "utf8"));

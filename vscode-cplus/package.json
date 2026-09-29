@@ -62,6 +62,10 @@
       {
         "command": "cplus.showImportGraph",
         "title": "C-plus: Show Import Graph"
+      },
+      {
+        "command": "cplus.restartLanguageServer",
+        "title": "C-plus: Restart Language Server"
       }
     ],
     "configuration": {
@@ -109,6 +113,24 @@
           "type": "boolean",
           "default": false,
           "description": "Run the normalized Tree-sitter parser on save and show its source-mapped diagnostics. Requires a C-plus CLI with the parse command."
+        },
+        "cplus.languageServer": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use the CLI-owned C-plus language server for completion, hover, definitions, symbols, and diagnostics."
+        },
+        "cplus.languageServerCommand": {
+          "type": "string",
+          "default": "cplus",
+          "description": "Executable used to start the C-plus language server."
+        },
+        "cplus.languageServerArguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Arguments passed before the built-in `lsp` subcommand when starting the language server."
         }
       }
     }

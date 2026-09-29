@@ -2634,7 +2634,7 @@ class TreeSitterCPlusParserBackendTest {
         val generated = result.cSource!!.text
         assertTrue("int list_map(" in generated, generated.takeLast(8_000))
         assertTrue("named_value_list_t *input" in generated, generated.takeLast(8_000))
-        assertTrue("int(*callback)(CPLUS_BORROWED named_value_t *item, size_t index)" in generated, generated.takeLast(8_000))
+        assertTrue("int (*callback)(CPLUS_BORROWED named_value_t *item, size_t index)" in generated, generated.takeLast(8_000))
         assertFalse("@InputList" in generated || "@OutputList" in generated || "@T" in generated || "@R" in generated, generated.takeLast(8_000))
         assertC11Syntax(generated, "examples/generic_list.cp")
         val compiler = cplusTestCompilers(listOf("cc", "gcc", "clang")).firstOrNull { candidate ->
@@ -6480,7 +6480,7 @@ class TreeSitterCPlusParserBackendTest {
     fun astCEmitterWritesNormalizedTokensWithOriginsAndVerbatimPreprocessorRegions() {
         val text = """#include <stddef.h>
 #define CPLUS_ANSWER() 42
-int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emitted comment
+int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=values[0]+2; int transformed=-values[0]*~values[1]+(int)!values[2]; (void) transformed; (void)*pointer; // token-emitted comment
     for (int i=0;i<3;i++) value += i;
     return value==CPLUS_ANSWER()+3?0:1;
 }"""
@@ -6498,8 +6498,11 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertTrue("// token-emitted comment" in generated.text, generated.text)
         assertFalse("int main ( void )" in generated.text, generated.text)
         assertTrue("int main(void) {\n    int values[3] = {" in generated.text, generated.text)
+        assertTrue("int *pointer = values;" in generated.text, generated.text)
+        assertTrue("int transformed = -values[0] * ~values[1] + (int) !values[2];" in generated.text, generated.text)
+        assertTrue("(void) *pointer;" in generated.text, generated.text)
         assertTrue("int value = values[0] + 2;" in generated.text, generated.text)
-        assertTrue("for (int i = 0; i < 3; i ++)" in generated.text, generated.text)
+        assertTrue("for (int i = 0; i < 3; i++)" in generated.text, generated.text)
         assertTrue("return value == CPLUS_ANSWER() + 3 ? 0 : 1;" in generated.text, generated.text)
         val generatedMacroUse = generated.text.indexOf("CPLUS_ANSWER", generated.text.indexOf("int main"))
         assertEquals(text.indexOf("CPLUS_ANSWER", text.indexOf("int main")), generated.originAt(generatedMacroUse)?.offset)
@@ -6553,6 +6556,32 @@ int main ( void ) { int values[3]={40,1,1}; int value=values[0]+2; // token-emit
         assertEquals(null, emission.source)
         assertEquals("CPLUS_EMIT_UNLOWERED_CONSTRUCT", emission.diagnostics.single().code)
         assertEquals(source.id.value, emission.diagnostics.single().span.file)
+    }
+
+    @Test
+    fun astCEmitterKeepsParenthesizedFunctionDeclaratorsReadableAndValid() {
+        val text = """
+            typedef int (*callback_t)(int);
+            int invoke(callback_t callback) { return callback(1); }
+            int add_one(int value) { return value + 1; }
+            int main(void) { callback_t callback = add_one; return invoke(callback) == 2 ? 0 : 1; }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-c-emitter-function-pointer.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val emission = CPlusAstCEmitter().emit(
+            CPlusAstAdapter().adapt(parsed),
+            MappedText.identity(source.sourceFile)
+        )
+
+        assertTrue(emission.diagnostics.isEmpty(), emission.diagnostics.toString())
+        val generated = emission.source ?: error("complete AST should emit C")
+        assertTrue("typedef int (*callback_t)(int);" in generated.text, generated.text)
+        assertTrue("int invoke(callback_t callback)" in generated.text, generated.text)
+        val reparsed = backend.parse(sources.open(SourceId.named("ast-c-emitter-function-pointer.c"), generated.text))
+        assertTrue(reparsed.diagnostics.isEmpty(), reparsed.diagnostics.toString())
+        compileAndRunC(generated.text)
     }
 
     @Test

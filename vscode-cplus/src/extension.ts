@@ -7,6 +7,7 @@ import { clearTimeout, setTimeout } from "node:timers";
 import { CPlusAstNode, CPlusSymbol, indexText, memberContext, symbolsFromAst } from "./index";
 import { CPlusTestFixture, findTestFixtures, findTestFixturesFromAst } from "./tests";
 import { decodeImportGraph } from "./importGraph";
+import { CPlusLspClient } from "./lspClient";
 import {
     builtinTestMacros,
     cKeywords,
@@ -506,6 +507,66 @@ class CPlusMainCodeLensProvider implements vscode.CodeLensProvider {
     }
 }
 
+class CPlusLspCompletionProvider implements vscode.CompletionItemProvider {
+    constructor(private readonly client: CPlusLspClient) {}
+
+    provideCompletionItems(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.CompletionList> {
+        return this.client.completion(document, position).catch(() => new vscode.CompletionList([], false));
+    }
+}
+
+class CPlusLspHoverProvider implements vscode.HoverProvider {
+    constructor(private readonly client: CPlusLspClient) {}
+
+    provideHover(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Hover | undefined> {
+        return this.client.hover(document, position).catch(() => undefined);
+    }
+}
+
+class CPlusLspDefinitionProvider implements vscode.DefinitionProvider {
+    constructor(private readonly client: CPlusLspClient) {}
+
+    provideDefinition(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Location[] | undefined> {
+        return this.client.definition(document, position).catch(() => undefined);
+    }
+}
+
+class CPlusLspDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
+    constructor(private readonly client: CPlusLspClient) {}
+
+    provideDocumentSymbols(document: vscode.TextDocument): Promise<vscode.DocumentSymbol[]> {
+        return this.client.documentSymbols(document).catch(() => []);
+    }
+}
+
+function registerLanguageServer(context: vscode.ExtensionContext): boolean {
+    const configuration = vscode.workspace.getConfiguration("cplus");
+    if (!configuration.get<boolean>("languageServer", false)) return false;
+    const output = vscode.window.createOutputChannel("C-plus Language Server");
+    const command = configuration.get<string>("languageServerCommand", "cplus");
+    const arguments_ = configuration.get<string[]>("languageServerArguments", []);
+    const client = new CPlusLspClient(command, arguments_, output);
+    context.subscriptions.push(
+        output,
+        client,
+        vscode.commands.registerCommand("cplus.restartLanguageServer", () =>
+            client.restart().catch((error: unknown) => {
+                output.appendLine(error instanceof Error ? error.message : String(error));
+                void vscode.window.showWarningMessage("C-plus language server restart failed.");
+            })
+        ),
+        vscode.languages.registerCompletionItemProvider("cplus", new CPlusLspCompletionProvider(client), ".", ">", "@"),
+        vscode.languages.registerHoverProvider("cplus", new CPlusLspHoverProvider(client)),
+        vscode.languages.registerDefinitionProvider("cplus", new CPlusLspDefinitionProvider(client)),
+        vscode.languages.registerDocumentSymbolProvider("cplus", new CPlusLspDocumentSymbolProvider(client))
+    );
+    void client.start().catch((error: unknown) => {
+        output.appendLine(error instanceof Error ? error.message : String(error));
+        void vscode.window.showWarningMessage("C-plus language server could not be started; using local editor support.");
+    });
+    return true;
+}
+
 function registerMainRun(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.languages.registerCodeLensProvider("cplus", new CPlusMainCodeLensProvider()),
@@ -588,13 +649,16 @@ export function activate(context: vscode.ExtensionContext): void {
         pendingParserRuns.delete(key);
         void compilerDiagnostics(document, diagnostics);
     };
+    const languageServerEnabled = registerLanguageServer(context);
     context.subscriptions.push(
         diagnostics,
-        vscode.languages.registerCompletionItemProvider("cplus", new CPlusCompletionProvider(), ".", ">", "@"),
-        vscode.languages.registerHoverProvider("cplus", new CPlusHoverProvider()),
-        vscode.languages.registerDefinitionProvider("cplus", new CPlusDefinitionProvider()),
+        ...(languageServerEnabled ? [] : [
+            vscode.languages.registerCompletionItemProvider("cplus", new CPlusCompletionProvider(), ".", ">", "@"),
+            vscode.languages.registerHoverProvider("cplus", new CPlusHoverProvider()),
+            vscode.languages.registerDefinitionProvider("cplus", new CPlusDefinitionProvider()),
+            vscode.languages.registerDocumentSymbolProvider("cplus", new CPlusDocumentSymbolProvider())
+        ]),
         vscode.languages.registerReferenceProvider("cplus", new CPlusReferenceProvider()),
-        vscode.languages.registerDocumentSymbolProvider("cplus", new CPlusDocumentSymbolProvider()),
         vscode.workspace.onDidOpenTextDocument((document) => diagnostics.set(document.uri, localDiagnostics(document))),
         vscode.workspace.onDidChangeTextDocument((event) => {
             diagnostics.set(event.document.uri, localDiagnostics(event.document));

@@ -210,14 +210,53 @@ class CPlusAstCEmitter {
         if (now == ":") return "conditional_expression" in current.ancestors
         if (now == "(" && before in setOf("if", "for", "while", "switch", "sizeof", "_Alignof", "return")) return true
         if (now in setOf("[", ")", "]", ",", ";", ".", "->", ":")) return false
+        if (now in setOf("++", "--") && canEndExpression(previous)) return false
+        if (before in setOf("++", "--")) return false
         if (before in setOf("(", "[", ".", "->")) return false
-        if (before == "*") return false
-        if (now == "(" || isPrefixOperator(previous, previousPrevious)) return false
+        if (isPrefixOperator(previous, previousPrevious)) return false
+        if (now == "(") {
+            // Calls and parenthesized postfix expressions stay attached. A
+            // parenthesized operand following a binary operator remains separated.
+            if ("parenthesized_declarator" in current.ancestors) return true
+            return before in setOf(
+                "+", "-", "*", "/", "%", "&", "|", "^", "&&", "||",
+                "==", "!=", "<", ">", "<=", ">=", "<<", ">>", "=",
+                "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=",
+                "?"
+            ) && !isPrefixOperator(previous, previousPrevious)
+        }
+        if (isPrefixOperator(previous, previousPrevious)) return false
         return true
+    }
+
+    private fun canEndExpression(token: Token?): Boolean {
+        val spelling = token?.text ?: return false
+        return spelling == ")" || spelling == "]" || spelling == "}" ||
+            spelling.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) ||
+            spelling.matches(Regex("(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:[uUlLfF]*)")) ||
+            spelling.startsWith("\"") || spelling.startsWith("'")
     }
 
     private fun isPrefixOperator(token: Token, before: Token?): Boolean {
         if (token.text !in setOf("&", "*", "+", "-", "!", "~", "++", "--")) return false
+        // Tree-sitter may include an outer binary expression around a unary
+        // expression, so check the innermost operator context first. This matters
+        // for the following token: `*p` and `a * b` need different spacing even
+        // though both have `*` as `previous`.
+        if (token.ancestors.any {
+                it in setOf(
+                    "unary_expression",
+                    "pointer_expression",
+                    "pointer_declarator",
+                    "abstract_pointer_declarator",
+                    "function_declarator"
+                )
+            }) {
+            return true
+        }
+        if (token.ancestors.any { it == "binary_expression" }) {
+            return false
+        }
         return before == null || before.text in setOf(
             "(", "[", "{", ",", ";", ":", "?", "=", "return", "case",
             "+", "-", "*", "/", "%", "&", "|", "^", "!", "~", "&&", "||",
