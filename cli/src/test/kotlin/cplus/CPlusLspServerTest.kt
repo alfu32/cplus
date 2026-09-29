@@ -475,7 +475,7 @@ class CPlusLspServerTest {
             "    int value;\n" +
             "} counter_t;\n" +
             "typedef counter_t counter_alias_t;\n" +
-            "int main(void) { counter_alias_t c; counter_alias_t *pointer = &c; return c.get() + c.value + pointer->get() + pointer->value; }\n"
+            "int main(void) { counter_alias_t c; const counter_alias_t *const pointer = &c; return c.get() + c.value + pointer->get() + pointer->value; }\n"
         val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
         val mainLine = source.lines()[5]
         val methodPosition = mainLine.indexOf('.') + 1
@@ -513,6 +513,37 @@ class CPlusLspServerTest {
         assertTrue(response.contains("\"label\":\"value\""), response)
         assertTrue(response.contains("\"id\":6,\"result\":[{\"uri\":\"$uri\""), response)
         assertTrue(response.contains("\"id\":7,\"result\":{\"isIncomplete\":false"), response)
+    }
+
+    @Test
+    fun rejectsMemberOperatorMismatchesDuringReceiverResolution() {
+        val uri = "file:///receiver-operators.cp"
+        val source = "typedef struct counter_t { int value; } counter_t;\n" +
+            "int main(void) {\n" +
+            "    counter_t value;\n" +
+            "    counter_t *pointer = &value;\n" +
+            "    value->\n" +
+            "    pointer.\n" +
+            "}\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val lines = source.lines()
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":4,\"character\":${lines[4].length}}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":5,\"character\":${lines[5].length}}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":{\"isIncomplete\":false,\"items\":[]}"), response)
+        assertTrue(response.contains("\"id\":3,\"result\":{\"isIncomplete\":false,\"items\":[]}"), response)
     }
 
     @Test

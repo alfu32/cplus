@@ -129,6 +129,32 @@ jobs:
           mkdir -p "$report"
           ./gradlew :parser-tree-sitter:benchmarkFrontend --no-daemon --max-workers=1 \
             2>&1 | tee "$report/frontend-benchmark.log"
+      - name: Run LSP protocol and host reliability gate
+        shell: bash
+        env:
+          PARSER_HOST: ${{ matrix.host }}
+          CC: clang
+          CXX: clang++
+          TCC: clang
+          CPLUS_TEST_COMPILER: clang
+        run: |
+          set -o pipefail
+          report="parser-tree-sitter/build/parser-host-report"
+          mkdir -p "$report"
+          ./gradlew :cli:test \
+            --tests 'cplus.CPlusLspServerTest' \
+            --no-daemon --max-workers=1 \
+            2>&1 | tee "$report/lsp-protocol.log"
+          ./gradlew :cli:benchmarkLspGate \
+            -PlspBenchmarkSeconds=10 \
+            --no-daemon --max-workers=1 \
+            2>&1 | tee "$report/lsp-benchmark.log"
+          {
+            echo "lsp_host=$PARSER_HOST"
+            echo "lsp_runner_os=$RUNNER_OS"
+            echo "lsp_runner_arch=$RUNNER_ARCH"
+            echo "lsp_java=$(java -version 2>&1 | head -n 1)"
+          } > "$report/lsp-host.txt"
       - name: Record parser host and resource manifest
         shell: bash
         env:

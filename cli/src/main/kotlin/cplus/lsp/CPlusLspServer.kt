@@ -404,7 +404,11 @@ class CPlusLspServer(
         val document = request.uri()?.let(documents::get) ?: return "{\"isIncomplete\":false,\"items\":[]}"
         val prefix = document.wordAt(request.position())
         val offset = document.snapshot.offsetAt(request.position())
-        val receiver = offset?.let { receiverType(document, it) }
+        val receiverAccess = offset?.let { receiverAccess(document, it) }
+        if (receiverAccess?.typeName == null && receiverAccess != null) {
+            return "{\"isIncomplete\":false,\"items\":[]}"
+        }
+        val receiver = receiverAccess?.typeName
         val visible = visibleSymbols(document).toList()
         val receiverScopes = receiver?.let { typeName ->
             visible.filter { it.name == typeName && it.kind == 23 }.map { it.scope }
@@ -627,27 +631,42 @@ class CPlusLspServer(
     }
 
     private fun receiverType(document: LspDocument, offset: Int): String? {
+        return receiverAccess(document, offset)?.typeName
+    }
+
+    private fun receiverAccess(document: LspDocument, offset: Int): ReceiverAccess? {
         val prefix = document.snapshot.text.substring(0, offset)
-        val receiver = Regex("([A-Za-z_][A-Za-z0-9_]*)\\s*(?:->|\\.)\\s*$")
-            .find(prefix)?.groupValues?.get(1) ?: return null
+        val match = Regex("([A-Za-z_][A-Za-z0-9_]*)\\s*(->|\\.)\\s*$").find(prefix) ?: return null
+        val receiver = match.groupValues[1]
+        val operator = match.groupValues[2]
         if (receiver == "self") {
-            return document.symbols
+            return ReceiverAccess(document.symbols
                 .asSequence()
                 .filter { it.ownerName != null && it.scope.contains(offset) }
                 .minByOrNull { it.scope.size() }
-                ?.ownerName
+                ?.ownerName, operator)
         }
-        return visibleSymbols(document)
+        val variable = visibleSymbols(document)
             .asSequence()
             .filter { it.name == receiver && it.kind == 13 && it.selection.startOffset <= offset }
             .sortedWith(compareBy<LspSymbol> { !it.scope.contains(offset) }.thenByDescending { it.selection.startOffset })
-            .mapNotNull(::declaredType)
-            .map { resolveTypeAlias(it) }
             .firstOrNull()
-            ?: visibleSymbols(document)
-                .asSequence()
-                .firstOrNull { it.name == receiver && it.kind == 23 }
-                ?.name
+        if (variable != null) {
+            val declared = declaredTypeInfo(variable)
+            val operatorMatches = when (operator) {
+                "->" -> declared?.pointerDepth ?: 0 > 0
+                "." -> declared?.pointerDepth == 0
+                else -> false
+            }
+            return ReceiverAccess(
+                declared?.typeName?.let(::resolveTypeAlias).takeIf { operatorMatches },
+                operator
+            )
+        }
+        val type = visibleSymbols(document)
+            .asSequence()
+            .firstOrNull { it.name == receiver && it.kind == 23 }
+        return ReceiverAccess(type?.name?.takeIf { operator == "." }, operator)
     }
 
     private fun resolveTypeAlias(typeName: String): String {
@@ -666,9 +685,20 @@ class CPlusLspServer(
     }
 
     private fun declaredType(symbol: LspSymbol): String? {
-        val beforeName = symbol.detail.substringBeforeLast(symbol.name).trim()
-        return Regex("(?:struct\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*\\*?\\s*$")
-            .find(beforeName)?.groupValues?.get(1)
+        return declaredTypeInfo(symbol)?.typeName
+    }
+
+    private fun declaredTypeInfo(symbol: LspSymbol): DeclaredType? {
+        // Qualifiers may occur before the base type or after a pointer layer:
+        // `const counter_t *p` and `counter_t *const p` have the same receiver
+        // shape. Keep the base type and pointer depth, while leaving complete
+        // C type checking to the selected compiler.
+        val beforeName = symbol.detail.substringBeforeLast(symbol.name)
+            .replace(Regex("\\b(const|volatile|restrict)\\b"), " ")
+            .trim()
+        val match = Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*(\\*+)?\\s*$")
+            .find(beforeName) ?: return null
+        return DeclaredType(match.groupValues[1], match.groupValues[2].length)
     }
 
     private fun notify(method: String, params: String) = write("{\"jsonrpc\":\"2.0\",\"method\":${Json.string(method)},\"params\":$params}")
@@ -734,6 +764,10 @@ class CPlusLspServer(
         return bytes.toByteArray().toString(StandardCharsets.US_ASCII)
     }
 }
+
+private data class ReceiverAccess(val typeName: String?, val operator: String)
+
+private data class DeclaredType(val typeName: String, val pointerDepth: Int)
 
 private data class LspDocument(
     val uri: String,
