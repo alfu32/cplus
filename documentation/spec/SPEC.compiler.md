@@ -30,6 +30,20 @@ Use `parse --stdin` to parse unsaved editor text. The source is read from stdin;
 
 `transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. `transcode` accepts only `--target` among compiler options; it uses the option to choose comptime branches but does not compile. Additional arguments for `compile` and `run` are passed to the selected C compiler; for example, `-DFLAG=1` or `-Iinclude`. Code-processing commands print the C-plus transcoder version. Before each C compilation, the CLI reports whether the compiler is bundled or external and its payload/JAR or executable location.
 
+## Diagnostics do not suppress emission
+
+The transcoder reports mapped warnings and recoverable errors while continuing
+the current code-generation pass. A warning may describe an unsupported or
+recovered AST fragment; an error records a construct that could not be fully
+resolved, but the emitter preserves the original text or the best available
+lowering so that later C compilation can provide additional diagnostics. Every
+diagnostic carries severity, code, message, and the original `.cp` URI/range
+when a source map is available. Only fatal infrastructure failures—such as an
+unreadable input, an invalid output destination, or a pass that cannot produce
+a coherent source stream—stop transcoding. `compile`, `run`, and `test` still
+return the downstream compiler/runtime status; a non-fatal transcoder
+diagnostic alone does not prevent generated C from being written.
+
 `test` runs with the legacy frontend by default for compatibility. Its `run`, `compile`, and `transcode` forms also accept `--frontend=legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate. This boundary is explicit and does not silently claim full test-front-end parity.
 
 For migration tests, fixture extraction is an independent frontend concern. The
