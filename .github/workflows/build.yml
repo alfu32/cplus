@@ -436,6 +436,77 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  release-host-matrix:
+    name: Validate packaged LSP on ${{ matrix.host }}
+    needs:
+      - cli-artifacts
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: linux-x86_64
+            runner: ubuntu-latest
+            launcher: cpc.sh
+          - host: linux-arm64
+            runner: ubuntu-24.04-arm
+            launcher: cpc.sh
+          - host: macos-arm64
+            runner: macos-14
+            launcher: cpc.sh
+          - host: windows-x86_64
+            runner: windows-latest
+            launcher: cpc.cmd
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/download-artifact@v4
+        with:
+          name: cplus-application-distributions
+          path: release-input
+      - name: Extract bare and bundled distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-check/bare release-check/cross
+          python -c 'import zipfile; zipfile.ZipFile("release-input/cplus-${{ env.RELEASE_VERSION }}-bare.zip").extractall("release-check/bare")'
+          python -c 'import zipfile; zipfile.ZipFile("release-input/cplus-${{ env.RELEASE_VERSION }}-cross-no-sysroots.zip").extractall("release-check/cross")'
+      - name: Check bare packaged LSP protocol
+        shell: bash
+        run: |
+          python scripts/lsp-protocol-smoke.py \
+            --launcher "$PWD/release-check/bare/${{ matrix.launcher }}" \
+            --report "$PWD/build/release-host-report/bare.txt"
+      - name: Check bundled packaged LSP protocol
+        shell: bash
+        run: |
+          python scripts/lsp-protocol-smoke.py \
+            --launcher "$PWD/release-check/cross/${{ matrix.launcher }}" \
+            --report "$PWD/build/release-host-report/cross.txt"
+      - name: Record release host metadata
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p build/release-host-report
+          {
+            echo "host=${{ matrix.host }}"
+            echo "runner=${{ matrix.runner }}"
+            echo "launcher=${{ matrix.launcher }}"
+            echo "os=${RUNNER_OS}"
+            echo "arch=${RUNNER_ARCH}"
+            echo "python=$(python --version 2>&1 || true)"
+          } > build/release-host-report/host.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cplus-release-host-${{ matrix.host }}
+          path: build/release-host-report
+          if-no-files-found: error
+          retention-days: 14
+
   editor-plugins:
     name: Build editor plugin bundles
     needs:
@@ -493,6 +564,7 @@ jobs:
       - cli-artifacts
       - editor-plugins
       - parser-host-matrix
+      - release-host-matrix
     runs-on: ubuntu-latest
     permissions:
       contents: write

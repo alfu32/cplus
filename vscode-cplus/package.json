@@ -138,7 +138,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node test/smoke.js && node test/restart.js",
+    "test": "npm run compile && node test/smoke.js && node test/restart.js && node test/diagnostics.js",
     "package": "npm run compile && node scripts/package.js"
   },
   "devDependencies": {

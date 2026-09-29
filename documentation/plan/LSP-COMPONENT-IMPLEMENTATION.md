@@ -206,13 +206,13 @@ status is only a summary; work is considered converged when every row below is
 
 | Parent | Subtask                                | Status      | Concrete deliverable                                                                                                                   | Blocks          |
 |--------|----------------------------------------|-------------|----------------------------------------------------------------------------------------------------------------------------------------|-----------------|
-| LSP-5  | 5.6a semantic type model               | OPEN        | Resolve primitive, typedef, pointer, array, function, and qualifier types from the compiler semantic model                             | 5.6b–e          |
+| LSP-5  | 5.6a semantic type model               | DONE        | Compiler semantics expose canonical primitive, typedef, pointer, array, callable, parameter, and local-value shapes with declaration spans and preserved declaration qualifiers | 5.6b–e |
 | LSP-5  | 5.6a.1 qualified pointer shape         | DONE        | Normalize `const`/`volatile`/`restrict` around pointer declarations and preserve pointer depth for receiver matching                   | 5.6a            |
 | LSP-5  | 5.6a.2 array decay shape               | DONE        | Model array arguments as one pointer layer for bounded overload and receiver selection                                                 | 5.6a            |
 | LSP-5  | 5.6a.3 lexical-vs-call selection       | DONE        | Preserve overload ranking at call sites while selecting the narrowest lexical declaration for ordinary references                      | 5.6a            |
 | LSP-5  | 5.6b member typing                     | OPEN        | Infer `.`/`->` receiver types, fields, methods, `self`, and chained receivers                                                          | 5.6c–e          |
 | LSP-5  | 5.6b.1 receiver operator compatibility | DONE        | Reject value/`->` and pointer/`.` member mismatches while retaining valid value, pointer, `self`, and static receivers                 | 5.6b–e          |
-| LSP-5  | 5.6c callable ranking                  | OPEN        | Rank overloads by type and conversion, not only by argument count                                                                      | 5.6e            |
+| LSP-5  | 5.6c callable ranking                  | IN PROGRESS | Semantic call resolution now ranks same-name methods by arity, exact canonical shape, numeric conversion, and string/character literal shape; broader conversions remain | 5.6e |
 | LSP-5  | 5.6c.1 bounded argument ranking        | DONE        | Rank same-arity overloads for integer, floating, character/string, identifier, and pointer-shaped arguments with conservative fallback | 5.6c            |
 | LSP-5  | 5.6c.2 function-pointer compatibility  | DONE        | Match direct function values to compatible function-pointer overloads using return type and callback arity                 | 5.6c            |
 | LSP-5  | 5.6d write/reference effects           | OPEN        | Distinguish reads, writes, declarations, and callback/function-pointer references                                                      | 5.6e            |
@@ -220,7 +220,7 @@ status is only a summary; work is considered converged when every row below is
 | LSP-2  | 2.5 unsupported-AST diagnostics        | IN PROGRESS | Classify recovered/unsupported AST fragments as warnings with mapped ranges; preserve compiler/parser failures as errors, continue emission for recoverable cases, and verify both severities in every editor adapter; implicitly fatal transcoder crashes may stop generation | 2.1–2.4 |
 | LSP-2  | 2.5a AST warning classification        | DONE        | `CPLUS_UNSUPPORTED_AST` warnings are emitted for top-level unmapped named/opaque AST fragments, with source spans and duplicate suppression | 2.5b–c |
 | LSP-2  | 2.5b severity and emission contract    | DONE        | Warning severity remains advisory and parser recovery diagnostics remain errors; LSP session and document queries continue after warning publication | 2.5c |
-| LSP-2  | 2.5c editor severity fixtures           | OPEN        | Verify VS Code, Vim, and IntelliJ render warning severity 2 and parser/compiler severity 1 through their adapters | LSP-2 gate |
+| LSP-2  | 2.5c editor severity fixtures           | DONE        | VS Code's framed client fixture, Vim quickfix fixture, and IntelliJ decoder fixture preserve warning severity 2 and parser/compiler error severity 1 | LSP-2 gate |
 | LSP-2  | 2.5c.1 adapter severity mapping         | DONE        | VS Code's pure LSP severity mapper, Vim quickfix conversion, and IntelliJ warning decoding preserve warning-vs-error classification | 2.5c |
 | LSP-7  | 7.6a sustained throughput              | DONE        | 60-second gate completed 2,202 rounds and 46,242 document requests on Linux/JDK 21                                                     | 7.7 host matrix |
 | LSP-7  | 7.6b fairness/starvation               | DONE        | Every sustained round completed its post-cancellation tail request without starvation                                                  | 7.7 host matrix |
@@ -237,9 +237,9 @@ status is only a summary; work is considered converged when every row below is
 | LSP-8  | 8.5a IntelliJ startup/sync             | OPEN        | Interactive IntelliJ client starts the server and synchronizes a document                                                              | 8.5b–c          |
 | LSP-8  | 8.5b IntelliJ features                 | OPEN        | Verify diagnostics, navigation, completion, and test discovery through the real client                                                 | 8.5c            |
 | LSP-8  | 8.5c IntelliJ restart                  | OPEN        | Verify restart and state recovery through the real client                                                                              | LSP-8.5 gate    |
-| LSP-8  | 8.6a bare release hosts                | OPEN        | Validate bare artifacts on every supported release host                                                                                | 8.6c            |
-| LSP-8  | 8.6b bundled release hosts             | OPEN        | Validate bundled artifacts on every supported release host                                                                             | 8.6c            |
-| LSP-8  | 8.6c protocol-clean matrix             | OPEN        | Record stdout, exit-code, launcher, and discovery results in retained CI artifacts                                                     | 8.7             |
+| LSP-8  | 8.6a bare release hosts                | IN PROGRESS | `release-host-matrix` validates the bare ZIP on Linux x86_64/arm64, macOS arm64, and Windows x86_64; tagged evidence remains required       | 8.6c            |
+| LSP-8  | 8.6b bundled release hosts             | IN PROGRESS | `release-host-matrix` validates the cross-runtime ZIP on Linux x86_64/arm64, macOS arm64, and Windows x86_64; tagged evidence remains required | 8.6c            |
+| LSP-8  | 8.6c protocol-clean matrix             | IN PROGRESS | The matrix records initialize/shutdown results, exit status, launcher metadata, and retained per-host reports; a passing run is required    | 8.7             |
 | LSP-8  | 8.7a artifact manifest                 | DONE        | Generate a deterministic tagged-release manifest containing SHA-256, byte size, and filename for every downloaded application/editor asset | 8.7b            |
 | LSP-8  | 8.7b publication rehearsal             | DONE        | Publish a tagged release candidate and verify downloadable assets and metadata                                                         | LSP-8 gate      |
 
@@ -247,11 +247,10 @@ status is only a summary; work is considered converged when every row below is
 
 The next local work is not “finish LSP-5/7/8” as one task. It is:
 
-1. Verify warning/error severity rendering through the three editor adapters (2.5c).
-2. Add real IntelliJ unexpected-exit coverage for 7.9c.
-3. Build the IntelliJ interactive fixture (8.5a–c).
-4. Run host/release validation (7.7 and 8.6) only after the local gates are green.
-5. Finish the remaining semantic services in LSP-5.6 and close the parent gates.
+1. Add real IntelliJ unexpected-exit coverage for 7.9c.
+2. Build the IntelliJ interactive fixture (8.5a–c).
+3. Run host/release validation (7.7 and 8.6) only after the local gates are green.
+4. Finish the remaining semantic services in LSP-5.6 and close the parent gates.
 
 The semantic work in 5.6 is independent of packaging work after its existing
 5.5 scheduling contract; it should not be used as a reason to leave the
@@ -261,7 +260,7 @@ reliability and release subtasks represented by a single indefinite status.
 
 | ID      | Status | Subtask                                      | Dependencies | Evidence / remaining action                                                                                         |
 |---------|--------|----------------------------------------------|--------------|---------------------------------------------------------------------------------------------------------------------|
-| LSP-2.5 | OPEN   | Report unsupported/recovered AST fragments   | LSP-2.1–2.4  | Emit mapped LSP warnings for fragments without compiler mapping/resolution; preserve mapped parser/compiler errors and verify all editor adapters render both severities. |
+| LSP-2.5 | IN PROGRESS | Report unsupported/recovered AST fragments | LSP-2.1–2.4 | Mapped warning generation and all three adapter severity fixtures pass; implicitly fatal generation failures remain errors and the parent diagnostics gate remains open until the broader document matrix is recorded. |
 
 ### LSP-5 — workspace and semantic services
 
@@ -276,7 +275,7 @@ reliability and release subtasks represented by a single indefinite status.
 | LSP-5.4d | DONE   | Resolve bounded reference identity and call arity                      | LSP-5.4c     | Function, callback-value, variable, field, instance/static method, and arity fixtures pass.                                                     |
 | LSP-5.5a | DONE   | Add revision guards and cancellation                                   | LSP-5.4d     | Queued and in-flight cancellation tests suppress obsolete responses.                                                                            |
 | LSP-5.5b | DONE   | Add bounded asynchronous scheduling and orderly drain                  | LSP-5.5a     | Two workers, queue capacity 64, exact-future cleanup, overload `-32001`, and shutdown drain are tested.                                         |
-| LSP-5.6  | OPEN   | Replace bounded syntax lookup with complete compiler semantic services | LSP-5.5b     | Full type inference, pointer/member typing, overload ranking beyond arity, writes, and complete comptime scope parity remain to be implemented. |
+| LSP-5.6  | OPEN   | Replace bounded syntax lookup with complete compiler semantic services | LSP-5.5b     | Canonical scoped types and conservative same-name callable ranking are implemented; broader pointer/member conversions, writes, and complete comptime scope parity remain. |
 
 ### LSP-7 — reliability and performance
 
@@ -362,7 +361,7 @@ The adapters are not a substitute for reliability or release evidence.
 | LSP-5 | IN PROGRESS | Open-document `workspace/symbol`, bounded imports, import-closure visibility for completion/definition/references, receiver-aware member completion, bounded call-arity overload selection, dependency invalidation, lexical/receiver lookup, evaluator-backed comptime symbols, cancellation/revision guards, and bounded cooperative scheduling are implemented; broader semantic resolution remains                                                                                                                                                                                                                                                                                                                                                                                                     |
 | LSP-6 | DONE-LOCAL  | VS Code, Vim, and IntelliJ have opt-in adapters that launch the shared `cplus lsp` process; IntelliJ command construction covers configured executables and quoted `java -jar` paths, and IntelliJ 2026.2.2 packaging/tests pass. Interactive parity and release packaging remain separate gates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | LSP-7 | IN PROGRESS | Cancellation is checked before dispatch and after in-flight document work; completed futures are cleaned by exact future identity after insertion to handle fast tasks and reused request IDs. Pre-dispatch cancellation is one-shot, and a bounded seen-ID set prevents post-completion cancellation from poisoning reused IDs. Scheduling uses two workers with a 64-entry bounded queue and JSON-RPC `-32001` overload responses. Deterministic edit/property coverage now runs 32 Unicode/malformed-recovery seeds. The 60-second Linux/JDK 21 gate reports 2,202 rounds at 36.700 rounds/sec with a −567,968 byte post-GC heap delta; supported-host validation and IntelliJ restart coverage remain |
-| LSP-8 | IN PROGRESS | `editorArtifacts` rebuilds the versioned VS Code `0.5.49` VSIX, IntelliJ 2026.2.2 plugin, and Vim archives; VS Code npm smoke and headless Vim LSP/outline fixtures pass. Extracted bare and six-host cross-runtime `cplus-0.5.49` launchers start `cplus lsp` with clean JSON-RPC stdout. Supported-host release validation and interactive IntelliJ coverage remain                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| LSP-8 | IN PROGRESS | `editorArtifacts` rebuilds the versioned VS Code `0.5.49` VSIX, IntelliJ 2026.2.2 plugin, and Vim archives; VS Code npm smoke and headless Vim LSP/outline fixtures pass. Extracted bare and six-host cross-runtime `cplus-0.5.49` launchers start `cplus lsp` with clean JSON-RPC stdout. The supported-host release matrix is now wired; tagged evidence and interactive IntelliJ coverage remain                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ## Latest evidence
 

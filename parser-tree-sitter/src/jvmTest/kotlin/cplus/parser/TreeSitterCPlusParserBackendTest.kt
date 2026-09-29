@@ -218,7 +218,7 @@ class TreeSitterCPlusParserBackendTest {
         )
         val actualLiveKinds = kinds.filter { it.startsWith("cplus_") }.toSet()
         assertEquals(expectedLiveKinds, actualLiveKinds)
-        assertEquals(62, modules.size)
+        assertEquals(69, modules.size)
     }
 
     @Test
@@ -661,7 +661,7 @@ class TreeSitterCPlusParserBackendTest {
                 .sorted()
                 .toList()
         }
-        assertEquals(8, inputs.size, "the Raylib example fixture corpus should remain explicit")
+        assertEquals(15, inputs.size, "the Raylib example fixture corpus should remain explicit")
 
         inputs.forEach { path ->
             val relative = repository.relativize(path).toString()
@@ -2923,9 +2923,7 @@ class TreeSitterCPlusParserBackendTest {
             """.trimIndent()
         )
 
-        val parsed = backend.parse(snapshot)
-        val ast = CPlusAstAdapter().adapt(parsed)
-        val index = CPlusSemanticAnalyzer().analyze(ast)
+        val index = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(backend.parse(snapshot)))
 
         assertEquals(1, index.symbols.count { it.kind == CPlusSymbolKind.STRUCT && it.name == "widget_t" })
         assertEquals(2, index.symbols.count { it.kind in setOf(CPlusSymbolKind.INSTANCE_METHOD, CPlusSymbolKind.STATIC_METHOD) })
@@ -2937,6 +2935,86 @@ class TreeSitterCPlusParserBackendTest {
         assertEquals("self", read.parameters.first().name)
         assertEquals(setOf("borrowed", "mut"), read.parameters.first().annotations)
         assertEquals(setOf("owned"), read.parameters[1].annotations)
+    }
+
+    @Test
+    fun exposesCanonicalFileScopeTypeShapesForTooling() {
+        val snapshot = sources.open(
+            SourceId.named("semantic-types.cp"),
+            """
+            typedef int scalar_t;
+            typedef int (*callback_t)(const char* value);
+            scalar_t *pointer_value;
+            int values[4];
+            callback_t callback;
+            """.trimIndent()
+        )
+
+        val result = backend.parse(snapshot)
+        val index = CPlusSemanticAnalyzer().analyze(CPlusAstAdapter().adapt(result))
+
+        assertEquals("int", index.typeAliases.getValue("scalar_t").name)
+        assertEquals(listOf(CPlusDeclaratorLayer.POINTER), index.valueTypes.getValue("pointer_value").declaratorLayers)
+        assertEquals(listOf(CPlusDeclaratorLayer.ARRAY), index.valueTypes.getValue("values").declaratorLayers)
+        val callback = index.valueTypes.getValue("callback")
+        assertTrue(callback.isCallable)
+        assertEquals("int", callback.name)
+        assertEquals(emptyList<CPlusDeclaratorLayer>(), callback.callableReturn?.declaratorLayers)
+    }
+
+    @Test
+    fun publishesScopedParameterAndLocalValueTypesWithDeclarationSpans() {
+        val text = "typedef int value_t; int consume(const value_t *input) { const value_t local; local = *input; return local; }"
+        val snapshot = sources.open(SourceId.named("semantic-scoped-types.cp"), text)
+        val parsed = backend.parse(snapshot)
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val index = CPlusSemanticAnalyzer().analyze(ast)
+
+        val input = index.scopedValueTypes.single { it.name == "input" }
+        assertEquals("int", input.type.name)
+        assertEquals(listOf(CPlusDeclaratorLayer.POINTER), input.type.declaratorLayers)
+        assertTrue(input.type.declaratorQualifiers.any { it.spelling == "const" })
+        assertTrue(
+            input.declarationSpan.startOffset <= text.indexOf("input") &&
+                input.declarationSpan.endOffset >= text.indexOf("input") + "input".length
+        )
+
+        val local = index.scopedValueTypes.single { it.name == "local" }
+        assertEquals("int", local.type.name)
+        assertTrue(local.type.declaratorQualifiers.any { it.spelling == "const" })
+        assertTrue(local.declarationSpan.startOffset < text.indexOf("local ="))
+    }
+
+    @Test
+    fun ranksSameNameMethodsByArityAndLiteralShape() {
+        val snapshot = sources.open(
+            SourceId.named("semantic-overloads.cp"),
+            """
+            typedef struct overload_t {
+                pub int select(int value);
+                pub int select(const char* value);
+            } overload_t;
+            int main(void) {
+                overload_t value;
+                value.select(7);
+                value.select("seven");
+                return 0;
+            }
+            """.trimIndent()
+        )
+        val parsed = backend.parse(snapshot)
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val index = CPlusSemanticAnalyzer().analyze(ast)
+        val selections = index.resolvedCalls.map { call ->
+            call.declaration.parameters.last().declarationText.orEmpty()
+        }
+
+        assertEquals(2, selections.size)
+        assertTrue(selections[0].contains("int"), selections.toString())
+        assertTrue(
+            selections[1].contains("char"),
+            "$selections\n${index.symbols.filter { it.name == "select" }}"
+        )
     }
 
     @Test
