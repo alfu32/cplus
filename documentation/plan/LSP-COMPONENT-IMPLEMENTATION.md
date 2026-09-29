@@ -203,6 +203,7 @@ status is only a summary; work is considered converged when every row below is
 | LSP-5  | 5.6a semantic type model               | OPEN        | Resolve primitive, typedef, pointer, array, function, and qualifier types from the compiler semantic model             | 5.6b–e          |
 | LSP-5  | 5.6a.1 qualified pointer shape         | DONE        | Normalize `const`/`volatile`/`restrict` around pointer declarations and preserve pointer depth for receiver matching   | 5.6a            |
 | LSP-5  | 5.6a.2 array decay shape                | DONE        | Model array arguments as one pointer layer for bounded overload and receiver selection                              | 5.6a            |
+| LSP-5  | 5.6a.3 lexical-vs-call selection         | DONE        | Preserve overload ranking at call sites while selecting the narrowest lexical declaration for ordinary references   | 5.6a            |
 | LSP-5  | 5.6b member typing                     | OPEN        | Infer `.`/`->` receiver types, fields, methods, `self`, and chained receivers                                          | 5.6c–e          |
 | LSP-5  | 5.6b.1 receiver operator compatibility | DONE        | Reject value/`->` and pointer/`.` member mismatches while retaining valid value, pointer, `self`, and static receivers | 5.6b–e          |
 | LSP-5  | 5.6c callable ranking                  | OPEN        | Rank overloads by type and conversion, not only by argument count                                                      | 5.6e            |

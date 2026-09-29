@@ -435,7 +435,7 @@ typedef struct arkanoid_app_t {
 
 
 int main(int argc, char** argv) {
-        InitWindow(ARKANOID_SCREEN_WIDTH, ARKANOID_SCREEN_HEIGHT, "C-plus | Arkanoid");
+    InitWindow(ARKANOID_SCREEN_WIDTH, ARKANOID_SCREEN_HEIGHT, "C-plus | Arkanoid");
     defer CloseWindow();
     SetTargetFPS(120);
     arkanoid_app_t app;

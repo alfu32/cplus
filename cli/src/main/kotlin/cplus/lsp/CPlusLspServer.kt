@@ -602,7 +602,16 @@ class CPlusLspServer(
         }
         val scopedCandidates = orderedCandidates
             .filter { it.uri == document.uri && it.scope.contains(offset) }
-        if (scopedCandidates.isNotEmpty()) return scopedCandidates.first()
+        if (scopedCandidates.isNotEmpty()) {
+            return if (callArguments != null) {
+                scopedCandidates.first()
+            } else {
+                scopedCandidates.minWithOrNull(
+                    compareBy<LspSymbol> { it.scope.size() }
+                        .thenByDescending { it.selection.startOffset }
+                )
+            }
+        }
         val precedingCandidates = orderedCandidates
             .filter { it.uri == document.uri && it.selection.startOffset <= offset }
         return if (callArguments != null) precedingCandidates.firstOrNull()
