@@ -466,7 +466,7 @@ class CPlusLspServer(
     private fun workspaceSymbols(query: String): String {
         val normalized = query.trim().lowercase()
         return documents.values.asSequence()
-            .flatMap { it.symbols.asSequence().map(::displaySymbol) }
+            .flatMap { document -> document.symbols.asSequence().map { displaySymbol(it, document.uri) } }
             .filter { normalized.isEmpty() || it.name.lowercase().contains(normalized) }
             .sortedWith(compareBy<LspSymbol> { it.name.lowercase() }.thenBy { it.uri }.thenBy { it.selection.startOffset })
             .joinToString(",", "[", "]") { it.toJson() }
@@ -860,7 +860,7 @@ class CPlusLspServer(
         val reachable = reachableDocuments(document.uri)
         return reachable.asSequence()
             .mapNotNull(documents::get)
-            .flatMap { candidate -> candidate.symbols.asSequence().map(::displaySymbol) }
+            .flatMap { candidate -> candidate.symbols.asSequence().map { displaySymbol(it, candidate.uri) } }
             .distinctBy { it.uri to it.selection.startOffset }
     }
 
@@ -870,10 +870,10 @@ class CPlusLspServer(
      * the corresponding live document so definition/workspace results retain
      * the path spelling the client supplied (including symlink and drive forms).
      */
-    private fun displaySymbol(symbol: LspSymbol): LspSymbol {
+    private fun displaySymbol(symbol: LspSymbol, fallbackUri: String): LspSymbol {
         val displayUri = documents.keys.firstOrNull { candidate ->
             sameSourceUri(candidate, symbol.uri)
-        } ?: return symbol
+        } ?: fallbackUri
         return if (displayUri == symbol.uri) symbol else symbol.copy(uri = displayUri)
     }
 
