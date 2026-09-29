@@ -227,6 +227,38 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun returnsAstReferencesWithoutMatchingCommentsOrStringLiterals() {
+        val uri = "file:///references.cp"
+        val source = "int increment(int value) { return value + 1; }\n" +
+            "int main(void) { /* increment */ const char* text = \"increment\"; return increment(1) + increment(2); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val reference = source.lastIndexOf("increment(1)") - source.indexOf('\n') - 1
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/references\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":1,\"character\":$reference}," +
+                "\"context\":{\"includeDeclaration\":true}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/references\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":1,\"character\":$reference}," +
+                "\"context\":{\"includeDeclaration\":false}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        // Both requests may complete on different executor workers; count the two
+        // result sets without depending on their response order.
+        assertTrue(response.windowed("\"uri\":\"$uri\"".length)
+            .count { it == "\"uri\":\"$uri\"" } >= 5, response)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\""), response)
+        assertTrue(response.contains("\"id\":3,\"result\":[{\"uri\":\"$uri\""), response)
+    }
+
+    @Test
     fun resolvesAReceiverMethodAgainstTheDeclaredStructType() {
         val uri = "file:///receiver.cp"
         val source = "typedef struct counter_t {\n" +

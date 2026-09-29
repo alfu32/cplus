@@ -74,7 +74,8 @@ class CPlusLspServer(
                         "\"workspaceSymbolProvider\":true," +
                         "\"completionProvider\":{\"triggerCharacters\":[\".\",\"->\"]}," +
                         "\"hoverProvider\":true," +
-                        "\"definitionProvider\":true}}")
+                        "\"definitionProvider\":true," +
+                        "\"referencesProvider\":true}}")
                 }
                 "initialized" -> Unit
                 "$/cancelRequest" -> request.cancelledRequestId()?.let { cancelRequest(it) }
@@ -106,7 +107,10 @@ class CPlusLspServer(
                 "textDocument/documentSymbol" -> dispatchReadRequest(id, request) {
                     respondForDocument(id, request) { documentSymbols(request.uri()) }
                 }
-                "workspace/symbol" -> dispatchReadRequest(id, request) {
+                // Workspace symbols are a bounded in-memory snapshot. Taking it synchronously
+                // preserves wire-order semantics when a following didChange mutates the import
+                // graph; document-scoped work remains on the cooperative executor below.
+                "workspace/symbol" -> if (id != null) withReadState {
                     respond(id, workspaceSymbols(request.stringParameter("query") ?: ""))
                 }
                 "textDocument/completion" -> dispatchReadRequest(id, request) {
@@ -117,6 +121,9 @@ class CPlusLspServer(
                 }
                 "textDocument/definition" -> dispatchReadRequest(id, request) {
                     respondForDocument(id, request) { definition(request) }
+                }
+                "textDocument/references" -> dispatchReadRequest(id, request) {
+                    respondForDocument(id, request) { references(request) }
                 }
                 else -> if (id != null) respondError(id, -32601, "method not supported: $method")
             }
@@ -180,7 +187,7 @@ class CPlusLspServer(
 
     private fun hasInvalidParameters(method: String, request: Json.Object): Boolean = when (method) {
         "textDocument/documentSymbol" -> request.uri() == null
-        "textDocument/completion", "textDocument/hover", "textDocument/definition" ->
+        "textDocument/completion", "textDocument/hover", "textDocument/definition", "textDocument/references" ->
             request.uri() == null || request.position() == null
         else -> false
     }
@@ -377,6 +384,49 @@ class CPlusLspServer(
     private fun definition(request: Json.Object): String {
         val symbol = symbolAt(request) ?: return "[]"
         return "[{\"uri\":${Json.string(symbol.uri)},\"range\":${symbol.selection.toRangeJson()}}]"
+    }
+
+    /**
+     * Return identifier occurrences in the open document's resolved import closure.
+     *
+     * This deliberately uses normalized AST identifier nodes instead of a textual
+     * regex, so comments and string literals cannot become false references. The
+     * bounded closure is the same visibility boundary used by completion/definition.
+     */
+    private fun references(request: Json.Object): String {
+        val document = request.uri()?.let(documents::get) ?: return "[]"
+        val target = symbolAt(request)?.name ?: document.wordAt(request.position())
+        if (target.isEmpty()) return "[]"
+        val includeDeclaration = ((request.values["params"] as? Json.Object)
+            ?.values?.get("context") as? Json.Object)
+            ?.values?.get("includeDeclaration") as? Json.BooleanValue
+        val declarationRanges = visibleSymbols(document)
+            .filter { it.name == target }
+            .map { it.uri to it.selection.startOffset }
+            .toSet()
+        return reachableDocuments(document.uri).asSequence()
+            .mapNotNull(documents::get)
+            .flatMap { candidate ->
+                candidate.ast.root.flatten()
+                    .filter { it.kind == CPlusAstKind.IDENTIFIER }
+                    .filter { node ->
+                        val text = candidate.parsedText.substring(node.span.startOffset, node.span.endOffset)
+                        text == target
+                    }
+                    .map { node ->
+                        val mapped = candidate.mappedSource?.toOriginalSpan(node.span) ?: node.span
+                        val uri = mapped.file?.let { file ->
+                            if (file.startsWith("file:", ignoreCase = true)) file
+                            else runCatching { Path.of(file).toUri().toString() }.getOrNull()
+                        } ?: candidate.uri
+                        Triple(uri, mapped, node)
+                    }
+            }
+            .filter { (uri, span, _) -> includeDeclaration?.value != false || uri to span.startOffset !in declarationRanges }
+            .sortedWith(compareBy<Triple<String, SourceSpan, CPlusAstNode>> { it.first }.thenBy { it.second.startOffset })
+            .joinToString(",", "[", "]") { (uri, span, _) ->
+                "{\"uri\":${Json.string(uri)},\"range\":${span.toRangeJson()}}"
+            }
     }
 
     private fun symbolAt(request: Json.Object): LspSymbol? {
