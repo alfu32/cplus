@@ -317,6 +317,30 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesAnArrayArgumentAgainstAPointerOverload() {
+        val uri = "file:///overload-arrays.cp"
+        val source = "int choose(int* values) { return values[0]; }\n" +
+            "int choose(int value) { return value; }\n" +
+            "int main(void) { int values[1] = { 7 }; return choose(values); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val callPosition = source.lines()[2].indexOf("choose")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$callPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":0,"), response)
+    }
+
+    @Test
     fun returnsAstReferencesWithoutMatchingCommentsOrStringLiterals() {
         val uri = "file:///references.cp"
         val source = "int increment(int value) { return value + 1; }\n" +
@@ -647,7 +671,7 @@ class CPlusLspServerTest {
 
         val response = output.toString(StandardCharsets.UTF_8)
         assertTrue(!response.contains("\"id\":2,\"result\":"), response)
-        assertTrue(response.contains("\"id\":3,\"result\":null"))
+        assertTrue(response.contains("\"id\":3,\"result\":null"), response)
     }
 
     @Test
@@ -747,7 +771,7 @@ class CPlusLspServerTest {
         CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
 
         val response = output.toString(StandardCharsets.UTF_8)
-        assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"imported_t\""))
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"imported_t\""), response)
         assertTrue(response.contains("\"uri\":\"${dependency.toUri()}\""), response)
     }
 
@@ -775,8 +799,8 @@ class CPlusLspServerTest {
         CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
 
         val response = output.toString(StandardCharsets.UTF_8)
-        assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"removable_t\""))
-        assertTrue(response.contains("\"id\":3,\"result\":[]"))
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"removable_t\""), response)
+        assertTrue(response.contains("\"id\":3,\"result\":[]"), response)
     }
 
     @Test
@@ -809,7 +833,7 @@ class CPlusLspServerTest {
         CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
 
         val response = output.toString(StandardCharsets.UTF_8)
-        assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"manifest_import_t\""))
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"manifest_import_t\""), response)
         assertTrue(response.contains("\"uri\":\"${dependency.toUri()}\""), response)
         assertTrue(response.contains("\"id\":4,\"result\":[{\"uri\":\"${dependency.toUri()}\""))
     }

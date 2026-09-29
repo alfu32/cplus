@@ -139,23 +139,32 @@ jobs:
           CPLUS_TEST_COMPILER: clang
         run: |
           set -o pipefail
+          set +e
           report="parser-tree-sitter/build/parser-host-report"
           mkdir -p "$report"
           ./gradlew :cli:test \
             --tests 'cplus.CPlusLspServerTest' \
             --no-daemon --max-workers=1 \
             2>&1 | tee "$report/lsp-protocol.log"
+          protocol_status=${PIPESTATUS[0]}
           ./gradlew :cli:benchmarkLspGate \
             -PlspBenchmarkSeconds=10 \
             --no-daemon --max-workers=1 \
             2>&1 | tee "$report/lsp-benchmark.log"
+          benchmark_status=${PIPESTATUS[0]}
           {
             echo "lsp_host=$PARSER_HOST"
             echo "lsp_runner_os=$RUNNER_OS"
             echo "lsp_runner_arch=$RUNNER_ARCH"
             echo "lsp_java=$(java -version 2>&1 | head -n 1)"
+            echo "lsp_protocol_status=$protocol_status"
+            echo "lsp_benchmark_status=$benchmark_status"
           } > "$report/lsp-host.txt"
+          if (( protocol_status != 0 || benchmark_status != 0 )); then
+            exit 1
+          fi
       - name: Record parser host and resource manifest
+        if: always()
         shell: bash
         env:
           PARSER_HOST: ${{ matrix.host }}
@@ -187,12 +196,14 @@ jobs:
               printf '%s %s %s\n' "$digest" "$size" "$file"
             done > "$report/resources.txt"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: tree-sitter-host-report-${{ matrix.host }}
           path: parser-tree-sitter/build/parser-host-report/
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: tree-sitter-native-${{ matrix.host }}
           path: parser-tree-sitter/build/parser-native-payload/

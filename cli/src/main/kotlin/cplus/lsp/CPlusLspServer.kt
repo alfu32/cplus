@@ -19,6 +19,7 @@ import java.util.concurrent.Future
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
@@ -36,7 +37,8 @@ class CPlusLspServer(
     private val openDocuments = ConcurrentHashMap.newKeySet<String>()
     private val importsByDocument = LinkedHashMap<String, LinkedHashSet<String>>()
     private val importersByDocument = LinkedHashMap<String, LinkedHashSet<String>>()
-    private val cancelledRequests = ConcurrentHashMap.newKeySet<String>()
+    /** Cancellations received before a request instance has been dispatched. */
+    private val preCancelledRequests = ConcurrentHashMap.newKeySet<String>()
     private val seenRequestIds = ConcurrentHashMap.newKeySet<String>()
     /**
      * Keep the stdio reader responsive under request bursts. Two workers and a
@@ -52,7 +54,7 @@ class CPlusLspServer(
         Executors.defaultThreadFactory(),
         ThreadPoolExecutor.AbortPolicy()
     )
-    private val requestFutures = ConcurrentHashMap<String, Future<*>>()
+    private val requestStates = ConcurrentHashMap<String, RequestState>()
     /** Fair ordering keeps a queued read before a later document mutation. */
     private val stateLock = ReentrantReadWriteLock(true)
     private val comptimeIndexer = CPlusComptimeIndexer()
@@ -122,8 +124,8 @@ class CPlusLspServer(
                         notify("textDocument/publishDiagnostics", "{\"uri\":${Json.string(uri)},\"diagnostics\":[]}")
                     }
                 }
-                "textDocument/documentSymbol" -> dispatchReadRequest(id, request) {
-                    respondForDocument(id, request) { documentSymbols(request.uri()) }
+                "textDocument/documentSymbol" -> dispatchReadRequest(id, request) { state ->
+                    respondForDocument(id, request, state) { documentSymbols(request.uri()) }
                 }
                 // Workspace symbols are a bounded in-memory snapshot. Taking it synchronously
                 // preserves wire-order semantics when a following didChange mutates the import
@@ -131,17 +133,17 @@ class CPlusLspServer(
                 "workspace/symbol" -> if (id != null) withReadState {
                     respond(id, workspaceSymbols(request.stringParameter("query") ?: ""))
                 }
-                "textDocument/completion" -> dispatchReadRequest(id, request) {
-                    respondForDocument(id, request) { completions(request) }
+                "textDocument/completion" -> dispatchReadRequest(id, request) { state ->
+                    respondForDocument(id, request, state) { completions(request) }
                 }
-                "textDocument/hover" -> dispatchReadRequest(id, request) {
-                    respondForDocument(id, request) { hover(request) }
+                "textDocument/hover" -> dispatchReadRequest(id, request) { state ->
+                    respondForDocument(id, request, state) { hover(request) }
                 }
-                "textDocument/definition" -> dispatchReadRequest(id, request) {
-                    respondForDocument(id, request) { definition(request) }
+                "textDocument/definition" -> dispatchReadRequest(id, request) { state ->
+                    respondForDocument(id, request, state) { definition(request) }
                 }
-                "textDocument/references" -> dispatchReadRequest(id, request) {
-                    respondForDocument(id, request) { references(request) }
+                "textDocument/references" -> dispatchReadRequest(id, request) { state ->
+                    respondForDocument(id, request, state) { references(request) }
                 }
                 else -> if (id != null) respondError(id, -32601, "method not supported: $method")
             }
@@ -151,48 +153,46 @@ class CPlusLspServer(
         }
     }
 
-    private fun dispatchReadRequest(id: Json?, request: Json.Object, work: () -> Unit) {
+    private fun dispatchReadRequest(id: Json?, request: Json.Object, work: (RequestState) -> Unit) {
         if (id == null) return
         val key = id.encode()
         rememberBounded(seenRequestIds, key)
-        val cancelledBeforeDispatch = cancelledRequests.remove(key)
-        val futureReference = AtomicReference<Future<*>>()
+        val state = RequestState(key)
+        val cancelledBeforeDispatch = preCancelledRequests.remove(key)
+        if (cancelledBeforeDispatch) state.cancelled.set(true)
+        requestStates[key] = state
         val future = try {
             requestExecutor.submit {
                 try {
-                    withReadState { work() }
+                    if (!state.cancelled.get()) withReadState { work(state) }
                 } finally {
-                    futureReference.get()?.let {
-                        requestFutures.remove(key, it)
-                        cancelledRequests.remove(key)
-                    }
+                    requestStates.remove(key, state)
                 }
             }
         } catch (_: RejectedExecutionException) {
+            requestStates.remove(key, state)
             respondError(id, -32001, "language server request queue is full")
             return
         }
-        futureReference.set(future)
-        requestFutures[key] = future
+        state.future.set(future)
         // A very fast task can finish and remove itself before the submitting
-        // thread stores the Future. Do not leave that completed Future behind;
-        // request IDs may be reused after their response has been sent.
-        if (future.isDone) requestFutures.remove(key, future)
-        if (cancelledBeforeDispatch || key in cancelledRequests) future.cancel(true)
+        // thread stores the Future. The state is already installed, so a
+        // cancellation can still target the exact request instance.
+        if (future.isDone) requestStates.remove(key, state)
     }
 
     private fun cancelRequest(key: String) {
-        val future = requestFutures[key]
-        if (future == null) {
+        val state = requestStates[key]
+        if (state == null) {
             // Preserve the LSP case where cancellation precedes a request, but
             // do not let cancellation after a completed request poison a reused
             // ID. The seen-ID set is bounded below.
-            if (key !in seenRequestIds) rememberBounded(cancelledRequests, key)
+            if (key !in seenRequestIds) rememberBounded(preCancelledRequests, key)
             return
         }
-        rememberBounded(cancelledRequests, key)
-        requestFutures.remove(key, future)
-        future.cancel(true)
+        state.cancelled.set(true)
+        requestStates.remove(key, state)
+        state.future.get()?.cancel(true)
     }
 
     private fun rememberBounded(set: MutableSet<String>, key: String) {
@@ -294,8 +294,7 @@ class CPlusLspServer(
             val currentUri = pending.removeFirstOrNull() ?: return@repeat
             if (!visited.add(currentUri)) return@repeat
             val document = documents[currentUri] ?: return@repeat
-            for (span in comptimeIndexer.index(document.ast).imports) {
-                val requested = importPath(document.snapshot.text.substring(span.startOffset, span.endOffset)) ?: continue
+            for (requested in importRequests(document)) {
                 val resolved = resolveImport(document, requested) ?: continue
                 val importedUri = resolved.toUri().toString()
                 importsByDocument.getOrPut(currentUri) { LinkedHashSet() }.add(importedUri)
@@ -357,15 +356,55 @@ class CPlusLspServer(
         }
     }
 
-    private fun resolveImport(document: LspDocument, requested: String): Path? = runCatching {
-        CPlusImportResolver(importPaths).resolve(
-            source = SourceFile(document.snapshot.text, pathFromUri(document.uri)?.toString() ?: document.uri),
-            requestedPath = requested,
-            extensionlessCandidates = listOf("cp", "c+")
-        )
-    }.getOrNull()
+    private fun resolveImport(document: LspDocument, requested: String): Path? {
+        val sourcePath = pathFromUri(document.uri)
+        val resolved = runCatching {
+            CPlusImportResolver(importPaths).resolve(
+                source = SourceFile(document.snapshot.text, sourcePath?.toString() ?: document.uri),
+                requestedPath = requested,
+                extensionlessCandidates = listOf("cp", "c+")
+            )
+        }.getOrNull()
+        if (resolved != null) return resolved
+
+        // Keep the LSP import boundary usable when a host's URI/path provider
+        // applies a different lexical normalization than the shared compiler
+        // resolver (notably drive-letter and symlink forms on Windows/macOS).
+        // Namespaced imports must still go through the configured roots and are
+        // therefore deliberately excluded from this local relative fallback.
+        if (sourcePath == null || requested.contains(":/")) return null
+        val sourceDirectory = sourcePath.parent ?: return null
+        val requestedPath = runCatching { Path.of(requested) }.getOrNull() ?: return null
+        val hasExtension = requestedPath.fileName?.toString()?.substringAfterLast('.', "")?.isNotEmpty() == true
+        val candidates = if (hasExtension) {
+            listOf(requestedPath)
+        } else {
+            listOf(requestedPath.resolveSibling("${requestedPath.fileName}.cp"),
+                requestedPath.resolveSibling("${requestedPath.fileName}.c+"))
+        }
+        return candidates
+            .map { candidate -> (if (candidate.isAbsolute) candidate else sourceDirectory.resolve(candidate)).normalize() }
+            .firstOrNull { Files.isRegularFile(it) }
+            ?.let { candidate -> runCatching { candidate.toRealPath() }.getOrDefault(candidate) }
+    }
 
     private fun importPath(text: String): String? = IMPORT_LITERAL.find(text)?.groupValues?.get(1)?.let(::unescapeImport)
+
+    private fun importRequests(document: LspDocument): List<String> {
+        val indexed = comptimeIndexer.index(document.ast).imports
+            .mapNotNull { span -> importPath(document.snapshot.text.substring(span.startOffset, span.endOffset)) }
+        if (indexed.isNotEmpty()) return indexed.distinct()
+
+        // Some host builds of the recovery parser preserve a comptime import
+        // only as an error/recovery node. Keep the AST index authoritative when
+        // it recognizes the construct, but recover the small import boundary
+        // here so workspace navigation remains portable while the grammar
+        // migration is still in progress.
+        return IMPORT_RECOVERY_LITERAL.findAll(document.snapshot.text)
+            .map { unescapeImport(it.groupValues[1]) }
+            .distinct()
+            .toList()
+    }
 
     private fun pathFromUri(value: String): Path? = runCatching {
         if (value.startsWith("file:", ignoreCase = true)) Path.of(URI(value)) else Path.of(value)
@@ -561,13 +600,14 @@ class CPlusLspServer(
         receiverType(document, offset)?.let { receiverType ->
             orderedCandidates.firstOrNull { it.ownerName == receiverType }?.let { return it }
         }
-        return orderedCandidates
+        val scopedCandidates = orderedCandidates
             .filter { it.uri == document.uri && it.scope.contains(offset) }
-            .sortedWith(compareBy<LspSymbol> { it.scope.size() }.thenByDescending { it.selection.startOffset })
-            .firstOrNull()
-            ?: orderedCandidates
-                .filter { it.uri == document.uri && it.selection.startOffset <= offset }
-                .maxByOrNull { it.selection.startOffset }
+        if (scopedCandidates.isNotEmpty()) return scopedCandidates.first()
+        val precedingCandidates = orderedCandidates
+            .filter { it.uri == document.uri && it.selection.startOffset <= offset }
+        return if (callArguments != null) precedingCandidates.firstOrNull()
+            ?: orderedCandidates.firstOrNull()
+        else precedingCandidates.maxByOrNull { it.selection.startOffset }
             ?: orderedCandidates.firstOrNull()
     }
 
@@ -640,10 +680,12 @@ class CPlusLspServer(
         val actual = expressionType(document, argument) ?: return 50
         val expectedBase = resolveTypeAlias(expected.base)
         val actualBase = resolveTypeAlias(actual.base)
+        val expectedPointers = expected.pointerDepth + expected.arrayDepth
+        val actualPointers = actual.pointerDepth + actual.arrayDepth
         return when {
-            expectedBase == actualBase && expected.pointerDepth == actual.pointerDepth -> 0
+            expectedBase == actualBase && expectedPointers == actualPointers -> 0
             expectedBase == actualBase -> 10
-            expected.pointerDepth == actual.pointerDepth -> 20
+            expectedPointers == actualPointers -> 20
             else -> 40
         }
     }
@@ -653,17 +695,18 @@ class CPlusLspServer(
             .replace(Regex("\\b(borrowed|owned|mut|const|volatile|restrict)\\b"), " ")
             .trim()
         val pointerDepth = cleaned.count { it == '*' }
+        val arrayDepth = Regex("\\[[^]]*\\]").findAll(cleaned).count()
         val base = Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)")
             .find(cleaned)?.groupValues?.get(1) ?: return null
-        return TypeShape(base, pointerDepth)
+        return TypeShape(base, pointerDepth, arrayDepth)
     }
 
     private fun expressionType(document: LspDocument, expression: String): TypeShape? {
         val value = expression.trim()
-        if (value.matches(Regex("[0-9]+"))) return TypeShape("int", 0)
-        if (value.matches(Regex("[0-9]+\\.[0-9]+"))) return TypeShape("double", 0)
-        if (value.startsWith("\"") && value.endsWith("\"")) return TypeShape("char", 1)
-        if (value.startsWith("'") && value.endsWith("'")) return TypeShape("int", 0)
+        if (value.matches(Regex("[0-9]+"))) return TypeShape("int", 0, 0)
+        if (value.matches(Regex("[0-9]+\\.[0-9]+"))) return TypeShape("double", 0, 0)
+        if (value.startsWith("\"") && value.endsWith("\"")) return TypeShape("char", 0, 1)
+        if (value.startsWith("'") && value.endsWith("'")) return TypeShape("int", 0, 0)
         val address = value.removePrefix("&").takeIf { value.startsWith("&") }
         val name = address ?: value
         if (!name.matches(IDENTIFIER)) return null
@@ -672,7 +715,11 @@ class CPlusLspServer(
             .sortedWith(compareBy<LspSymbol> { !it.scope.contains(document.snapshot.text.indexOf(value)) })
             .firstOrNull() ?: return null
         val declared = declaredTypeInfo(variable) ?: return null
-        return TypeShape(resolveTypeAlias(declared.typeName), declared.pointerDepth + if (address != null) 1 else 0)
+        return TypeShape(
+            resolveTypeAlias(declared.typeName),
+            declared.pointerDepth + if (address != null) 1 else 0,
+            declared.arrayDepth
+        )
     }
 
     private fun parameterArity(symbol: LspSymbol): Int? {
@@ -740,7 +787,7 @@ class CPlusLspServer(
             val declared = declaredTypeInfo(variable)
             val operatorMatches = when (operator) {
                 "->" -> declared?.pointerDepth ?: 0 > 0
-                "." -> declared?.pointerDepth == 0
+                "." -> declared?.pointerDepth == 0 && declared.arrayDepth == 0
                 else -> false
             }
             return ReceiverAccess(
@@ -783,28 +830,29 @@ class CPlusLspServer(
             .trim()
         val match = Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*(\\*+)?\\s*$")
             .find(beforeName) ?: return null
-        return DeclaredType(match.groupValues[1], match.groupValues[2].length)
+        val arrayDepth = Regex("\\[[^]]*\\]").findAll(symbol.detail.substringAfter(symbol.name)).count()
+        return DeclaredType(match.groupValues[1], match.groupValues[2].length, arrayDepth)
     }
 
     private fun notify(method: String, params: String) = write("{\"jsonrpc\":\"2.0\",\"method\":${Json.string(method)},\"params\":$params}")
 
     private fun respond(id: Json?, result: String) = write("{\"jsonrpc\":\"2.0\",\"id\":${id?.encode() ?: "null"},\"result\":$result}")
 
-    private fun respondForDocument(id: Json?, request: Json.Object, result: () -> String) {
+    private fun respondForDocument(id: Json?, request: Json.Object, state: RequestState, result: () -> String) {
         val uri = request.uri()
         val version = uri?.let { documents[it]?.version }
         val encodedId = id?.encode()
-        if (wasCancelled(encodedId)) return
+        if (state.cancelled.get() || wasCancelled(encodedId)) return
         val payload = result()
         // Cancellation may arrive while parsing or indexing is in progress. Do
         // not publish a response that became obsolete during that work.
-        if (wasCancelled(encodedId)) return
+        if (state.cancelled.get() || wasCancelled(encodedId)) return
         if (uri != null && documents[uri]?.version != version) return
         respond(id, payload)
     }
 
     private fun wasCancelled(encodedId: String?): Boolean =
-        encodedId != null && cancelledRequests.remove(encodedId)
+        encodedId != null && preCancelledRequests.remove(encodedId)
 
     private fun respondError(id: Json?, code: Int, message: String) =
         write("{\"jsonrpc\":\"2.0\",\"id\":${id?.encode() ?: "null"},\"error\":{\"code\":$code,\"message\":${Json.string(message)}}}")
@@ -852,9 +900,14 @@ class CPlusLspServer(
 
 private data class ReceiverAccess(val typeName: String?, val operator: String)
 
-private data class DeclaredType(val typeName: String, val pointerDepth: Int)
+private class RequestState(val key: String) {
+    val cancelled = AtomicBoolean(false)
+    val future = AtomicReference<Future<*>>()
+}
 
-private data class TypeShape(val base: String, val pointerDepth: Int)
+private data class DeclaredType(val typeName: String, val pointerDepth: Int, val arrayDepth: Int)
+
+private data class TypeShape(val base: String, val pointerDepth: Int, val arrayDepth: Int)
 
 private data class LspDocument(
     val uri: String,
@@ -1014,6 +1067,9 @@ private fun Char.isIdentifierPart(): Boolean = isLetterOrDigit() || this == '_'
 
 private val IDENTIFIER = Regex("[A-Za-z_][A-Za-z0-9_]*")
 private val IMPORT_LITERAL = Regex("\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"")
+private val IMPORT_RECOVERY_LITERAL = Regex(
+    "(?m)^\\s*(?:comptime\\s+)?(?:@import|import)\\s*(?:\\(\\s*)?\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\""
+)
 private const val MAX_WORKSPACE_IMPORTS = 256
 private const val MAX_TRACKED_REQUEST_IDS = 4096
 private val CPLUS_KEYWORDS = setOf(
