@@ -236,7 +236,7 @@ status is only a summary; work is considered converged when every row below is
 | LSP-8  | 8.6a bare release hosts                | OPEN        | Validate bare artifacts on every supported release host                                                                                | 8.6c            |
 | LSP-8  | 8.6b bundled release hosts             | OPEN        | Validate bundled artifacts on every supported release host                                                                             | 8.6c            |
 | LSP-8  | 8.6c protocol-clean matrix             | OPEN        | Record stdout, exit-code, launcher, and discovery results in retained CI artifacts                                                     | 8.7             |
-| LSP-8  | 8.7a artifact manifest                 | IN PROGRESS | Generate a deterministic tagged-release manifest containing SHA-256, byte size, and filename for every downloaded application/editor asset | 8.7b            |
+| LSP-8  | 8.7a artifact manifest                 | DONE        | Generate a deterministic tagged-release manifest containing SHA-256, byte size, and filename for every downloaded application/editor asset | 8.7b            |
 | LSP-8  | 8.7b publication rehearsal             | DONE        | Publish a tagged release candidate and verify downloadable assets and metadata                                                         | LSP-8 gate      |
 
 ### Current bottleneck and next execution order
@@ -298,7 +298,7 @@ reliability and release subtasks represented by a single indefinite status.
 | LSP-8.4 | DONE        | Build editor artifacts and run consumer smoke tests         | LSP-6            | VSIX, IntelliJ 2026.2.2 plugin, Vim archives, npm tests, and headless Vim tests pass locally.              |
 | LSP-8.5 | OPEN        | Run an interactive IntelliJ protocol fixture                | LSP-8.2, LSP-8.4 | Exercise actual IntelliJ LSP client startup, document sync, diagnostics, navigation, and restart.          |
 | LSP-8.6 | OPEN        | Validate release discovery on supported hosts               | LSP-8.1, LSP-8.2 | Hosted release matrix must launch bare and bundled artifacts with protocol-clean stdout.                   |
-| LSP-8.7 | IN PROGRESS | Verify release publication and artifact completeness        | LSP-8.6          | Historical tagged publication passed; current artifacts still need a fresh release run and manifest audit. |
+| LSP-8.7 | IN PROGRESS | Verify release publication and artifact completeness        | LSP-8.6          | Tagged run `36622759483` published `0.5.57` and passed manifest generation; release-host validation remains before the parent gate closes. |
 
 ## Dependency graph and execution order
 
