@@ -506,6 +506,23 @@ jobs:
         with:
           path: release-assets
           name: cplus-editor-plugins
+      - name: Generate release artifact manifest
+        run: |
+          set -euo pipefail
+          manifest="release-assets/SHA256SUMS.txt"
+          {
+            echo "cplus release artifact manifest"
+            echo "tag=${GITHUB_REF_NAME}"
+            echo "commit=${GITHUB_SHA}"
+            echo
+            echo "sha256  bytes  file"
+            while IFS= read -r -d '' asset; do
+              digest="$(sha256sum "$asset" | awk '{print $1}')"
+              size="$(stat -c '%s' "$asset")"
+              printf '%s  %s  %s\n' "$digest" "$size" "${asset#release-assets/}"
+            done < <(find release-assets -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z)
+          } > "$manifest"
+          test -s "$manifest"
       - name: Create or update release and upload application distributions and IDE plugins
         env:
           GH_TOKEN: ${{ github.token }}

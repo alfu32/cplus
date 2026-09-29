@@ -236,7 +236,7 @@ status is only a summary; work is considered converged when every row below is
 | LSP-8  | 8.6a bare release hosts                | OPEN        | Validate bare artifacts on every supported release host                                                                                | 8.6c            |
 | LSP-8  | 8.6b bundled release hosts             | OPEN        | Validate bundled artifacts on every supported release host                                                                             | 8.6c            |
 | LSP-8  | 8.6c protocol-clean matrix             | OPEN        | Record stdout, exit-code, launcher, and discovery results in retained CI artifacts                                                     | 8.7             |
-| LSP-8  | 8.7a artifact manifest                 | IN PROGRESS | Audit jars, editor bundles, documentation, launchers, and checksums for each release                                                   | 8.7b            |
+| LSP-8  | 8.7a artifact manifest                 | IN PROGRESS | Generate a deterministic tagged-release manifest containing SHA-256, byte size, and filename for every downloaded application/editor asset | 8.7b            |
 | LSP-8  | 8.7b publication rehearsal             | DONE        | Publish a tagged release candidate and verify downloadable assets and metadata                                                         | LSP-8 gate      |
 
 ### Current bottleneck and next execution order
@@ -247,7 +247,7 @@ The next local work is not “finish LSP-5/7/8” as one task. It is:
 2. Add real IntelliJ unexpected-exit coverage for 7.9c.
 3. Build the IntelliJ interactive fixture (8.5a–c).
 4. Run host/release validation (7.7 and 8.6) only after the local gates are green.
-5. Finish the artifact manifest and publication rehearsal (8.7).
+5. Finish the artifact manifest and repeat a tagged publication rehearsal (8.7).
 
 The semantic work in 5.6 is independent of packaging work after its existing
 5.5 scheduling contract; it should not be used as a reason to leave the
