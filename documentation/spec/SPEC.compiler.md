@@ -45,6 +45,22 @@ produce a coherent source stream—stop generation. `compile`, `run`, and `test`
 return the downstream compiler/runtime status; a non-fatal transcoder
 diagnostic alone does not prevent generated C from being written.
 
+The LSP exposes the same distinction for open documents. A normalized AST node
+that is named but has no compiler mapping is published as warning code
+`CPLUS_UNSUPPORTED_AST` with severity `2`; its source range is preserved and
+the document remains queryable. Parser recovery nodes and compiler/parser
+failures remain severity `1` errors. For example, a future Tree-sitter node
+`future_syntax` is reported as:
+
+```json
+{"code":"CPLUS_UNSUPPORTED_AST","severity":2,
+ "message":"AST fragment 'future_syntax' has no compiler mapping; code generation continues"}
+```
+
+The warning is advisory: it does not suppress source emission. An implicitly
+fatal failure, such as a crashed transcoder or unusable source pass, may still
+terminate generation.
+
 `test` runs with the legacy frontend by default for compatibility. Its `run`, `compile`, and `transcode` forms also accept `--frontend=legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate. This boundary is explicit and does not silently claim full test-front-end parity.
 
 For migration tests, fixture extraction is an independent frontend concern. The

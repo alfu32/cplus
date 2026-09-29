@@ -1,6 +1,7 @@
 package cplus
 
 import cplus.lsp.CPlusLspServer
+import cplus.lsp.unsupportedAstDiagnostics
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
@@ -14,6 +15,75 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
 class CPlusLspServerTest {
+    @Test
+    fun classifiesTopLevelUnmappedAstFragmentsAsMappedWarnings() {
+        val source = SourceManager().open(SourceId.named("file:///synthetic-unsupported.cp"), "future_syntax")
+        val fragment = CPlusAstNode(
+            kind = CPlusAstKind.OTHER,
+            syntaxKind = "future_syntax",
+            span = source.sourceFile.span(0, source.text.length),
+            fieldName = null,
+            children = emptyList(),
+            named = true,
+            opaque = false,
+            recovered = false
+        )
+        val ast = CPlusAst(
+            source = source,
+            root = CPlusAstNode(
+                kind = CPlusAstKind.TRANSLATION_UNIT,
+                syntaxKind = "translation_unit",
+                span = source.sourceFile.span(0, source.text.length),
+                fieldName = null,
+                children = listOf(fragment),
+                named = true,
+                opaque = false,
+                recovered = false
+            ),
+            diagnostics = emptyList(),
+            structurallyComplete = true
+        )
+
+        val diagnostic = ast.unsupportedAstDiagnostics().single()
+        assertTrue(diagnostic.code == "CPLUS_UNSUPPORTED_AST")
+        assertTrue(diagnostic.severity == ParserDiagnosticSeverity.WARNING)
+        assertTrue(diagnostic.span == fragment.span)
+    }
+
+    @Test
+    fun reportsUnmappedNamedAstFragmentsAsWarningsWithoutBlockingTheSession() {
+        val uri = "file:///unsupported-ast.cp"
+        val source = "int value = 1;\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(
+            ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)),
+            output,
+            astDiagnosticProvider = { ast ->
+                listOf(
+                    ParserDiagnostic(
+                        code = "CPLUS_UNSUPPORTED_AST",
+                        message = "synthetic unsupported fragment",
+                        severity = ParserDiagnosticSeverity.WARNING,
+                        span = ast.source.sourceFile.span(0, 3)
+                    )
+                )
+            }
+        ).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"code\":\"CPLUS_UNSUPPORTED_AST\""), response)
+        assertTrue(response.contains("\"severity\":2"), response)
+        assertTrue(response.contains("\"id\":2,\"result\":null"), response)
+    }
+
     @Test
     fun servesSymbolsCompletionHoverDefinitionDiagnosticsAndShutdownOverStdio() {
         val uri = "file:///fixture.cp"

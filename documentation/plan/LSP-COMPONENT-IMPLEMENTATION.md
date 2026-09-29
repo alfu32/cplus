@@ -217,7 +217,10 @@ status is only a summary; work is considered converged when every row below is
 | LSP-5  | 5.6c.2 function-pointer compatibility  | DONE        | Match direct function values to compatible function-pointer overloads using return type and callback arity                 | 5.6c            |
 | LSP-5  | 5.6d write/reference effects           | OPEN        | Distinguish reads, writes, declarations, and callback/function-pointer references                                                      | 5.6e            |
 | LSP-5  | 5.6e comptime parity                   | OPEN        | Expose generated declarations, scopes, aliases, and source origins consistently in all semantic features                               | LSP-5 gate      |
-| LSP-2  | 2.5 unsupported-AST diagnostics        | OPEN        | Classify recovered/unsupported AST fragments as warnings with mapped ranges; preserve compiler/parser failures as errors, continue emission for recoverable cases, and verify both severities in every editor adapter; implicitly fatal transcoder crashes may stop generation | 2.1–2.4 |
+| LSP-2  | 2.5 unsupported-AST diagnostics        | IN PROGRESS | Classify recovered/unsupported AST fragments as warnings with mapped ranges; preserve compiler/parser failures as errors, continue emission for recoverable cases, and verify both severities in every editor adapter; implicitly fatal transcoder crashes may stop generation | 2.1–2.4 |
+| LSP-2  | 2.5a AST warning classification        | DONE        | `CPLUS_UNSUPPORTED_AST` warnings are emitted for top-level unmapped named/opaque AST fragments, with source spans and duplicate suppression | 2.5b–c |
+| LSP-2  | 2.5b severity and emission contract    | DONE        | Warning severity remains advisory and parser recovery diagnostics remain errors; LSP session and document queries continue after warning publication | 2.5c |
+| LSP-2  | 2.5c editor severity fixtures           | OPEN        | Verify VS Code, Vim, and IntelliJ render warning severity 2 and parser/compiler severity 1 through their adapters | LSP-2 gate |
 | LSP-7  | 7.6a sustained throughput              | DONE        | 60-second gate completed 2,202 rounds and 46,242 document requests on Linux/JDK 21                                                     | 7.7 host matrix |
 | LSP-7  | 7.6b fairness/starvation               | DONE        | Every sustained round completed its post-cancellation tail request without starvation                                                  | 7.7 host matrix |
 | LSP-7  | 7.6c memory budget                     | DONE        | 60-second run stayed within the 64 MiB post-GC growth ceiling, reporting a −567,968 byte delta                                         | 7.7 host matrix |
@@ -243,11 +246,11 @@ status is only a summary; work is considered converged when every row below is
 
 The next local work is not “finish LSP-5/7/8” as one task. It is:
 
-1. Close 7.6a–d with an agreed local benchmark policy.
+1. Verify warning/error severity rendering through the three editor adapters (2.5c).
 2. Add real IntelliJ unexpected-exit coverage for 7.9c.
 3. Build the IntelliJ interactive fixture (8.5a–c).
 4. Run host/release validation (7.7 and 8.6) only after the local gates are green.
-5. Finish the artifact manifest and repeat a tagged publication rehearsal (8.7).
+5. Finish the remaining semantic services in LSP-5.6 and close the parent gates.
 
 The semantic work in 5.6 is independent of packaging work after its existing
 5.5 scheduling contract; it should not be used as a reason to leave the

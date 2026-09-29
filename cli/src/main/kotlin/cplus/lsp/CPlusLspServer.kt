@@ -26,7 +26,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 /** Parser-backed stdio LSP transport and document service. */
 class CPlusLspServer(
     input: InputStream = System.`in`,
-    output: OutputStream = System.out
+    output: OutputStream = System.out,
+    private val astDiagnosticProvider: (CPlusAst) -> List<ParserDiagnostic> = { it.unsupportedAstDiagnostics() }
 ) {
     private val input = BufferedInputStream(input)
     private val output = BufferedOutputStream(output)
@@ -289,7 +290,11 @@ class CPlusLspServer(
                 parser.openIncrementalSession(parsedSnapshot, options).also { parseSessions[uri] = it }.current()
             }
         }
-        val diagnostics = result.diagnostics.map { diagnostic ->
+        val ast = CPlusAstAdapter().adapt(result)
+        val parserDiagnostics = (result.diagnostics + astDiagnosticProvider(ast)).distinctBy {
+            listOf(it.code, it.span.startOffset, it.span.endOffset, it.message)
+        }
+        val diagnostics = parserDiagnostics.map { diagnostic ->
             if (materialized == null) diagnostic else diagnostic.copy(
                 span = materialized.mapping.toOriginalSpan(diagnostic.span)
             )
@@ -300,7 +305,7 @@ class CPlusLspServer(
             snapshot = snapshot,
             parsedText = parsedSnapshot.text,
             mappedSource = materialized?.mapping,
-            ast = CPlusAstAdapter().adapt(result),
+            ast = ast,
             diagnostics = diagnostics
         )
     }
@@ -1043,6 +1048,26 @@ class CPlusLspServer(
 }
 
 private data class ReceiverAccess(val typeName: String?, val operator: String)
+
+internal fun CPlusAst.unsupportedAstDiagnostics(): List<ParserDiagnostic> {
+    val diagnostics = mutableListOf<ParserDiagnostic>()
+
+    fun visit(node: CPlusAstNode, coveredByUnsupportedParent: Boolean) {
+        val unsupported = node.named && (node.kind == CPlusAstKind.OTHER || node.opaque)
+        if (unsupported && !coveredByUnsupportedParent) {
+            diagnostics += ParserDiagnostic(
+                code = "CPLUS_UNSUPPORTED_AST",
+                message = "AST fragment '${node.syntaxKind}' has no compiler mapping; code generation continues",
+                severity = ParserDiagnosticSeverity.WARNING,
+                span = node.span
+            )
+        }
+        node.children.forEach { child -> visit(child, coveredByUnsupportedParent || unsupported) }
+    }
+
+    visit(root, false)
+    return diagnostics
+}
 
 private class RequestState(val key: String, val readView: ReadView) {
     val cancelled = AtomicBoolean(false)
