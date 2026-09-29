@@ -198,38 +198,39 @@ This dashboard is the actionable breakdown of the three parent phases. A parent
 status is only a summary; work is considered converged when every row below is
 `DONE` or is explicitly deferred with an accepted scope change.
 
-| Parent | Subtask                                | Status      | Concrete deliverable                                                                                                   | Blocks          |
-|--------|----------------------------------------|-------------|------------------------------------------------------------------------------------------------------------------------|-----------------|
-| LSP-5  | 5.6a semantic type model               | OPEN        | Resolve primitive, typedef, pointer, array, function, and qualifier types from the compiler semantic model             | 5.6b–e          |
-| LSP-5  | 5.6a.1 qualified pointer shape         | DONE        | Normalize `const`/`volatile`/`restrict` around pointer declarations and preserve pointer depth for receiver matching   | 5.6a            |
-| LSP-5  | 5.6a.2 array decay shape                | DONE        | Model array arguments as one pointer layer for bounded overload and receiver selection                              | 5.6a            |
-| LSP-5  | 5.6a.3 lexical-vs-call selection         | DONE        | Preserve overload ranking at call sites while selecting the narrowest lexical declaration for ordinary references   | 5.6a            |
-| LSP-5  | 5.6b member typing                     | OPEN        | Infer `.`/`->` receiver types, fields, methods, `self`, and chained receivers                                          | 5.6c–e          |
-| LSP-5  | 5.6b.1 receiver operator compatibility | DONE        | Reject value/`->` and pointer/`.` member mismatches while retaining valid value, pointer, `self`, and static receivers | 5.6b–e          |
-| LSP-5  | 5.6c callable ranking                  | OPEN        | Rank overloads by type and conversion, not only by argument count                                                      | 5.6e            |
-| LSP-5  | 5.6c.1 bounded argument ranking        | DONE        | Rank same-arity overloads for integer, floating, character/string, identifier, and pointer-shaped arguments with conservative fallback | 5.6c |
-| LSP-5  | 5.6d write/reference effects           | OPEN        | Distinguish reads, writes, declarations, and callback/function-pointer references                                      | 5.6e            |
-| LSP-5  | 5.6e comptime parity                   | OPEN        | Expose generated declarations, scopes, aliases, and source origins consistently in all semantic features               | LSP-5 gate      |
-| LSP-7  | 7.6a sustained throughput              | DONE        | 60-second gate completed 2,202 rounds and 46,242 document requests on Linux/JDK 21                                     | 7.7 host matrix |
-| LSP-7  | 7.6b fairness/starvation               | DONE        | Every sustained round completed its post-cancellation tail request without starvation                                  | 7.7 host matrix |
-| LSP-7  | 7.6c memory budget                     | DONE        | 60-second run stayed within the 64 MiB post-GC growth ceiling, reporting a −567,968 byte delta                         | 7.7 host matrix |
-| LSP-7  | 7.6d threshold policy                  | DONE        | Freeze machine-independent pass/fail thresholds and benchmark report format                                            | 7.7             |
-| LSP-7  | 7.7a Linux host matrix                 | DONE        | Run protocol, edit, crash, and benchmark fixtures on supported Linux hosts                                             | 7.7b            |
-| LSP-7  | 7.7b macOS host matrix                 | OPEN        | Run the same fixtures on supported macOS hosts                                                                         | 7.7c            |
-| LSP-7  | 7.7c Windows host matrix               | OPEN        | Run the same fixtures on supported Windows hosts                                                                       | LSP-7 gate      |
-| LSP-7  | 7.9a Vim restart                       | DONE        | Headless unexpected-exit/restart fixture passes                                                                        | 7.9 gate        |
-| LSP-7  | 7.9b VS Code restart                   | DONE        | Real child-process fixture proves bounded auto-restart and explicit restart reset, including closed-pipe recovery      | 7.9 gate        |
-| LSP-7  | 7.9c IntelliJ restart                  | OPEN        | Exercise unexpected server exit, restart action, document recovery, and diagnostics recovery                           | 7.9 gate        |
-| LSP-8  | 8.1a discovery precedence              | DONE        | Configured command, project launcher, then PATH `cpc` order is implemented in all clients                              | 8.1b            |
-| LSP-8  | 8.1b packaged discovery                | DONE        | Shared fixture passes from extracted bare and six-host cross-runtime distributions through the project-local launcher  | 8.1 gate        |
-| LSP-8  | 8.5a IntelliJ startup/sync             | OPEN        | Interactive IntelliJ client starts the server and synchronizes a document                                              | 8.5b–c          |
-| LSP-8  | 8.5b IntelliJ features                 | OPEN        | Verify diagnostics, navigation, completion, and test discovery through the real client                                 | 8.5c            |
-| LSP-8  | 8.5c IntelliJ restart                  | OPEN        | Verify restart and state recovery through the real client                                                              | LSP-8.5 gate    |
-| LSP-8  | 8.6a bare release hosts                | OPEN        | Validate bare artifacts on every supported release host                                                                | 8.6c            |
-| LSP-8  | 8.6b bundled release hosts             | OPEN        | Validate bundled artifacts on every supported release host                                                             | 8.6c            |
-| LSP-8  | 8.6c protocol-clean matrix             | OPEN        | Record stdout, exit-code, launcher, and discovery results in retained CI artifacts                                     | 8.7             |
-| LSP-8  | 8.7a artifact manifest                 | IN PROGRESS | Audit jars, editor bundles, documentation, launchers, and checksums for each release                                   | 8.7b            |
-| LSP-8  | 8.7b publication rehearsal             | OPEN        | Publish a tagged release candidate and verify downloadable assets and metadata                                         | LSP-8 gate      |
+| Parent | Subtask                                | Status      | Concrete deliverable                                                                                                                   | Blocks          |
+|--------|----------------------------------------|-------------|----------------------------------------------------------------------------------------------------------------------------------------|-----------------|
+| LSP-5  | 5.6a semantic type model               | OPEN        | Resolve primitive, typedef, pointer, array, function, and qualifier types from the compiler semantic model                             | 5.6b–e          |
+| LSP-5  | 5.6a.1 qualified pointer shape         | DONE        | Normalize `const`/`volatile`/`restrict` around pointer declarations and preserve pointer depth for receiver matching                   | 5.6a            |
+| LSP-5  | 5.6a.2 array decay shape               | DONE        | Model array arguments as one pointer layer for bounded overload and receiver selection                                                 | 5.6a            |
+| LSP-5  | 5.6a.3 lexical-vs-call selection       | DONE        | Preserve overload ranking at call sites while selecting the narrowest lexical declaration for ordinary references                      | 5.6a            |
+| LSP-5  | 5.6b member typing                     | OPEN        | Infer `.`/`->` receiver types, fields, methods, `self`, and chained receivers                                                          | 5.6c–e          |
+| LSP-5  | 5.6b.1 receiver operator compatibility | DONE        | Reject value/`->` and pointer/`.` member mismatches while retaining valid value, pointer, `self`, and static receivers                 | 5.6b–e          |
+| LSP-5  | 5.6c callable ranking                  | OPEN        | Rank overloads by type and conversion, not only by argument count                                                                      | 5.6e            |
+| LSP-5  | 5.6c.1 bounded argument ranking        | DONE        | Rank same-arity overloads for integer, floating, character/string, identifier, and pointer-shaped arguments with conservative fallback | 5.6c            |
+| LSP-5  | 5.6c.2 function-pointer compatibility  | DONE        | Match direct function values to compatible function-pointer overloads using return type and callback arity                 | 5.6c            |
+| LSP-5  | 5.6d write/reference effects           | OPEN        | Distinguish reads, writes, declarations, and callback/function-pointer references                                                      | 5.6e            |
+| LSP-5  | 5.6e comptime parity                   | OPEN        | Expose generated declarations, scopes, aliases, and source origins consistently in all semantic features                               | LSP-5 gate      |
+| LSP-7  | 7.6a sustained throughput              | DONE        | 60-second gate completed 2,202 rounds and 46,242 document requests on Linux/JDK 21                                                     | 7.7 host matrix |
+| LSP-7  | 7.6b fairness/starvation               | DONE        | Every sustained round completed its post-cancellation tail request without starvation                                                  | 7.7 host matrix |
+| LSP-7  | 7.6c memory budget                     | DONE        | 60-second run stayed within the 64 MiB post-GC growth ceiling, reporting a −567,968 byte delta                                         | 7.7 host matrix |
+| LSP-7  | 7.6d threshold policy                  | DONE        | Freeze machine-independent pass/fail thresholds and benchmark report format                                                            | 7.7             |
+| LSP-7  | 7.7a Linux host matrix                 | DONE        | Run protocol, edit, crash, and benchmark fixtures on supported Linux hosts                                                             | 7.7b            |
+| LSP-7  | 7.7b macOS host matrix                 | OPEN        | Run the same fixtures on supported macOS hosts                                                                                         | 7.7c            |
+| LSP-7  | 7.7c Windows host matrix               | OPEN        | Run the same fixtures on supported Windows hosts                                                                                       | LSP-7 gate      |
+| LSP-7  | 7.9a Vim restart                       | DONE        | Headless unexpected-exit/restart fixture passes                                                                                        | 7.9 gate        |
+| LSP-7  | 7.9b VS Code restart                   | DONE        | Real child-process fixture proves bounded auto-restart and explicit restart reset, including closed-pipe recovery                      | 7.9 gate        |
+| LSP-7  | 7.9c IntelliJ restart                  | OPEN        | Exercise unexpected server exit, restart action, document recovery, and diagnostics recovery                                           | 7.9 gate        |
+| LSP-8  | 8.1a discovery precedence              | DONE        | Configured command, project launcher, then PATH `cpc` order is implemented in all clients                                              | 8.1b            |
+| LSP-8  | 8.1b packaged discovery                | DONE        | Shared fixture passes from extracted bare and six-host cross-runtime distributions through the project-local launcher                  | 8.1 gate        |
+| LSP-8  | 8.5a IntelliJ startup/sync             | OPEN        | Interactive IntelliJ client starts the server and synchronizes a document                                                              | 8.5b–c          |
+| LSP-8  | 8.5b IntelliJ features                 | OPEN        | Verify diagnostics, navigation, completion, and test discovery through the real client                                                 | 8.5c            |
+| LSP-8  | 8.5c IntelliJ restart                  | OPEN        | Verify restart and state recovery through the real client                                                                              | LSP-8.5 gate    |
+| LSP-8  | 8.6a bare release hosts                | OPEN        | Validate bare artifacts on every supported release host                                                                                | 8.6c            |
+| LSP-8  | 8.6b bundled release hosts             | OPEN        | Validate bundled artifacts on every supported release host                                                                             | 8.6c            |
+| LSP-8  | 8.6c protocol-clean matrix             | OPEN        | Record stdout, exit-code, launcher, and discovery results in retained CI artifacts                                                     | 8.7             |
+| LSP-8  | 8.7a artifact manifest                 | IN PROGRESS | Audit jars, editor bundles, documentation, launchers, and checksums for each release                                                   | 8.7b            |
+| LSP-8  | 8.7b publication rehearsal             | OPEN        | Publish a tagged release candidate and verify downloadable assets and metadata                                                         | LSP-8 gate      |
 
 ### Current bottleneck and next execution order
 

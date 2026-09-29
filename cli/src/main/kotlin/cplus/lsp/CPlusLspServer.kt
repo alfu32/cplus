@@ -358,6 +358,7 @@ class CPlusLspServer(
 
     private fun resolveImport(document: LspDocument, requested: String): Path? {
         val sourcePath = pathFromUri(document.uri)
+        lexicalImportPath(sourcePath, requested)?.let { return it }
         val resolved = runCatching {
             CPlusImportResolver(importPaths).resolve(
                 source = SourceFile(document.snapshot.text, sourcePath?.toString() ?: document.uri),
@@ -385,7 +386,39 @@ class CPlusLspServer(
         return candidates
             .map { candidate -> (if (candidate.isAbsolute) candidate else sourceDirectory.resolve(candidate)).normalize() }
             .firstOrNull { Files.isRegularFile(it) }
-            ?.let { candidate -> runCatching { candidate.toRealPath() }.getOrDefault(candidate) }
+    }
+
+    /**
+     * Resolve an editor import without canonicalizing the path used as its URI.
+     * Compiler imports still use canonical paths for graph identity, but an LSP
+     * location must remain stable relative to the URI the editor opened.
+     */
+    private fun lexicalImportPath(sourcePath: Path?, requested: String): Path? {
+        val (roots, relative) = when {
+            requested.startsWith("stdlib:/") -> importPaths.standardLibraryRoots to requested.removePrefix("stdlib:/")
+            requested.startsWith("module:/") -> importPaths.moduleRoots to requested.removePrefix("module:/")
+            requested.startsWith("project:/") -> importPaths.moduleRoots to requested.removePrefix("project:/")
+            sourcePath != null -> listOfNotNull(sourcePath.parent) to requested
+            else -> emptyList<Path>() to requested
+        }
+        if (roots.isEmpty()) return null
+        val requestedPath = runCatching { Path.of(relative) }.getOrNull() ?: return null
+        val extension = requestedPath.fileName?.toString()?.substringAfterLast('.', "").orEmpty()
+        val candidates = if (extension.isNotEmpty()) {
+            listOf(requestedPath)
+        } else {
+            listOf("cp", "c+").map { suffix ->
+                requestedPath.resolveSibling("${requestedPath.fileName}.$suffix")
+            }
+        }
+        for (root in roots) {
+            val normalizedRoot = root.toAbsolutePath().normalize()
+            for (candidate in candidates) {
+                val resolved = (if (candidate.isAbsolute) candidate else normalizedRoot.resolve(candidate)).normalize()
+                if (resolved.startsWith(normalizedRoot) && Files.isRegularFile(resolved)) return resolved
+            }
+        }
+        return null
     }
 
     private fun importPath(text: String): String? = IMPORT_LITERAL.find(text)?.groupValues?.get(1)?.let(::unescapeImport)
@@ -664,7 +697,7 @@ class CPlusLspServer(
     private fun parameterTypes(symbol: LspSymbol): List<TypeShape>? {
         if (symbol.kind !in setOf(6, 12)) return null
         val open = symbol.detail.indexOf('(')
-        val close = symbol.detail.indexOf(')', open + 1)
+        val close = matchingClosingParen(symbol.detail, open)
         if (open < 0 || close < 0) return null
         val parameters = symbol.detail.substring(open + 1, close).trim()
         if (parameters.isEmpty() || parameters == "void") return emptyList()
@@ -685,10 +718,35 @@ class CPlusLspServer(
         return result.mapNotNull(::typeShape)
     }
 
+    private fun matchingClosingParen(text: String, open: Int): Int {
+        if (open < 0 || open >= text.length || text[open] != '(') return -1
+        var depth = 0
+        for (index in open until text.length) {
+            when (text[index]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+        }
+        return -1
+    }
+
     private fun typeMatchScore(document: LspDocument, expected: TypeShape, argument: String): Int {
         val actual = expressionType(document, argument) ?: return 50
         val expectedBase = resolveTypeAlias(expected.base)
         val actualBase = resolveTypeAlias(actual.base)
+        if (expected.callableArity != null) {
+            return when {
+                actual.callableArity == expected.callableArity &&
+                    (expected.callableReturnBase == null ||
+                        resolveTypeAlias(expected.callableReturnBase) == actualBase) -> 0
+                actual.callableArity != null -> 35
+                else -> 45
+            }
+        }
+        if (actual.callableArity != null) return 35
         val expectedPointers = expected.pointerDepth + expected.arrayDepth
         val actualPointers = actual.pointerDepth + actual.arrayDepth
         return when {
@@ -703,6 +761,19 @@ class CPlusLspServer(
         val cleaned = declaration
             .replace(Regex("\\b(borrowed|owned|mut|const|volatile|restrict)\\b"), " ")
             .trim()
+        val callable = Regex(
+            "(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*\\(\\s*\\*[^)]*\\)\\s*\\((.*)\\)"
+        ).find(cleaned)
+        if (callable != null) {
+            val parameters = callable.groupValues[2].trim()
+            return TypeShape(
+                base = callable.groupValues[1],
+                pointerDepth = 1,
+                arrayDepth = 0,
+                callableArity = parameterCount(parameters),
+                callableReturnBase = callable.groupValues[1]
+            )
+        }
         val pointerDepth = cleaned.count { it == '*' }
         val arrayDepth = Regex("\\[[^]]*\\]").findAll(cleaned).count()
         val base = Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)")
@@ -719,6 +790,10 @@ class CPlusLspServer(
         val address = value.removePrefix("&").takeIf { value.startsWith("&") }
         val name = address ?: value
         if (!name.matches(IDENTIFIER)) return null
+        val function = visibleSymbols(document)
+            .filter { it.kind in setOf(6, 12) && it.name == name }
+            .minByOrNull { it.selection.startOffset }
+        if (function != null) return functionTypeShape(function)
         val variable = visibleSymbols(document)
             .filter { it.kind == 13 && it.name == name }
             .sortedWith(compareBy<LspSymbol> { !it.scope.contains(document.snapshot.text.indexOf(value)) })
@@ -731,10 +806,40 @@ class CPlusLspServer(
         )
     }
 
+    private fun functionTypeShape(symbol: LspSymbol): TypeShape? {
+        val nameOffset = symbol.detail.indexOf(symbol.name)
+        val open = symbol.detail.indexOf('(', nameOffset + symbol.name.length)
+        val close = matchingClosingParen(symbol.detail, open)
+        if (nameOffset <= 0 || open < 0 || close < 0) return null
+        val returnBase = typeShape(symbol.detail.substring(0, nameOffset))?.base ?: return null
+        return TypeShape(
+            base = returnBase,
+            pointerDepth = 1,
+            arrayDepth = 0,
+            callableArity = parameterCount(symbol.detail.substring(open + 1, close)),
+            callableReturnBase = returnBase
+        )
+    }
+
+    private fun parameterCount(parameters: String): Int {
+        val trimmed = parameters.trim()
+        if (trimmed.isEmpty() || trimmed == "void") return 0
+        var depth = 0
+        var count = 1
+        trimmed.forEach { character ->
+            when (character) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> if (depth > 0) depth--
+                ',' -> if (depth == 0) count++
+            }
+        }
+        return count
+    }
+
     private fun parameterArity(symbol: LspSymbol): Int? {
         if (symbol.kind !in setOf(6, 12)) return null
         val open = symbol.detail.indexOf('(')
-        val close = symbol.detail.indexOf(')', open + 1)
+        val close = matchingClosingParen(symbol.detail, open)
         if (open < 0 || close < 0) return null
         val parameters = symbol.detail.substring(open + 1, close).trim()
         if (parameters.isEmpty() || parameters == "void") return 0
@@ -916,7 +1021,13 @@ private class RequestState(val key: String) {
 
 private data class DeclaredType(val typeName: String, val pointerDepth: Int, val arrayDepth: Int)
 
-private data class TypeShape(val base: String, val pointerDepth: Int, val arrayDepth: Int)
+private data class TypeShape(
+    val base: String,
+    val pointerDepth: Int,
+    val arrayDepth: Int,
+    val callableArity: Int? = null,
+    val callableReturnBase: String? = null
+)
 
 private data class LspDocument(
     val uri: String,
@@ -1010,7 +1121,9 @@ private object LspSymbolIndex {
                         else -> 13
                     }
                     val mappedDeclaration = mapSpan(node.span)
-                    val symbolUri = originUri(mappedDeclaration.file) ?: uri
+                    val symbolUri = originUri(mappedDeclaration.file)
+                        ?.takeUnless { sameSourceUri(it, uri) }
+                        ?: uri
                     symbols += LspSymbol(
                         symbolUri, name, kind,
                         parsedText.substring(node.span.startOffset, node.span.endOffset)
@@ -1056,6 +1169,16 @@ private object LspSymbolIndex {
     private fun originUri(file: String?): String? = file?.let {
         if (it.startsWith("file:", ignoreCase = true)) it
         else runCatching { Path.of(it).toUri().toString() }.getOrNull()
+    }
+
+    private fun sameSourceUri(left: String, right: String): Boolean {
+        if (left == right) return true
+        val leftPath = runCatching { Path.of(java.net.URI(left)).toAbsolutePath().normalize() }.getOrNull()
+        val rightPath = runCatching { Path.of(java.net.URI(right)).toAbsolutePath().normalize() }.getOrNull()
+        if (leftPath == null || rightPath == null) return false
+        val leftComparable = runCatching { leftPath.toRealPath() }.getOrDefault(leftPath)
+        val rightComparable = runCatching { rightPath.toRealPath() }.getOrDefault(rightPath)
+        return leftComparable == rightComparable
     }
 }
 

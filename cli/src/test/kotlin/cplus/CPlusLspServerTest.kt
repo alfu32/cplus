@@ -9,6 +9,7 @@ import java.nio.file.Path
 import kotlin.random.Random
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
@@ -338,6 +339,31 @@ class CPlusLspServerTest {
 
         val response = output.toString(StandardCharsets.UTF_8)
         assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":0,"), response)
+    }
+
+    @Test
+    fun resolvesAFunctionPointerOverloadAgainstAFunctionValue() {
+        val uri = "file:///overload-callable.cp"
+        val source = "int increment(int value) { return value + 1; }\n" +
+            "int choose(int value) { return value; }\n" +
+            "int choose(int (*callback)(int)) { return callback(1); }\n" +
+            "int main(void) { return choose(increment); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val callPosition = source.lines()[3].indexOf("choose")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":3,\"character\":$callPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":2,"), response)
     }
 
     @Test
@@ -772,6 +798,36 @@ class CPlusLspServerTest {
 
         val response = output.toString(StandardCharsets.UTF_8)
         assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"imported_t\""), response)
+        assertTrue(response.contains("\"uri\":\"${dependency.toUri()}\""), response)
+    }
+
+    @Test
+    fun preservesLexicalImportUriThroughSymlinkedWorkspace(@TempDir directory: Path) {
+        val realRoot = directory.resolve("real-root")
+        Files.createDirectories(realRoot)
+        val lexicalRoot = directory.resolve("lexical-root")
+        val linked = runCatching { Files.createSymbolicLink(lexicalRoot, realRoot) }.isSuccess
+        assumeTrue(linked, "symbolic links are unavailable on this host")
+
+        val dependency = lexicalRoot.resolve("dependency.cp")
+        Files.writeString(dependency, "typedef struct lexical_import_t { int value; } lexical_import_t;\n")
+        val root = lexicalRoot.resolve("main.cp")
+        val uri = root.toUri().toString()
+        val source = "comptime import \"dependency.cp\";\nint main(void) { return 0; }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"${lexicalRoot.toUri()}\"}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"lexical_import_t\"}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"lexical_import_t\""), response)
         assertTrue(response.contains("\"uri\":\"${dependency.toUri()}\""), response)
     }
 
