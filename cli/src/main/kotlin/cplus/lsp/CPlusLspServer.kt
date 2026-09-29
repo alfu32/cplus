@@ -395,38 +395,72 @@ class CPlusLspServer(
      */
     private fun references(request: Json.Object): String {
         val document = request.uri()?.let(documents::get) ?: return "[]"
-        val target = symbolAt(request)?.name ?: document.wordAt(request.position())
+        val selected = symbolAt(request)
+        val target = selected?.name ?: document.wordAt(request.position())
         if (target.isEmpty()) return "[]"
         val includeDeclaration = ((request.values["params"] as? Json.Object)
             ?.values?.get("context") as? Json.Object)
             ?.values?.get("includeDeclaration") as? Json.BooleanValue
-        val declarationRanges = visibleSymbols(document)
-            .filter { it.name == target }
-            .map { it.uri to it.selection.startOffset }
-            .toSet()
+        val visible = visibleSymbols(document).toList()
         return reachableDocuments(document.uri).asSequence()
             .mapNotNull(documents::get)
             .flatMap { candidate ->
-                candidate.ast.root.flatten()
-                    .filter { it.kind == CPlusAstKind.IDENTIFIER }
+                candidate.ast.root.identifierOccurrences()
+                    .filter { it.node.kind == CPlusAstKind.IDENTIFIER }
                     .filter { node ->
-                        val text = candidate.parsedText.substring(node.span.startOffset, node.span.endOffset)
+                        val text = candidate.parsedText.substring(node.node.span.startOffset, node.node.span.endOffset)
                         text == target
                     }
-                    .map { node ->
+                    .map { occurrence ->
+                        val node = occurrence.node
                         val mapped = candidate.mappedSource?.toOriginalSpan(node.span) ?: node.span
                         val uri = mapped.file?.let { file ->
                             if (file.startsWith("file:", ignoreCase = true)) file
                             else runCatching { Path.of(file).toUri().toString() }.getOrNull()
                         } ?: candidate.uri
-                        Triple(uri, mapped, node)
+                        LspReference(uri, mapped, occurrence.copy(callArity = callArity(candidate.snapshot.text, node.span.startOffset)))
                     }
             }
-            .filter { (uri, span, _) -> includeDeclaration?.value != false || uri to span.startOffset !in declarationRanges }
-            .sortedWith(compareBy<Triple<String, SourceSpan, CPlusAstNode>> { it.first }.thenBy { it.second.startOffset })
-            .joinToString(",", "[", "]") { (uri, span, _) ->
-                "{\"uri\":${Json.string(uri)},\"range\":${span.toRangeJson()}}"
+            .filter { reference ->
+                selected == null || referenceMatches(selected, target, visible, reference)
             }
+            .filter { reference ->
+                includeDeclaration?.value != false || selected == null ||
+                    (reference.uri to reference.span.startOffset) !=
+                        (selected.uri to selected.selection.startOffset)
+            }
+            .sortedWith(compareBy<LspReference> { it.uri }.thenBy { it.span.startOffset })
+            .joinToString(",", "[", "]") { reference ->
+                "{\"uri\":${Json.string(reference.uri)},\"range\":${reference.span.toRangeJson()}}"
+            }
+    }
+
+    private fun referenceMatches(
+        selected: LspSymbol,
+        target: String,
+        visible: List<LspSymbol>,
+        reference: LspReference
+    ): Boolean {
+        val uri = reference.uri
+        val span = reference.span
+        val occurrence = reference.occurrence
+        if (uri == selected.uri && span.startOffset == selected.selection.startOffset) return true
+        val declarations = visible.filter { it.name == target }
+        if (selected.kind == 6 || selected.kind == 12) {
+            // Function references are bounded to call sites. Type-based callable
+            // values remain a later semantic-resolution slice.
+            if (!occurrence.ancestors.contains("call_expression")) return false
+            val callArity = occurrence.callArity
+            val selectedArity = parameterArity(selected)
+            return callArity == null || selectedArity == null || callArity == selectedArity
+        }
+        val scoped = declarations
+            .filter { it.scope.contains(span) && it.selection.startOffset <= span.startOffset }
+            .minWithOrNull(compareBy<LspSymbol> { it.scope.size() }.thenByDescending { it.selection.startOffset })
+            ?: declarations
+                .filter { it.uri == uri && it.selection.startOffset <= span.startOffset }
+                .maxByOrNull { it.selection.startOffset }
+        return scoped?.uri == selected.uri && scoped.selection.startOffset == selected.selection.startOffset
     }
 
     private fun symbolAt(request: Json.Object): LspSymbol? {
@@ -653,6 +687,18 @@ private data class LspDocumentUpdate(
     val version: Int?
 )
 
+private data class LspIdentifierOccurrence(
+    val node: CPlusAstNode,
+    val ancestors: List<String>,
+    val callArity: Int? = null
+)
+
+private data class LspReference(
+    val uri: String,
+    val span: SourceSpan,
+    val occurrence: LspIdentifierOccurrence
+)
+
 private data class LspSymbol(
     val uri: String,
     val name: String,
@@ -750,6 +796,14 @@ private object LspSymbolIndex {
 private fun CPlusAstNode.flatten(): Sequence<CPlusAstNode> = sequence {
     yield(this@flatten)
     children.forEach { yieldAll(it.flatten()) }
+}
+
+private fun CPlusAstNode.identifierOccurrences(
+    ancestors: List<String> = emptyList()
+): Sequence<LspIdentifierOccurrence> = sequence {
+    if (kind == CPlusAstKind.IDENTIFIER) yield(LspIdentifierOccurrence(this@identifierOccurrences, ancestors))
+    val nextAncestors = ancestors + syntaxKind
+    children.forEach { child -> yieldAll(child.identifierOccurrences(nextAncestors)) }
 }
 
 private fun Char.isIdentifierPart(): Boolean = isLetterOrDigit() || this == '_'

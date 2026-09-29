@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.random.Random
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -256,6 +257,33 @@ class CPlusLspServerTest {
             .count { it == "\"uri\":\"$uri\"" } >= 5, response)
         assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\""), response)
         assertTrue(response.contains("\"id\":3,\"result\":[{\"uri\":\"$uri\""), response)
+    }
+
+    @Test
+    fun resolvesReferencesToTheNearestShadowedVariable() {
+        val uri = "file:///shadowed-references.cp"
+        val source = "int target(int value) { return value; }\n" +
+            "int main(void) { int target = 7; return target; }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val reference = source.lastIndexOf("target;") - source.indexOf('\n') - 1
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/references\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":1,\"character\":$reference}," +
+                "\"context\":{\"includeDeclaration\":true}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\""), response)
+        assertFalse(response.contains("\"start\":{\"line\":0,\"character\":4}"), response)
+        assertTrue(response.contains("\"start\":{\"line\":1,\"character\":21}"), response)
+        assertTrue(response.contains("\"start\":{\"line\":1,\"character\":40}"), response)
     }
 
     @Test

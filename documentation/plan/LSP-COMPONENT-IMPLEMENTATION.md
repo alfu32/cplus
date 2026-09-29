@@ -206,8 +206,9 @@ as proof of supported-host release behavior.
 | 4     | LSP-5.4a: add lexical scope resolution                   | LSP-5.3    | A shadowed local reference resolves to the nearest declaration in its containing block                                   |
 | 5     | LSP-5.4b: add typedef, receiver, and method resolution   | LSP-5.4a   | Shadowed aliases and `object.method`, `object->method`, and `self` calls resolve consistently                            |
 | 6     | LSP-5.4c: index materialized comptime declarations       | LSP-5.4b   | Generated workspace symbols and definitions retain original `.cp` invocation ranges                                      |
-| 7     | LSP-5.5a: add cancellation and revision guards           | LSP-5.4c   | `$/cancelRequest` suppresses canceled document responses and revision checks prevent stale publication                   |
-| 8     | LSP-5.5b: add cooperative asynchronous scheduling        | LSP-5.5a   | Expensive parse/index work yields or cancels without blocking the stdio reader                                           |
+| 7     | LSP-5.4d: resolve bounded reference identity             | LSP-5.4c   | Function call arity and nearest variable scopes select references without same-name leakage                             |
+| 8     | LSP-5.5a: add cancellation and revision guards           | LSP-5.4d   | `$/cancelRequest` suppresses canceled document responses and revision checks prevent stale publication                   |
+| 9     | LSP-5.5b: add cooperative asynchronous scheduling        | LSP-5.5a   | Expensive parse/index work yields or cancels without blocking the stdio reader                                           |
 | 9     | LSP-6.1–6.4: complete client parity and launch recovery | LSP-5.5b   | VS Code, Vim, and IntelliJ pass the same protocol fixture for diagnostics, navigation, completion, and tests             |
 | 10    | LSP-7: reliability and performance evidence              | LSP-6      | Framing fuzz cases, restart behavior, and corpus latency measurements are recorded                                       |
 | 11    | LSP-8: distribution discovery and release packaging      | LSP-7      | Bare and bundled distributions launch `cplus lsp` with clean stdout                                                      |
