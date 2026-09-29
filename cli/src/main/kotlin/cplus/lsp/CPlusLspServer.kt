@@ -1056,7 +1056,7 @@ private data class LspDocument(
         // not use such a range as a hit-test against the root document; the
         // word-based lookup below can still resolve the imported declaration.
         return symbols.firstOrNull {
-            it.selection.file == snapshot.sourceFile.name &&
+            sameSourceFile(it.selection.file, snapshot.sourceFile.name) &&
                 offset in it.selection.startOffset until it.selection.endOffset
         }
     }
@@ -1173,20 +1173,38 @@ private object LspSymbolIndex {
         }
     }
 
-    private fun originUri(file: String?): String? = file?.let {
-        if (it.startsWith("file:", ignoreCase = true)) it
-        else runCatching { Path.of(it).toUri().toString() }.getOrNull()
-    }
+}
 
-    private fun sameSourceUri(left: String, right: String): Boolean {
-        if (left == right) return true
-        val leftPath = runCatching { Path.of(java.net.URI(left)).toAbsolutePath().normalize() }.getOrNull()
-        val rightPath = runCatching { Path.of(java.net.URI(right)).toAbsolutePath().normalize() }.getOrNull()
-        if (leftPath == null || rightPath == null) return false
-        val leftComparable = runCatching { leftPath.toRealPath() }.getOrDefault(leftPath)
-        val rightComparable = runCatching { rightPath.toRealPath() }.getOrDefault(rightPath)
-        return leftComparable == rightComparable
-    }
+/**
+ * Compare source identities across the representations used by LSP and the
+ * compiler. Open documents are keyed by URIs, while mapped origins normally
+ * carry canonical filesystem paths. Keeping this in one helper also makes
+ * Windows drive-letter and URI normalization consistent for hit testing and
+ * declaration locations.
+ */
+private fun sameSourceFile(left: String?, right: String?): Boolean {
+    if (left == null || right == null) return left == right
+    if (left == right) return true
+    val leftUri = sourceUri(left) ?: return false
+    val rightUri = sourceUri(right) ?: return false
+    return sameSourceUri(leftUri, rightUri)
+}
+
+private fun originUri(file: String?): String? = file?.let(::sourceUri)
+
+private fun sourceUri(file: String): String? {
+    if (file.startsWith("file:", ignoreCase = true)) return file
+    return runCatching { Path.of(file).toUri().toString() }.getOrNull()
+}
+
+private fun sameSourceUri(left: String, right: String): Boolean {
+    if (left == right) return true
+    val leftPath = runCatching { Path.of(URI(left)).toAbsolutePath().normalize() }.getOrNull()
+    val rightPath = runCatching { Path.of(URI(right)).toAbsolutePath().normalize() }.getOrNull()
+    if (leftPath == null || rightPath == null) return false
+    val leftComparable = runCatching { leftPath.toRealPath() }.getOrDefault(leftPath)
+    val rightComparable = runCatching { rightPath.toRealPath() }.getOrDefault(rightPath)
+    return leftComparable == rightComparable
 }
 
 private fun CPlusAstNode.flatten(): Sequence<CPlusAstNode> = sequence {
