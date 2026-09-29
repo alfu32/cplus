@@ -328,7 +328,10 @@ jobs:
           bare_targets="$(jar tf "$bare_jar" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
           test -z "$bare_targets"
           cross_targets="$(jar tf "$cross_jar" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
-          expected_targets="$(printf '%s\n' linux-aarch64 linux-x86_64 macos-aarch64 windows-x86_64)"
+          # Distribution bundles still contain all published cross-runtime
+          # payload targets; this check is independent of the four-host parser
+          # validation matrix above.
+          expected_targets="$(printf '%s\n' linux-aarch64 linux-x86_64 macos-aarch64 macos-x86_64 windows-aarch64 windows-x86_64)"
           test "$cross_targets" = "$expected_targets"
           sysroots="$(jar tf "$cross_jar" | grep '/tinycc/sysroot/' || true)"
           test -z "$sysroots"
