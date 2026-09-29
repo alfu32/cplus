@@ -342,7 +342,9 @@ jobs:
             parser_windows_base="$(jar tf "$jar" | grep -E '^lib/windows/(x64|aarch64)/ktreesitter\.dll$' | sort -u | wc -l)"
             test "$parser_windows_base" -eq 1
             parser_macos_base="$(jar tf "$jar" | grep -E '^lib/macos/(x64|aarch64)/libktreesitter\.dylib$' | sort -u | wc -l)"
-            test "$parser_macos_base" -eq 1
+            # The packaged parser runtime still carries both macOS base
+            # Tree-sitter loaders even though only arm64 is actively tested.
+            test "$parser_macos_base" -eq 2
           done
           test "$(find build/parser-host-reports -name host.txt | wc -l | tr -d ' ')" -eq 4
           test "$(find build/parser-host-reports -name resources.txt | wc -l | tr -d ' ')" -eq 4
