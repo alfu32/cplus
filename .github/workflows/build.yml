@@ -60,7 +60,7 @@ jobs:
           CC: clang
           CXX: clang++
           TCC: clang
-          CPLUS_TEST_COMPILER: clang
+          CPLUS_TEST_COMPILER: cc,gcc,clang
         run: |
           npm install --global tree-sitter-cli@0.25.10
           if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -79,7 +79,7 @@ jobs:
           CC: clang
           CXX: clang++
           TCC: clang
-          CPLUS_TEST_COMPILER: clang
+          CPLUS_TEST_COMPILER: cc,gcc,clang
         run: |
           ./gradlew \
             :parser-tree-sitter:jvmTest \
@@ -124,7 +124,7 @@ jobs:
           CC: clang
           CXX: clang++
           TCC: clang
-          CPLUS_TEST_COMPILER: clang
+          CPLUS_TEST_COMPILER: cc,gcc,clang
         run: |
           report="parser-tree-sitter/build/parser-host-report"
           mkdir -p "$report"
