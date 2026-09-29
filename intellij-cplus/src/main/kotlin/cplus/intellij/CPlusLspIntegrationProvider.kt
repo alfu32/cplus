@@ -5,6 +5,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspIntegrationProvider
 import com.intellij.platform.lsp.api.ProjectWideLspClientDescriptor
+import java.io.File
 
 /** Starts the repository's CLI language server for C-plus files opened in IntelliJ. */
 class CPlusLspIntegrationProvider : LspIntegrationProvider {
@@ -25,11 +26,31 @@ private class CPlusLspServerDescriptor(project: Project) : ProjectWideLspClientD
 
     override fun createCommandLine(): GeneralCommandLine {
         val configured = CPlusSettings.getInstance().current().languageServerCommand.trim()
-        return GeneralCommandLine(CPlusLspCommand.arguments(configured.ifEmpty { "cplus" }))
+        return GeneralCommandLine(CPlusLspCommand.arguments(
+            CPlusLspCommand.discover(configured, project.basePath)
+        ))
     }
 }
 
 internal object CPlusLspCommand {
+    fun discover(configured: String, projectBasePath: String?, isWindows: Boolean = System.getProperty("os.name")
+        .orEmpty().contains("win", ignoreCase = true), exists: (String) -> Boolean = { File(it).isFile }): String {
+        if (configured.isNotBlank()) return configured.trim()
+        val root = projectBasePath?.takeIf { it.isNotBlank() }
+        if (root != null) {
+            val candidates = if (isWindows) {
+                listOf("cpc.cmd", "cpc.exe", "cpc")
+            } else {
+                listOf("cpc.sh", "cpc")
+            }
+            candidates
+                .map { File(File(root, ".cplus"), it).path }
+                .firstOrNull(exists)
+                ?.let { return it }
+        }
+        return "cpc"
+    }
+
     fun arguments(command: String): List<String> {
         val result = mutableListOf<String>()
         val current = StringBuilder()

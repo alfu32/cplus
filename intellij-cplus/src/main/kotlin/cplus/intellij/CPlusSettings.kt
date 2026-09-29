@@ -21,7 +21,7 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
         var testProgram: String = "cplus test",
         var parserCommand: String = "",
         var importGraphCommand: String = "cplus graph",
-        var languageServerCommand: String = "cplus"
+        var languageServerCommand: String = ""
     )
 
     private var state = State()

@@ -121,8 +121,8 @@
         },
         "cplus.languageServerCommand": {
           "type": "string",
-          "default": "cplus",
-          "description": "Executable used to start the C-plus language server."
+          "default": "",
+          "description": "Optional executable used to start the C-plus language server. Empty uses .cplus/cpc(.sh|.cmd), then installed cpc."
         },
         "cplus.languageServerArguments": {
           "type": "array",
@@ -138,7 +138,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node test/smoke.js",
+    "test": "npm run compile && node test/smoke.js && node test/restart.js",
     "package": "npm run compile && node scripts/package.js"
   },
   "devDependencies": {

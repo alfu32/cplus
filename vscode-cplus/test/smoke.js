@@ -1,10 +1,23 @@
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
+const { existsSync, readFileSync } = require("node:fs");
+const { resolve } = require("node:path");
 const { indexText, memberContext, symbolsFromAst } = require("../out/index.js");
 const builtins = require("../out/builtins.js");
 const { resolveVersion } = require("../scripts/package.js");
 const { findTestFixtures, findTestFixturesFromAst } = require("../out/tests.js");
 const { decodeImportGraph } = require("../out/importGraph.js");
+const discovery = require("../out/lspDiscovery.js");
+
+assert.deepEqual(discovery.resolveLanguageServerCommand({ configured: "java -jar 'c-plus.jar'" }), ["java", "-jar", "c-plus.jar"]);
+assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "/project", platform: "linux", exists: (path) => path === "/project/.cplus/cpc.sh" }), ["/project/.cplus/cpc.sh"]);
+assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "C:/project", platform: "win32", exists: (path) => path.endsWith("cpc.cmd") }), ["C:/project/.cplus/cpc.cmd"]);
+assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "/project", exists: () => false }), ["cpc"]);
+assert.match(discovery.languageServerDiscoveryFailure(["cpc"]), /install the cpc launcher/);
+const discoveryFixture = resolve(__dirname, "../../documentation/fixtures/lsp-discovery");
+assert.deepEqual(
+  discovery.resolveLanguageServerCommand({ workspaceRoot: discoveryFixture, platform: "linux", exists: existsSync }),
+  [resolve(discoveryFixture, ".cplus/cpc.sh")]
+);
 
 for (const value of ["pub", "priv", "mut", "borrowed", "owned", "stat", "scratch", "hot", "warm", "cold"]) {
   assert.ok(builtins.cplusAnnotations.includes(value), `missing annotation completion: ${value}`);
@@ -36,6 +49,7 @@ assert.equal(packageManifest.contributes.configuration.properties["cplus.languag
 assert.ok(packageManifest.contributes.configuration.properties["cplus.languageServerCommand"]);
 assert.ok(readFileSync("out/lspClient.js", "utf8").includes("textDocument/publishDiagnostics"));
 assert.ok(readFileSync("out/lspClient.js", "utf8").includes("restarting once"));
+assert.ok(readFileSync("out/lspClient.js", "utf8").includes("user-requested restart"));
 assert.ok(packageManifest.contributes.commands.some((command) => command.command === "cplus.restartLanguageServer"));
 const cplusIconTheme = packageManifest.contributes.iconThemes.find((theme) => theme.id === "cplus-file-icons");
 assert.ok(cplusIconTheme, "C-plus file icon theme must be contributed");

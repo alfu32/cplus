@@ -28,6 +28,22 @@ class CPlusParserExternalAnnotatorTest {
     }
 
     @Test
+    fun discoversProjectLauncherBeforeInstalledCpc() {
+        assertEquals(
+            "/project/.cplus/cpc.sh",
+            CPlusLspCommand.discover("", "/project", isWindows = false) { it == "/project/.cplus/cpc.sh" }
+        )
+        assertEquals(
+            "configured-cpc",
+            CPlusLspCommand.discover("configured-cpc", "/project", isWindows = false) { false }
+        )
+        assertEquals(
+            "cpc",
+            CPlusLspCommand.discover("", "/project", isWindows = false) { false }
+        )
+    }
+
+    @Test
     fun decodesVersionedParserDiagnosticsAndUtf16Offsets() {
         val diagnostics = CPlusParserJsonDiagnostics.decode(
             """{"schema":"cplus.parse.v1","diagnostics":[{"code":"TS_ERROR_NODE","message":"bad syntax","severity":"error","span":{"startOffset":4,"endOffset":7,"startLine":1,"startColumn":5,"endLine":1,"endColumn":8}}]}"""

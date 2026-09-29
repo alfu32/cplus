@@ -37,3 +37,4 @@ Compiler and parser diagnostics are loaded into the quickfix list. `:CPlusParse`
 From the repository root, run `vim -Nu NONE -i NONE -n -es -S vim-cplus/test/outline.vim` to verify parser-backed symbols, import-graph navigation, and Unicode-aware quickfix positions; it uses `cli/build/libs/c-plus.jar`.
 
 Run `vim -Nu NONE -i NONE -n -es -S vim-cplus/test/lsp.vim` after building the CLI/parser jars to verify the job/channel bridge and mapped language-server diagnostics.
+Run `vim -Nu NONE -i NONE -n -es -S vim-cplus/test/discovery.vim` to verify project-local `.cplus/cpc.sh` discovery.

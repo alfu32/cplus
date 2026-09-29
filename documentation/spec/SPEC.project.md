@@ -45,6 +45,21 @@ cpc new . # initialize the current directory if scaffold-owned files do not alre
 
 Scaffolding creates `cplus.toml`, `src/main.cp`, `modules/`, `tests/`, and `README.md`. It refuses to overwrite the manifest, main source, or README if any already exists.
 
+## Project-local tooling launcher
+
+Editor integrations discover the language server in this order:
+
+1. the editor's explicitly configured language-server command;
+2. a project-local launcher under `.cplus/`: `cpc.sh` then `cpc` on Unix-like
+   systems, or `cpc.cmd`, `cpc.exe`, then `cpc` on Windows;
+3. the installed `cpc` command from `PATH`.
+
+The selected launcher receives the built-in `lsp` subcommand. A project may
+use a wrapper in `.cplus/` to pin a JAR, Java runtime, or distribution without
+changing every contributor's editor settings. If discovery fails, configure
+the command explicitly or install a C-plus distribution whose `cpc` launcher
+is available in `PATH`.
+
 ## Current limits
 
 The manifest parser supports simple top-level string values and arrays of strings, not arbitrary TOML tables, complex escape rules, package registries, dependency versions, lockfiles, or transitive dependency configuration. `source` is recorded for future commands; direct CLI commands still take explicit source paths. No implicit module names are injected: use `module:/` or a relative import.

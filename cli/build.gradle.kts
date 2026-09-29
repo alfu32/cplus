@@ -45,13 +45,43 @@ tasks.test {
 
 tasks.register<Test>("benchmarkLsp") {
     group = "verification"
-    description = "Measures cold in-memory LSP protocol session latency."
+    description = "Measures LSP latency, bounded overload, and sustained-load behavior."
     dependsOn(tasks.testClasses)
     testClassesDirs = tasks.test.get().testClassesDirs
     classpath = tasks.test.get().classpath
     useJUnitPlatform {
         includeTags("lsp-benchmark")
     }
+    providers.systemProperty("cplus.lsp.benchmark.seconds").orNull?.let { seconds ->
+        systemProperty("cplus.lsp.benchmark.seconds", seconds)
+    }
+    testLogging.showStandardStreams = true
+    outputs.upToDateWhen { false }
+}
+
+tasks.register<Test>("benchmarkLspGate") {
+    group = "verification"
+    description = "Enforces the sustained LSP throughput, fairness, and memory budget."
+    dependsOn(tasks.testClasses)
+    testClassesDirs = tasks.test.get().testClassesDirs
+    classpath = tasks.test.get().classpath
+    useJUnitPlatform {
+        includeTags("lsp-benchmark")
+    }
+    systemProperty("cplus.lsp.benchmark.enforce", "true")
+    systemProperty(
+        "cplus.lsp.benchmark.seconds",
+        providers.gradleProperty("lspBenchmarkSeconds").orElse("60").get()
+    )
+    systemProperty(
+        "cplus.lsp.benchmark.min_rounds_per_second",
+        providers.gradleProperty("lspBenchmarkMinRoundsPerSecond").orElse("1.0").get()
+    )
+    systemProperty(
+        "cplus.lsp.benchmark.max_heap_delta_bytes",
+        providers.gradleProperty("lspBenchmarkMaxHeapDeltaBytes")
+            .orElse((64L * 1024L * 1024L).toString()).get()
+    )
     testLogging.showStandardStreams = true
     outputs.upToDateWhen { false }
 }

@@ -1,0 +1,3 @@
+name = "lsp-discovery-fixture"
+source = "src"
+module-paths = ["modules"]

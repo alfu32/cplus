@@ -113,6 +113,83 @@ class CPlusLspBenchmarkTest {
         )
     }
 
+    @Test
+    fun measuresSustainedLoadCancellationFairnessAndHeapObservation() {
+        val durationSeconds = System.getProperty("cplus.lsp.benchmark.seconds", "3")
+            .toLongOrNull()?.coerceIn(1, 300) ?: 3
+        val enforceBudget = System.getProperty("cplus.lsp.benchmark.enforce", "false")
+            .toBooleanStrictOrNull() ?: false
+        val minimumRoundsPerSecond = System.getProperty(
+            "cplus.lsp.benchmark.min_rounds_per_second", "1.0"
+        ).toDoubleOrNull()?.coerceAtLeast(0.0) ?: 1.0
+        val maximumHeapDeltaBytes = System.getProperty(
+            "cplus.lsp.benchmark.max_heap_delta_bytes", (64L * 1024L * 1024L).toString()
+        ).toLongOrNull()?.coerceAtLeast(0L) ?: (64L * 1024L * 1024L)
+        val source = buildString {
+            repeat(128) { index ->
+                append("typedef struct sustained_${index}_t { int value; } sustained_${index}_t;\n")
+            }
+        }
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val uri = "file:///lsp-sustained.cp"
+        val deadline = System.nanoTime() + durationSeconds * 1_000_000_000L
+        val before = stabilizedUsedHeap()
+        var rounds = 0
+        var completed = 0
+        var cancellationCandidates = 0
+
+        while (System.nanoTime() < deadline || rounds == 0) {
+            val input = buildString {
+                append(frame("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"))
+                append(frame("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                    "\"textDocument\":{\"uri\":\"$uri\",\"version\":${rounds + 1},\"text\":\"$encodedSource\"}}}"))
+                for (id in 2..33) {
+                    append(frame("{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"textDocument/documentSymbol\",\"params\":{" +
+                        "\"textDocument\":{\"uri\":\"$uri\"}}}"))
+                    if (id % 3 == 0) {
+                        append(frame("{\"jsonrpc\":\"2.0\",\"method\":\"\$/cancelRequest\",\"params\":{\"id\":$id}}"))
+                        cancellationCandidates++
+                    }
+                }
+                // A request after the cancellation burst proves that the
+                // executor remains live and cancellation does not starve the
+                // tail of the queue.
+                append(frame("{\"jsonrpc\":\"2.0\",\"id\":2000,\"method\":\"textDocument/documentSymbol\",\"params\":{" +
+                    "\"textDocument\":{\"uri\":\"$uri\"}}}"))
+                append(frame("{\"jsonrpc\":\"2.0\",\"id\":3000,\"method\":\"shutdown\",\"params\":null}"))
+            }.toByteArray(StandardCharsets.UTF_8)
+            val output = ByteArrayOutputStream()
+            CPlusLspServer(ByteArrayInputStream(input), output).serve()
+            val response = output.toString(StandardCharsets.UTF_8)
+            check("\"id\":2000,\"result\":[" in response) { "tail request starved in round $rounds" }
+            check("\"id\":3000,\"result\":null" in response) { "shutdown missing in round $rounds" }
+            completed += (2..33).count { id -> "\"id\":$id,\"result\":[" in response }
+            rounds++
+        }
+
+        val after = stabilizedUsedHeap()
+        check(rounds > 0)
+        check(completed >= rounds) { "no document request completed across $rounds rounds" }
+        val heapDelta = after - before
+        val roundsPerSecond = rounds.toDouble() / durationSeconds
+        if (enforceBudget) {
+            check(roundsPerSecond >= minimumRoundsPerSecond) {
+                "sustained throughput below budget: rounds_per_second=$roundsPerSecond " +
+                    "minimum=$minimumRoundsPerSecond"
+            }
+            check(heapDelta <= maximumHeapDeltaBytes) {
+                "sustained live heap growth above budget: delta_bytes=$heapDelta " +
+                    "maximum=$maximumHeapDeltaBytes"
+            }
+        }
+        println(
+            "lsp_sustained seconds=$durationSeconds rounds=$rounds completed=$completed " +
+                "cancellation_candidates=$cancellationCandidates live_heap_before_bytes=$before " +
+                "live_heap_after_bytes=$after live_heap_delta_bytes=$heapDelta " +
+                "rounds_per_second=${format(roundsPerSecond)} enforce_budget=$enforceBudget"
+        )
+    }
+
     private fun runSession(input: ByteArray) {
         val output = ByteArrayOutputStream()
         CPlusLspServer(ByteArrayInputStream(input), output).serve()
@@ -131,6 +208,13 @@ class CPlusLspBenchmarkTest {
             check("\"id\":$id,\"result\":[" in response) { "document-symbol response $id missing" }
         }
         check("\"id\":100,\"result\":null" in response) { "shutdown response missing" }
+    }
+
+    private fun stabilizedUsedHeap(): Long {
+        System.gc()
+        Thread.sleep(25)
+        val runtime = Runtime.getRuntime()
+        return runtime.totalMemory() - runtime.freeMemory()
     }
 
     private fun frame(message: String): String {

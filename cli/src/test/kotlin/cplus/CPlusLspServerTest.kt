@@ -161,6 +161,71 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun survivesDeterministicUnicodeAndMalformedEditMatrix() {
+        /*
+         * textDocumentSync is deliberately full-document in the current
+         * protocol contract.  Exercise that contract with several generated
+         * edit sequences: valid snapshots, malformed recovery snapshots, and
+         * valid snapshots whose declarations move after supplementary Unicode
+         * characters.  Every request is tied to the revision immediately
+         * before it, so an accepted response must describe the current text.
+         */
+        repeat(32) { seed ->
+            val uri = "file:///edit-matrix-$seed.cp"
+            val snapshots = buildList {
+                repeat(6) { step ->
+                    if ((seed + step) % 3 == 1) {
+                        add("/* seed $seed 🌍 step $step */\ntypedef struct broken_${seed}_${step}_t {")
+                    } else {
+                        val name = "matrix_${seed}_${step}_t"
+                        add(
+                            "/* seed $seed 🌍 step $step */\n" +
+                                "typedef struct $name { int value; } $name;\n" +
+                                "int read_${seed}_${step}($name* self) { return self->value; }\n"
+                        )
+                    }
+                }
+                val step = 6
+                val name = "matrix_${seed}_final_t"
+                add(
+                    "/* seed $seed 🌍 step $step */\n" +
+                        "typedef struct $name { int value; } $name;\n" +
+                        "int read_${seed}_final($name* self) { return self->value; }\n"
+                )
+            }
+            fun encode(value: String): String = value
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+
+            val messages = buildString {
+                append(frame("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"))
+                append(frame("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                    "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"${encode(snapshots.first())}\"}}}"))
+                snapshots.drop(1).forEachIndexed { index, snapshot ->
+                    append(frame("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{" +
+                        "\"textDocument\":{\"uri\":\"$uri\",\"version\":${index + 2}}," +
+                        "\"contentChanges\":[{\"text\":\"${encode(snapshot)}\"}]}}"))
+                }
+                val finalSource = snapshots.last()
+                val finalName = "matrix_${seed}_final_t"
+                append(frame("{\"jsonrpc\":\"2.0\",\"id\":100,\"method\":\"textDocument/documentSymbol\",\"params\":{" +
+                    "\"textDocument\":{\"uri\":\"$uri\"}}}"))
+                append(frame("{\"jsonrpc\":\"2.0\",\"id\":999,\"method\":\"shutdown\",\"params\":null}"))
+            }
+
+            val output = ByteArrayOutputStream()
+            CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+            val response = output.toString(StandardCharsets.UTF_8)
+
+            assertTrue(response.contains("\"id\":1,\"result\":{"), "initialize failed for seed $seed")
+            assertTrue(response.contains("\"id\":100,\"result\":[{\"name\":\"matrix_${seed}_final_t\""))
+            assertTrue(response.contains("\"code\":\"TS_ERROR_NODE\""), "malformed edit diagnostics missing for seed $seed")
+            assertTrue(response.contains("\"id\":999,\"result\":null"), "shutdown failed for seed $seed")
+        }
+    }
+
+    @Test
     fun rejectsValidNonObjectJsonAndContinuesTheSession() {
         val messages = listOf(
             frame("[]"),

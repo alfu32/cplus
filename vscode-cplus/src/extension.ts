@@ -8,6 +8,7 @@ import { CPlusAstNode, CPlusSymbol, indexText, memberContext, symbolsFromAst } f
 import { CPlusTestFixture, findTestFixtures, findTestFixturesFromAst } from "./tests";
 import { decodeImportGraph } from "./importGraph";
 import { CPlusLspClient } from "./lspClient";
+import { resolveLanguageServerCommand } from "./lspDiscovery";
 import {
     builtinTestMacros,
     cKeywords,
@@ -543,8 +544,10 @@ function registerLanguageServer(context: vscode.ExtensionContext): boolean {
     const configuration = vscode.workspace.getConfiguration("cplus");
     if (!configuration.get<boolean>("languageServer", false)) return false;
     const output = vscode.window.createOutputChannel("C-plus Language Server");
-    const command = configuration.get<string>("languageServerCommand", "cplus");
+    const configuredCommand = configuration.get<string>("languageServerCommand", "");
     const arguments_ = configuration.get<string[]>("languageServerArguments", []);
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const command = resolveLanguageServerCommand({ configured: configuredCommand, workspaceRoot });
     const client = new CPlusLspClient(command, arguments_, output);
     context.subscriptions.push(
         output,

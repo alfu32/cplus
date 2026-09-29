@@ -14,7 +14,7 @@ function! cpluslsp#Start() abort
     echoerr 'C-plus LSP requires Vim with job_start() and channel support'
     return
   endif
-  let command = get(g:, 'cplus_language_server_command', get(g:, 'cplus_command', 'cplus'))
+  let command = cpluslsp#DiscoverCommand()
   let command_parts = type(command) == v:t_list ? copy(command) : split(command)
   let command_parts += get(g:, 'cplus_language_server_arguments', [])
   call add(command_parts, 'lsp')
@@ -29,7 +29,7 @@ function! cpluslsp#Start() abort
   let s:job = job_start(command_parts, options)
   if type(s:job) == v:t_number && s:job <= 0
     let s:job = 0
-    echoerr 'C-plus language server could not be started'
+    echoerr cpluslsp#DiscoveryFailure(command_parts)
     return
   endif
   let s:channel = job_getchannel(s:job)
@@ -48,6 +48,38 @@ function! cpluslsp#Start() abort
   augroup END
   call cpluslsp#OpenCurrent()
   echo 'C-plus language server started'
+endfunction
+
+" Resolve in the same order as the other editor clients: explicit command,
+" project-local .cplus launcher, then the installed cpc command.
+function! cpluslsp#DiscoverCommand() abort
+  let configured = get(g:, 'cplus_language_server_command', '')
+  if empty(configured) && exists('g:cplus_command')
+    let configured = get(g:, 'cplus_command', '')
+  endif
+  if type(configured) == v:t_list
+    return configured
+  endif
+  if !empty(trim(configured))
+    return configured
+  endif
+  if has('win32')
+    let candidates = ['.cplus/cpc.cmd', '.cplus/cpc.exe', '.cplus/cpc']
+  else
+    let candidates = ['.cplus/cpc.sh', '.cplus/cpc']
+  endif
+  for candidate in candidates
+    let found = findfile(candidate, '.;')
+    if !empty(found)
+      return fnamemodify(found, ':p')
+    endif
+  endfor
+  return 'cpc'
+endfunction
+
+function! cpluslsp#DiscoveryFailure(command) abort
+  return 'C-plus language server could not be started (' . join(a:command, ' ') . '). ' .
+        \ 'Set g:cplus_language_server_command, add .cplus/cpc(.sh|.cmd), or install cpc in PATH.'
 endfunction
 
 function! cpluslsp#Stop() abort

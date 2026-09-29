@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { clearTimeout, setTimeout } from "node:timers";
-import { splitCommand } from "./lspCommand";
+import { languageServerDiscoveryFailure, resolveLanguageServerCommand, splitCommand } from "./lspDiscovery";
 
 // The extension intentionally keeps its runtime dependency-free. VS Code's
 // extension host supplies Node, while this project does not require the full
@@ -60,7 +60,7 @@ export class CPlusLspClient implements vscode.Disposable {
     private restartTimer?: any;
 
     constructor(
-        private readonly command: string,
+        private readonly command: string | string[],
         private readonly arguments_: string[],
         private readonly output: vscode.OutputChannel
     ) {}
@@ -68,7 +68,9 @@ export class CPlusLspClient implements vscode.Disposable {
     async start(): Promise<void> {
         if (this.started) return;
         if (this.disposed) throw new Error("language server client is disposed");
-        const command = splitCommand(this.command);
+        const command = Array.isArray(this.command)
+            ? this.command
+            : resolveLanguageServerCommand({ configured: this.command });
         if (!command.length) throw new Error("cplus.languageServerCommand is empty");
         const child = childProcess.spawn(command[0], [...command.slice(1), ...this.arguments_, "lsp"], {
             cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
@@ -77,8 +79,15 @@ export class CPlusLspClient implements vscode.Disposable {
         this.child = child;
         child.stdout.on("data", (chunk: Buffer) => this.consume(chunk));
         child.stderr.on("data", (chunk: Buffer) => this.output.append(chunk.toString()));
+        child.stdin.on("error", (error: unknown) => {
+            // A server may exit immediately after replying to initialize. The
+            // follow-up initialized notification can then race with pipe
+            // teardown; handle EPIPE as normal crash recovery rather than
+            // allowing an unhandled stream error to terminate the host.
+            if (this.child === child && !this.stopping) this.fail(error);
+        });
         child.on("error", (error: unknown) => {
-            if (this.child === child) this.fail(error);
+            if (this.child === child) this.fail(new Error(languageServerDiscoveryFailure(command)));
         });
         child.on("exit", (code: number | null, signal: string | null) => this.onExit(child, code, signal));
         this.started = true;
@@ -100,12 +109,13 @@ export class CPlusLspClient implements vscode.Disposable {
                 vscode.workspace.onDidCloseTextDocument((document) => this.close(document))
             );
         }
-        this.restartAttempts = 0;
     }
 
     /** Restart the external server while retaining open-document synchronization. */
     async restart(): Promise<void> {
         if (this.disposed) return;
+        // A user-requested restart starts a fresh bounded crash-recovery window.
+        this.restartAttempts = 0;
         this.stopping = true;
         this.stopProcess();
         this.stopping = false;
