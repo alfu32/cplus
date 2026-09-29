@@ -82,9 +82,13 @@ Subphases:
 2. Parse each current snapshot through the selected backend.
 3. Publish parser and source-map diagnostics with exact URI/range/code data.
 4. Clear diagnostics after close and reject stale changes deterministically.
+5. Emit a warning for recovered or unsupported AST fragments that have no
+   normalized compiler mapping/resolution, while preserving compiler/parser
+   errors as errors with their mapped source ranges.
 
 Gate: valid, malformed, edited, closed, and Unicode-containing documents have
-stable diagnostics and positions.
+stable diagnostics and positions; unsupported AST fragments are visible as
+warnings and compiler/parser failures remain errors.
 
 ### LSP-3 — AST bridge and structural index
 
@@ -211,6 +215,7 @@ status is only a summary; work is considered converged when every row below is
 | LSP-5  | 5.6c.2 function-pointer compatibility  | DONE        | Match direct function values to compatible function-pointer overloads using return type and callback arity                 | 5.6c            |
 | LSP-5  | 5.6d write/reference effects           | OPEN        | Distinguish reads, writes, declarations, and callback/function-pointer references                                                      | 5.6e            |
 | LSP-5  | 5.6e comptime parity                   | OPEN        | Expose generated declarations, scopes, aliases, and source origins consistently in all semantic features                               | LSP-5 gate      |
+| LSP-2  | 2.5 unsupported-AST diagnostics        | OPEN        | Classify recovered/unsupported AST fragments as warnings with mapped ranges; preserve compiler/parser failures as errors                 | 2.1–2.4        |
 | LSP-7  | 7.6a sustained throughput              | DONE        | 60-second gate completed 2,202 rounds and 46,242 document requests on Linux/JDK 21                                                     | 7.7 host matrix |
 | LSP-7  | 7.6b fairness/starvation               | DONE        | Every sustained round completed its post-cancellation tail request without starvation                                                  | 7.7 host matrix |
 | LSP-7  | 7.6c memory budget                     | DONE        | 60-second run stayed within the 64 MiB post-GC growth ceiling, reporting a −567,968 byte delta                                         | 7.7 host matrix |
@@ -245,6 +250,12 @@ The next local work is not “finish LSP-5/7/8” as one task. It is:
 The semantic work in 5.6 is independent of packaging work after its existing
 5.5 scheduling contract; it should not be used as a reason to leave the
 reliability and release subtasks represented by a single indefinite status.
+
+### LSP-2 — diagnostics completeness
+
+| ID      | Status | Subtask                                      | Dependencies | Evidence / remaining action                                                                                         |
+|---------|--------|----------------------------------------------|--------------|---------------------------------------------------------------------------------------------------------------------|
+| LSP-2.5 | OPEN   | Report unsupported/recovered AST fragments   | LSP-2.1–2.4  | Emit mapped LSP warnings for fragments without compiler mapping/resolution; preserve mapped parser/compiler errors and verify all editor adapters render both severities. |
 
 ### LSP-5 — workspace and semantic services
 

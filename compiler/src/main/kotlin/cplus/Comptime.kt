@@ -1,5 +1,6 @@
 package cplus
 
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -88,7 +89,7 @@ internal class ComptimeCompiler(
         stack: ArrayDeque<Path>,
         extractTests: Boolean
     ): ComptimeModuleResult {
-        val key = source.name?.let { Paths.get(it).toAbsolutePath().normalize() }
+        val key = source.name?.let(::pathFromSourceName)?.toAbsolutePath()?.normalize()
         if (key != null) {
             modules[key]?.let { return it }
             if (modules.size >= MAX_IMPORT_MODULES) {
@@ -318,11 +319,15 @@ internal class ComptimeCompiler(
     private fun sourceIdFor(source: SourceFile): SourceId {
         val name = source.name ?: return SourceId.named("<anonymous-source>")
         return try {
-            SourceId.fromPath(Paths.get(name))
+            SourceId.fromPath(pathFromSourceName(name))
         } catch (_: Exception) {
             SourceId.named(name)
         }
     }
+
+    /** Convert editor-facing file URIs and ordinary source paths uniformly. */
+    private fun pathFromSourceName(name: String): Path =
+        if (name.startsWith("file:", ignoreCase = true)) Paths.get(URI(name)) else Paths.get(name)
 
     private fun materializeCImport(item: ComptimeCImport): MappedText {
         val path = resolveImportPath(item.source, item.start, item.path, listOf("c"))

@@ -1,5 +1,6 @@
 package cplus
 
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -19,7 +20,7 @@ class CPlusImportResolver(private val importPaths: CPlusImportPaths = CPlusImpor
                 val sourceName = source.name
                     ?: throw CPlusImportResolutionException("import requires a named source file")
                 val base = try {
-                    Paths.get(sourceName).toAbsolutePath().normalize().parent
+                    pathFromSourceName(sourceName).toAbsolutePath().normalize().parent
                 } catch (error: Exception) {
                     throw CPlusImportResolutionException("cannot determine the directory of $sourceName: ${error.message}")
                 } ?: throw CPlusImportResolutionException("cannot determine the directory of $sourceName")
@@ -69,5 +70,8 @@ class CPlusImportResolver(private val importPaths: CPlusImportPaths = CPlusImpor
         throw CPlusImportResolutionException("imported file does not exist: '$requestedPath'")
     }
 }
+
+private fun pathFromSourceName(name: String): Path =
+    if (name.startsWith("file:", ignoreCase = true)) Paths.get(URI(name)) else Paths.get(name)
 
 class CPlusImportResolutionException(message: String) : IllegalArgumentException(message)
