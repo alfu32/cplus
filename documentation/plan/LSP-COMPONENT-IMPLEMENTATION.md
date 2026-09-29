@@ -227,7 +227,7 @@ evidence.
 | LSP-5 | IN PROGRESS | Open-document `workspace/symbol`, bounded imports, dependency invalidation, lexical/receiver lookup, evaluator-backed comptime symbols, cancellation/revision guards, and bounded cooperative scheduling are implemented; broader semantic resolution remains |
 | LSP-6 | DONE-LOCAL | VS Code, Vim, and IntelliJ have opt-in adapters that launch the shared `cplus lsp` process; IntelliJ 2026.2.2 packaging/tests pass. Interactive parity and release packaging remain separate gates |
 | LSP-7 | IN PROGRESS | Cancellation, fair bounded scheduling, deterministic fragmented-frame coverage, malformed-frame recovery, UTF-16 position coverage, bounded VS Code/Vim restart recovery, IntelliJ platform-managed restart action, and CLI incremental parse-session reuse are implemented; add broader recovery fuzzing and performance evidence |
-| LSP-8 | IN PROGRESS | `:cli:fatJar`, VS Code VSIX, IntelliJ plugin, and Vim archives build locally; the fat JAR and extracted `cplus-0.5.47-bare.zip` launcher start `cplus lsp` with clean JSON-RPC stdout and the adapter artifacts are present. Bundled-runtime discovery, supported-host release validation, and interactive IntelliJ coverage remain |
+| LSP-8 | IN PROGRESS | `:cli:fatJar`, VS Code VSIX, IntelliJ plugin, and Vim archives build locally; extracted bare and six-host cross-runtime `cplus-0.5.47` launchers start `cplus lsp` with clean JSON-RPC stdout. Supported-host release validation and interactive IntelliJ coverage remain |
 
 Local verification command:
 
