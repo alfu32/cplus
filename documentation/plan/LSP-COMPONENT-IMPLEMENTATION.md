@@ -237,7 +237,7 @@ status is only a summary; work is considered converged when every row below is
 | LSP-8  | 8.6b bundled release hosts             | OPEN        | Validate bundled artifacts on every supported release host                                                                             | 8.6c            |
 | LSP-8  | 8.6c protocol-clean matrix             | OPEN        | Record stdout, exit-code, launcher, and discovery results in retained CI artifacts                                                     | 8.7             |
 | LSP-8  | 8.7a artifact manifest                 | IN PROGRESS | Audit jars, editor bundles, documentation, launchers, and checksums for each release                                                   | 8.7b            |
-| LSP-8  | 8.7b publication rehearsal             | OPEN        | Publish a tagged release candidate and verify downloadable assets and metadata                                                         | LSP-8 gate      |
+| LSP-8  | 8.7b publication rehearsal             | DONE        | Publish a tagged release candidate and verify downloadable assets and metadata                                                         | LSP-8 gate      |
 
 ### Current bottleneck and next execution order
 
