@@ -466,7 +466,7 @@ class CPlusLspServer(
     private fun workspaceSymbols(query: String): String {
         val normalized = query.trim().lowercase()
         return documents.values.asSequence()
-            .flatMap { it.symbols.asSequence() }
+            .flatMap { it.symbols.asSequence().map(::displaySymbol) }
             .filter { normalized.isEmpty() || it.name.lowercase().contains(normalized) }
             .sortedWith(compareBy<LspSymbol> { it.name.lowercase() }.thenBy { it.uri }.thenBy { it.selection.startOffset })
             .joinToString(",", "[", "]") { it.toJson() }
@@ -860,8 +860,21 @@ class CPlusLspServer(
         val reachable = reachableDocuments(document.uri)
         return reachable.asSequence()
             .mapNotNull(documents::get)
-            .flatMap { candidate -> candidate.symbols.asSequence() }
+            .flatMap { candidate -> candidate.symbols.asSequence().map(::displaySymbol) }
             .distinctBy { it.uri to it.selection.startOffset }
+    }
+
+    /**
+     * Materialization records canonical filesystem origins, whereas an editor
+     * opened/imported document is keyed by its lexical URI. Prefer the URI of
+     * the corresponding live document so definition/workspace results retain
+     * the path spelling the client supplied (including symlink and drive forms).
+     */
+    private fun displaySymbol(symbol: LspSymbol): LspSymbol {
+        val displayUri = documents.keys.firstOrNull { candidate ->
+            sameSourceUri(candidate, symbol.uri)
+        } ?: return symbol
+        return if (displayUri == symbol.uri) symbol else symbol.copy(uri = displayUri)
     }
 
     private fun reachableDocuments(root: String): Set<String> {
