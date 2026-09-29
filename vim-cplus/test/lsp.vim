@@ -6,6 +6,8 @@ let &runtimepath = s:repository . '/vim-cplus,' . &runtimepath
 execute 'edit ' . fnameescape(s:repository . '/vim-cplus/test/fixtures/outline.cp')
 set filetype=cplus
 runtime! ftplugin/cplus.vim
+call cpluslsp#Diagnostics({'uri': 'file:///warning.cp', 'diagnostics': [{'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 3}}, 'severity': 2, 'message': 'unmapped AST fragment'}]})
+call assert_equal('W', getqflist()[0].type, 'LSP warning severity should reach Vim quickfix')
 call cpluslsp#Start()
 call setline(1, ['int main( {'])
 call cpluslsp#ChangeCurrent()

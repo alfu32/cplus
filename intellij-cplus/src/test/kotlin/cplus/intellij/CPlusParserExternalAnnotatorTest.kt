@@ -53,6 +53,15 @@ class CPlusParserExternalAnnotatorTest {
     }
 
     @Test
+    fun preservesUnsupportedAstWarningSeverityForIntellijAnnotations() {
+        val diagnostics = CPlusParserJsonDiagnostics.decode(
+            """{"schema":"cplus.parse.v1","diagnostics":[{"code":"CPLUS_UNSUPPORTED_AST","message":"unmapped AST fragment","severity":"warning","span":{"startOffset":0,"endOffset":5,"startLine":1,"startColumn":1,"endLine":1,"endColumn":6}}]}"""
+        )
+
+        assertEquals(listOf(CPlusParserDiagnostic(0, 5, "unmapped AST fragment", warning = true)), diagnostics)
+    }
+
+    @Test
     fun rejectsUnknownParserJsonSchema() {
         assertThrows(IllegalArgumentException::class.java) {
             CPlusParserJsonDiagnostics.decode("""{"schema":"cplus.parse.v0","diagnostics":[]}""")
