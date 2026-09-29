@@ -287,6 +287,122 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesReferencesToTheReceiverMethodOwner() {
+        val uri = "file:///method-references.cp"
+        val source = "typedef struct left_t { pub int get(borrowed *self) { return 1; } } left_t;\n" +
+            "typedef struct right_t { pub int get(borrowed *self) { return 2; } } right_t;\n" +
+            "int main(void) { left_t left; right_t right; return left.get() + right.get(); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val call = source.indexOf("left.get") + "left.".length
+        val character = call - source.lastIndexOf('\n', call) - 1
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/references\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$character}," +
+                "\"context\":{\"includeDeclaration\":true}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        val uriOccurrences = response.windowed("\"uri\":\"$uri\"".length)
+            .count { it == "\"uri\":\"$uri\"" }
+        assertTrue(uriOccurrences == 3, response)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\""), response)
+    }
+
+    @Test
+    fun resolvesStaticMethodReferencesByTypeOwner() {
+        val uri = "file:///static-method-references.cp"
+        val source = "typedef struct left_t { static pub int make(void) { return 1; } } left_t;\n" +
+            "typedef struct right_t { static pub int make(void) { return 2; } } right_t;\n" +
+            "int main(void) { return left_t.make() + right_t.make(); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val call = source.indexOf("left_t.make") + "left_t.".length
+        val character = call - source.lastIndexOf('\n', call) - 1
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/references\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$character}," +
+                "\"context\":{\"includeDeclaration\":true}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        val uriOccurrences = response.windowed("\"uri\":\"$uri\"".length)
+            .count { it == "\"uri\":\"$uri\"" }
+        assertTrue(uriOccurrences == 3, response)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\""), response)
+    }
+
+    @Test
+    fun resolvesFieldReferencesByReceiverOwner() {
+        val uri = "file:///field-references.cp"
+        val source = "typedef struct left_t { int value; } left_t;\n" +
+            "typedef struct right_t { int value; } right_t;\n" +
+            "int main(void) { left_t left; right_t right; return left.value + right.value; }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val field = source.indexOf("left.value") + "left.".length
+        val character = field - source.lastIndexOf('\n', field) - 1
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/references\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$character}," +
+                "\"context\":{\"includeDeclaration\":true}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        val uriOccurrences = response.windowed("\"uri\":\"$uri\"".length)
+            .count { it == "\"uri\":\"$uri\"" }
+        assertTrue(uriOccurrences == 3, response)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\""), response)
+    }
+
+    @Test
+    fun resolvesFunctionReferencesUsedAsCallbackValues() {
+        val uri = "file:///callback-references.cp"
+        val source = "int increment(int value) { return value + 1; }\n" +
+            "int apply(int (*callback)(int), int value) { return callback(value); }\n" +
+            "int main(void) { int (*callback)(int) = increment; return apply(increment, 1); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val assignment = source.lastIndexOf("increment", source.indexOf("return apply"))
+        val character = assignment - source.lastIndexOf('\n', assignment) - 1
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/references\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$character}," +
+                "\"context\":{\"includeDeclaration\":true}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        val uriOccurrences = response.windowed("\"uri\":\"$uri\"".length)
+            .count { it == "\"uri\":\"$uri\"" }
+        assertTrue(uriOccurrences == 4, response)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\""), response)
+    }
+
+    @Test
     fun resolvesAReceiverMethodAgainstTheDeclaredStructType() {
         val uri = "file:///receiver.cp"
         val source = "typedef struct counter_t {\n" +
@@ -412,6 +528,83 @@ class CPlusLspServerTest {
         val response = output.toString(StandardCharsets.UTF_8)
         assertTrue(!response.contains("\"id\":2,\"result\":"), response)
         assertTrue(response.contains("\"id\":3,\"result\":null"))
+    }
+
+    @Test
+    fun suppressesARequestCanceledWhileParsing() {
+        val uri = "file:///cancel-during-parse.cp"
+        val source = buildString {
+            repeat(20_000) { append("int value_$it = $it;\n") }
+            append("int main(void) { return value_19999; }\n")
+        }
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/documentSymbol\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{\"id\":2}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertFalse(response.contains("\"id\":2,\"result\":"), response)
+        assertTrue(response.contains("\"id\":3,\"result\":null"))
+    }
+
+    @Test
+    fun reusingARequestIdDoesNotCancelACompletedFuture() {
+        val uri = "file:///reused-request-id.cp"
+        val source = "int answer = 42;\nint main(void) { return answer; }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/documentSymbol\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":1,\"character\":25}}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{\"id\":2}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":["), response)
+        assertTrue(response.contains("\"id\":3,\"result\":null"))
+    }
+
+    @Test
+    fun preCancellationIsConsumedAndDoesNotPoisonAReusedRequestId() {
+        val uri = "file:///unknown-cancel.cp"
+        val source = "typedef struct unknown_cancel_t { int value; } unknown_cancel_t;\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{\"id\":77}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":77,\"method\":\"textDocument/documentSymbol\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":77,\"method\":\"textDocument/documentSymbol\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":77,\"result\":["), response)
+        assertTrue(response.contains("\"name\":\"unknown_cancel_t\""), response)
+        assertTrue(response.contains("\"id\":2,\"result\":null"), response)
     }
 
     @Test

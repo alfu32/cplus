@@ -12,10 +12,14 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
 /** Parser-backed stdio LSP transport and document service. */
@@ -33,7 +37,21 @@ class CPlusLspServer(
     private val importsByDocument = LinkedHashMap<String, LinkedHashSet<String>>()
     private val importersByDocument = LinkedHashMap<String, LinkedHashSet<String>>()
     private val cancelledRequests = ConcurrentHashMap.newKeySet<String>()
-    private val requestExecutor: ExecutorService = Executors.newFixedThreadPool(2)
+    private val seenRequestIds = ConcurrentHashMap.newKeySet<String>()
+    /**
+     * Keep the stdio reader responsive under request bursts. Two workers and a
+     * finite queue provide cooperative back-pressure instead of allowing an
+     * unbounded stream of stale editor requests to accumulate.
+     */
+    private val requestExecutor: ExecutorService = ThreadPoolExecutor(
+        2,
+        2,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(64),
+        Executors.defaultThreadFactory(),
+        ThreadPoolExecutor.AbortPolicy()
+    )
     private val requestFutures = ConcurrentHashMap<String, Future<*>>()
     /** Fair ordering keeps a queued read before a later document mutation. */
     private val stateLock = ReentrantReadWriteLock(true)
@@ -136,20 +154,52 @@ class CPlusLspServer(
     private fun dispatchReadRequest(id: Json?, request: Json.Object, work: () -> Unit) {
         if (id == null) return
         val key = id.encode()
-        val future = requestExecutor.submit {
-            try {
-                withReadState { work() }
-            } finally {
-                requestFutures.remove(key)
+        rememberBounded(seenRequestIds, key)
+        val cancelledBeforeDispatch = cancelledRequests.remove(key)
+        val futureReference = AtomicReference<Future<*>>()
+        val future = try {
+            requestExecutor.submit {
+                try {
+                    withReadState { work() }
+                } finally {
+                    futureReference.get()?.let {
+                        requestFutures.remove(key, it)
+                        cancelledRequests.remove(key)
+                    }
+                }
             }
+        } catch (_: RejectedExecutionException) {
+            respondError(id, -32001, "language server request queue is full")
+            return
         }
+        futureReference.set(future)
         requestFutures[key] = future
-        if (key in cancelledRequests) future.cancel(true)
+        // A very fast task can finish and remove itself before the submitting
+        // thread stores the Future. Do not leave that completed Future behind;
+        // request IDs may be reused after their response has been sent.
+        if (future.isDone) requestFutures.remove(key, future)
+        if (cancelledBeforeDispatch || key in cancelledRequests) future.cancel(true)
     }
 
     private fun cancelRequest(key: String) {
-        cancelledRequests += key
-        requestFutures.remove(key)?.cancel(true)
+        val future = requestFutures[key]
+        if (future == null) {
+            // Preserve the LSP case where cancellation precedes a request, but
+            // do not let cancellation after a completed request poison a reused
+            // ID. The seen-ID set is bounded below.
+            if (key !in seenRequestIds) rememberBounded(cancelledRequests, key)
+            return
+        }
+        rememberBounded(cancelledRequests, key)
+        requestFutures.remove(key, future)
+        future.cancel(true)
+    }
+
+    private fun rememberBounded(set: MutableSet<String>, key: String) {
+        if (set.size >= MAX_TRACKED_REQUEST_IDS) {
+            set.iterator().asSequence().firstOrNull()?.let(set::remove)
+        }
+        set += key
     }
 
     private inline fun <T> withReadState(action: () -> T): T {
@@ -418,7 +468,12 @@ class CPlusLspServer(
                             if (file.startsWith("file:", ignoreCase = true)) file
                             else runCatching { Path.of(file).toUri().toString() }.getOrNull()
                         } ?: candidate.uri
-                        LspReference(uri, mapped, occurrence.copy(callArity = callArity(candidate.snapshot.text, node.span.startOffset)))
+                        LspReference(
+                            uri,
+                            mapped,
+                            occurrence.copy(callArity = callArity(candidate.snapshot.text, node.span.startOffset)),
+                            candidate
+                        )
                     }
             }
             .filter { reference ->
@@ -448,11 +503,29 @@ class CPlusLspServer(
         val declarations = visible.filter { it.name == target }
         if (selected.kind == 6 || selected.kind == 12) {
             // Function references are bounded to call sites. Type-based callable
-            // values remain a later semantic-resolution slice.
-            if (!occurrence.ancestors.contains("call_expression")) return false
+            // values are recognized only in initializer/argument contexts.
+            val callSite = occurrence.ancestors.contains("call_expression")
+            val valueSite = occurrence.ancestors.any {
+                it == "initializer" || it == "init_declarator" || it == "argument_list"
+            }
+            if (!callSite && !valueSite) return false
+            if (selected.ownerName != null) {
+                val receiver = receiverType(reference.document, occurrence.node.span.startOffset)
+                if (receiver != null && resolveTypeAlias(receiver) != selected.ownerName) return false
+            }
             val callArity = occurrence.callArity
-            val selectedArity = parameterArity(selected)
-            return callArity == null || selectedArity == null || callArity == selectedArity
+            // C-plus instance calls omit the implicit receiver even though the
+            // lowered declaration contains it as the first parameter.
+            val selectedArity = parameterArity(selected)?.let { arity ->
+                if (selected.ownerName != null) (arity - 1).coerceAtLeast(0) else arity
+            }
+            return !callSite || callArity == null || selectedArity == null || callArity == selectedArity
+        }
+        if (selected.kind == 8 && selected.ownerName != null) {
+            // Field references are selected by the receiver's resolved owner;
+            // falling back to declaration order would leak same-named fields.
+            val receiver = receiverType(reference.document, occurrence.node.span.startOffset)
+            return receiver != null && resolveTypeAlias(receiver) == selected.ownerName
         }
         val scoped = declarations
             .filter { it.scope.contains(span) && it.selection.startOffset <= span.startOffset }
@@ -571,6 +644,10 @@ class CPlusLspServer(
             .mapNotNull(::declaredType)
             .map { resolveTypeAlias(it) }
             .firstOrNull()
+            ?: visibleSymbols(document)
+                .asSequence()
+                .firstOrNull { it.name == receiver && it.kind == 23 }
+                ?.name
     }
 
     private fun resolveTypeAlias(typeName: String): String {
@@ -602,14 +679,17 @@ class CPlusLspServer(
         val uri = request.uri()
         val version = uri?.let { documents[it]?.version }
         val encodedId = id?.encode()
-        if (encodedId != null && encodedId in cancelledRequests) {
-            cancelledRequests.remove(encodedId)
-            return
-        }
+        if (wasCancelled(encodedId)) return
         val payload = result()
+        // Cancellation may arrive while parsing or indexing is in progress. Do
+        // not publish a response that became obsolete during that work.
+        if (wasCancelled(encodedId)) return
         if (uri != null && documents[uri]?.version != version) return
         respond(id, payload)
     }
+
+    private fun wasCancelled(encodedId: String?): Boolean =
+        encodedId != null && cancelledRequests.remove(encodedId)
 
     private fun respondError(id: Json?, code: Int, message: String) =
         write("{\"jsonrpc\":\"2.0\",\"id\":${id?.encode() ?: "null"},\"error\":{\"code\":$code,\"message\":${Json.string(message)}}}")
@@ -696,7 +776,8 @@ private data class LspIdentifierOccurrence(
 private data class LspReference(
     val uri: String,
     val span: SourceSpan,
-    val occurrence: LspIdentifierOccurrence
+    val occurrence: LspIdentifierOccurrence,
+    val document: LspDocument
 )
 
 private data class LspSymbol(
@@ -781,7 +862,9 @@ private object LspSymbolIndex {
         return when (kind) {
             CPlusAstKind.TYPE_ALIAS -> node.flatten().lastOrNull { it.kind == CPlusAstKind.IDENTIFIER }
             CPlusAstKind.FIELD_DECLARATION, CPlusAstKind.VARIABLE_DECLARATION ->
-                node.flatten().lastOrNull { it.kind == CPlusAstKind.IDENTIFIER }
+                node.flatten().firstOrNull {
+                    it.kind == CPlusAstKind.IDENTIFIER && it.fieldName == "declarator"
+                } ?: node.flatten().lastOrNull { it.kind == CPlusAstKind.IDENTIFIER }
             else -> node.children.firstOrNull { it.kind == CPlusAstKind.IDENTIFIER }
                 ?: node.flatten().firstOrNull { it.kind == CPlusAstKind.IDENTIFIER }
         }
@@ -811,6 +894,7 @@ private fun Char.isIdentifierPart(): Boolean = isLetterOrDigit() || this == '_'
 private val IDENTIFIER = Regex("[A-Za-z_][A-Za-z0-9_]*")
 private val IMPORT_LITERAL = Regex("\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"")
 private const val MAX_WORKSPACE_IMPORTS = 256
+private const val MAX_TRACKED_REQUEST_IDS = 4096
 private val CPLUS_KEYWORDS = setOf(
     "pub", "priv", "static", "borrowed", "owned", "mut", "self", "comptime", "type", "function",
     "defer", "try", "catch", "throws", "test", "assert", "assertEquals", "if", "else", "for", "while",
