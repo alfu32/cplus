@@ -1051,7 +1051,14 @@ private data class LspDocument(
 
     fun symbolAt(position: LspPosition?): LspSymbol? {
         val offset = snapshot.offsetAt(position) ?: return null
-        return symbols.firstOrNull { offset in it.selection.startOffset until it.selection.endOffset }
+        // Mapped comptime declarations can carry ranges from an imported
+        // source file while their generated nodes live in this document. Do
+        // not use such a range as a hit-test against the root document; the
+        // word-based lookup below can still resolve the imported declaration.
+        return symbols.firstOrNull {
+            it.selection.file == snapshot.sourceFile.name &&
+                offset in it.selection.startOffset until it.selection.endOffset
+        }
     }
 }
 

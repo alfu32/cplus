@@ -891,7 +891,10 @@ class CPlusLspServerTest {
         val response = output.toString(StandardCharsets.UTF_8)
         assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"manifest_import_t\""), response)
         assertTrue(response.contains("\"uri\":\"${dependency.toUri()}\""), response)
-        assertTrue(response.contains("\"id\":4,\"result\":[{\"uri\":\"${dependency.toUri()}\""))
+        assertTrue(
+            response.contains("\"id\":4,\"result\":[{\"uri\":\"${dependency.toUri()}\""),
+            response
+        )
     }
 
     @Test

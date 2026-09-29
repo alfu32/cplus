@@ -354,6 +354,7 @@ The adapters are not a substitute for reliability or release evidence.
 - LSP-7.6 benchmark slice: `:cli:benchmarkLsp` includes configurable sustained-load instrumentation, while `:cli:benchmarkLspGate` enforces the documented policy. The 60-second Linux/JDK 21 gate completed 2,202 rounds/46,242 requests at 36.700 rounds/sec, passed tail fairness, and stayed below the 64 MiB post-GC heap-growth ceiling with a −567,968 byte delta.
 - LSP-8.1 discovery slice: the editor clients share the documented precedence of explicit command, project-local `.cplus/cpc(.sh|.cmd)` launcher, and installed `cpc`. The shared `documentation/fixtures/lsp-discovery` project is exercised by VS Code and Vim; IntelliJ tests cover configured/project/fallback cases; extracted bare and six-host cross-runtime packages pass protocol smoke. Supported release-host validation remains LSP-8.6.
 - LSP-7.7a hosted evidence: CI run `36576516545` completed the parser, host-compiler, benchmark, protocol, and reliability gates successfully on both `linux-x86_64` and `linux-arm64`; macOS arm64 failed three import-closure tests and Windows x86_64 failed five LSP tests. The workflow now runs protocol and benchmark checks independently and uploads host reports even when one fails, so the next run will retain complete failure payloads.
+- CI run `36590485867` confirmed the prior import/cancellation fixes on Linux and narrowed the remaining cross-host issue to two mapped-range lookups: one macOS manifest-import definition and one Windows comptime-materialization workspace symbol. `LspDocument.symbolAt` now requires the mapped selection range to belong to the opened document before using it for hit-testing; imported/generated declarations continue through name-based visibility resolution. The focused local suite passes all 31 tests. A new hosted run is required before LSP-7.7 closes.
 - The pending host fix gives each asynchronous request an instance-specific cancellation token/future, preventing reused JSON-RPC IDs from canceling older work. LSP import discovery retains AST indexing and adds a recovery-node-only textual import fallback plus a canonical relative-path fallback for Windows/macOS URI normalization. Source-level Kotlin compilation passes; host CI remains the acceptance gate.
 - Direct runtime smoke using the rebuilt classes and `parser-tree-sitter/build/native-parser/libktreesitter-c.so` passed both repaired invariants: relative comptime-import workspace symbols and reused request-ID cancellation. This is local Linux evidence only; the supported-host gate remains open.
 
@@ -363,7 +364,6 @@ Local verification command:
 ./gradlew test --no-daemon --max-workers=1 --offline
 ```
 
-The current local changes are intentionally not pushed until the next local
-LSP work package is complete. Native DLL-per-editor packaging, a separate LSP
-Gradle module, and target-specific compiler/ABI support remain out of scope for
-this roadmap.
+The current LSP fixes are pushed only after the focused and aggregate local
+gates pass. Native DLL-per-editor packaging, a separate LSP Gradle module, and
+target-specific compiler/ABI support remain out of scope for this roadmap.
