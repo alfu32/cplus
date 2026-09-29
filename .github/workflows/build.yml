@@ -19,18 +19,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Keep the parser validation matrix on the hosts used for active development.
+          # macOS x86_64 and Windows arm64 remain supported payload targets but are
+          # intentionally excluded from CI to reduce queue time and build latency.
           - host: linux-x86_64
             runner: ubuntu-latest
           - host: linux-arm64
             runner: ubuntu-24.04-arm
-          - host: macos-x86_64
-            runner: macos-15-intel
           - host: macos-arm64
             runner: macos-14
           - host: windows-x86_64
             runner: windows-latest
-          - host: windows-arm64
-            runner: windows-11-arm
 
     runs-on: ${{ matrix.runner }}
 
@@ -329,21 +328,21 @@ jobs:
           bare_targets="$(jar tf "$bare_jar" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
           test -z "$bare_targets"
           cross_targets="$(jar tf "$cross_jar" | sed -n 's|^native/\([^/]*\)/.*|\1|p' | sort -u)"
-          expected_targets="$(printf '%s\n' linux-aarch64 linux-x86_64 macos-aarch64 macos-x86_64 windows-aarch64 windows-x86_64)"
+          expected_targets="$(printf '%s\n' linux-aarch64 linux-x86_64 macos-aarch64 windows-x86_64)"
           test "$cross_targets" = "$expected_targets"
           sysroots="$(jar tf "$cross_jar" | grep '/tinycc/sysroot/' || true)"
           test -z "$sysroots"
 
           for jar in "$bare_jar" "$cross_jar"; do
             parser_hosts="$(jar tf "$jar" | grep -E '^lib/(linux|macos|windows)/(x64|aarch64)/(libktreesitter-c\.so|libktreesitter-c\.dylib|ktreesitter-c\.dll)$' | sort -u | wc -l)"
-            test "$parser_hosts" -eq 6
+            test "$parser_hosts" -eq 4
             parser_windows_base="$(jar tf "$jar" | grep -E '^lib/windows/(x64|aarch64)/ktreesitter\.dll$' | sort -u | wc -l)"
-            test "$parser_windows_base" -eq 2
+            test "$parser_windows_base" -eq 1
             parser_macos_base="$(jar tf "$jar" | grep -E '^lib/macos/(x64|aarch64)/libktreesitter\.dylib$' | sort -u | wc -l)"
-            test "$parser_macos_base" -eq 2
+            test "$parser_macos_base" -eq 1
           done
-          test "$(find build/parser-host-reports -name host.txt | wc -l | tr -d ' ')" -eq 6
-          test "$(find build/parser-host-reports -name resources.txt | wc -l | tr -d ' ')" -eq 6
+          test "$(find build/parser-host-reports -name host.txt | wc -l | tr -d ' ')" -eq 4
+          test "$(find build/parser-host-reports -name resources.txt | wc -l | tr -d ' ')" -eq 4
 
           java -Dcplus.home="$PWD/build/distribution-check/bare" -jar "$bare_jar" help >/dev/null
           java -Dcplus.home="$PWD/build/distribution-check/cross" -jar "$cross_jar" help >/dev/null

@@ -1,5 +1,6 @@
 package cplus
 
+import cplus.lsp.CPlusLspServer
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
@@ -72,6 +73,7 @@ class CPlusCli(
 
         return when (val command = commandArguments.first()) {
             "parse" -> parse(commandArguments.drop(1))
+            "lsp" -> lsp()
             "graph" -> importGraph(commandArguments.drop(1))
             "transcode" -> transcode(commandArguments.drop(1))
             "compile" -> compile(commandArguments.drop(1), runAfter = false)
@@ -84,6 +86,11 @@ class CPlusCli(
             }
             else -> throw IllegalArgumentException("unknown command '$command'; use 'cplus help'")
         }
+    }
+
+    private fun lsp(): Int {
+        CPlusLspServer().serve()
+        return 0
     }
 
     private fun parse(arguments: List<String>): Int {
@@ -720,6 +727,7 @@ usage:
   cplus version
   cplus parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
   cplus parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
+  cplus lsp
   cplus graph filename.cp [-o imports.json]
   cplus transcode filename.cp [-o some_file_name.c] [--frontend legacy|tree-sitter] [--target=TRIPLE]
   cplus compile filename.cp [-o executable] [--frontend legacy|tree-sitter] [passthrough tcc parameters]
