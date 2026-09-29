@@ -7,12 +7,16 @@ const { resolveVersion } = require("../scripts/package.js");
 const { findTestFixtures, findTestFixturesFromAst } = require("../out/tests.js");
 const { decodeImportGraph } = require("../out/importGraph.js");
 const discovery = require("../out/lspDiscovery.js");
+const diagnostics = require("../out/lspDiagnostics.js");
 
 assert.deepEqual(discovery.resolveLanguageServerCommand({ configured: "java -jar 'c-plus.jar'" }), ["java", "-jar", "c-plus.jar"]);
 assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "/project", platform: "linux", exists: (path) => path === "/project/.cplus/cpc.sh" }), ["/project/.cplus/cpc.sh"]);
 assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "C:/project", platform: "win32", exists: (path) => path.endsWith("cpc.cmd") }), ["C:/project/.cplus/cpc.cmd"]);
 assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "/project", exists: () => false }), ["cpc"]);
 assert.match(discovery.languageServerDiscoveryFailure(["cpc"]), /install the cpc launcher/);
+assert.equal(diagnostics.lspDiagnosticKind(2), "warning");
+assert.equal(diagnostics.lspDiagnosticKind(1), "error");
+assert.equal(diagnostics.lspDiagnosticKind(undefined), "error");
 const discoveryFixture = resolve(__dirname, "../../documentation/fixtures/lsp-discovery");
 assert.deepEqual(
   discovery.resolveLanguageServerCommand({ workspaceRoot: discoveryFixture, platform: "linux", exists: existsSync }),

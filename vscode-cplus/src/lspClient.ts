@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { clearTimeout, setTimeout } from "node:timers";
 import { languageServerDiscoveryFailure, resolveLanguageServerCommand, splitCommand } from "./lspDiscovery";
+import { lspDiagnosticKind } from "./lspDiagnostics";
 
 // The extension intentionally keeps its runtime dependency-free. VS Code's
 // extension host supplies Node, while this project does not require the full
@@ -313,7 +314,9 @@ function fromLspRange(range: LspRange): vscode.Range {
 function toDiagnostic(value: LspDiagnostic): vscode.Diagnostic | undefined {
     if (!value?.range || typeof value.message !== "string") return undefined;
     const diagnostic = new vscode.Diagnostic(fromLspRange(value.range), value.message,
-        value.severity === 2 ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error);
+        lspDiagnosticKind(value.severity) === "warning"
+            ? vscode.DiagnosticSeverity.Warning
+            : vscode.DiagnosticSeverity.Error);
     diagnostic.source = value.source ?? "C-plus language server";
     diagnostic.code = value.code;
     return diagnostic;
