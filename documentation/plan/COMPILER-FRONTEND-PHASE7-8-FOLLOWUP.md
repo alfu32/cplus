@@ -274,6 +274,14 @@ gate passes, including regressions for already-loaded legacy state and repeated
 custom-state reads. A live IDE must reload the newly built plugin before its
 settings panel can reflect this correction.
 
+The 0.5.59 isolated IntelliJ smoke was retried with a temporary project to
+avoid repository indexing. IntelliJ loaded the packaged C-plus plugin and
+opened the temporary project, but no LSP lifecycle entry appeared before the
+180-second timeout; the launcher exited with status 124. This is recorded as a
+failed activation attempt, not as server-crash evidence. The retained log is
+`/tmp/cplus-intellij-smoke.cBRXfh/system/log/idea.log`; P8.5.b/c and P8.9.c
+remain open until the harness can observe file activation and server lifecycle.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
