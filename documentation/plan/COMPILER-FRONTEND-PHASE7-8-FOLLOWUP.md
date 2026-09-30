@@ -136,7 +136,7 @@ being claimed by this local gate.
 | P8.9.a  | P8.9   | Verify VS Code child restart and stale-revision handling                               | DONE-LOCAL | Existing restart fixtures                            |
 | P8.9.b  | P8.9   | Verify Vim restart, quickfix, and import recovery                                      | DONE-LOCAL | Existing headless fixtures                           |
 | P8.9.c  | P8.9   | Verify IntelliJ unexpected exit, restart, and cache invalidation                       | OPEN       | IntelliJ interactive fixture                         |
-| P8.10.a | P8.10  | Publish mismatch reporting and a legacy-backend rollback switch                        | OPEN       | Release configuration and operator documentation     |
+| P8.10.a | P8.10  | Publish mismatch reporting and a legacy-backend rollback switch                        | DONE-LOCAL | `--frontend=auto|legacy|tree-sitter`, `CPLUS_FRONTEND`, `cplus.frontend`, `-v2` fallback details, help text, and compiler specification |
 | P8.10.b | P8.10  | Maintain two stable releases with both backends selectable                             | BLOCKED    | Starts only after P7.7 promotion                     |
 
 `BLOCKED` here means dependency-gated, not an implementation failure. It prevents
