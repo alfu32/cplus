@@ -2813,3 +2813,390 @@ DOOM:                state → ray-cast 2.5D renderer
 ```
 
 The significant new workload is therefore not a new application model, but **view synthesis from a grid world plus visibility-sensitive entity interaction**.
+
+---
+
+# DOOM inline pixmap / tile textures
+
+The DOOM example keeps the same event/state/render architecture. Texturing is a **rendering concern only**: level parsing, movement, collision, AI, combat, health, exits, and visibility still operate on the logical map and entities.
+
+The texture system has three data layers:
+
+```text
+palette index
+    │
+    ▼
+RGBA color
+
+pixmap string
+    │  characters are palette indices
+    ▼
+virtual texels
+
+map/entity symbol
+    │
+    ▼
+(texture role, pixmap)
+```
+
+## Palette
+
+Colors are declared inline and packed as `0xRRGGBBAA`:
+
+```c
+typedef struct doom_palette_color_t {
+    char index;
+    borrowed const char* name;
+    uint32_t value;
+} doom_palette_color_t;
+
+colors[] = {
+    {'r', "red",         0x771100ff},
+    {'1', "red-up",      0x992211ff},
+    {'2', "red-down",    0x550000ff},
+    {'3', "red-high",    0xff3300ff},
+    {'g', "green",       0x117700ff},
+    {'5', "green-up",    0x229911ff},
+    {'6', "green-down",  0x005500ff},
+    {'=', "grey",        0x7f7f7fff},
+    {' ', "transparent", 0x00000000},
+    ...
+};
+```
+
+`' '` is a transparent texel, which is especially useful for character sprites.
+
+## Pixmap definitions
+
+A pixmap is an ordinary source string whose characters reference the palette:
+
+```c
+brick =
+    "111111111111111112\n"
+    "rrrrrrrrrrrrrrrr12\n"
+    "rrrrrrrrrrrrrrrr12\n"
+    "rrrrrrrrrrrrrrrr12\n"
+    "222222222222222222\n"
+    "111111112211111112\n"
+    "rrrrrrr122rrrrrr12\n"
+    "rrrrrrr122rrrrrr12\n"
+    "rrrrrrr122rrrrrr12";
+
+enemy =
+    "    =====    \n"
+    "  ==g=r=g==  \n"
+    "  ====r====  \n"
+    "  =========  \n"
+    "  ==rrrrr==  \n"
+    "  ==rrrrr==  \n"
+    "    =====    \n"
+    "======r======\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "r= =======  r\n"
+    "  =========  \n"
+    "  ===   ===  \n"
+    "  ===   ===  \n"
+    "  ===   ===  ";
+```
+
+The texture definition records dimensions once, so sampling is constant-time:
+
+```c
+typedef struct doom_texture_def_t {
+    char symbol;
+    map_sym_type_t type;
+    borrowed const char* name;
+    borrowed const char* pixels;
+    int width;
+    int height;
+} doom_texture_def_t;
+```
+
+No image files, decoding, allocation, upload, or raylib `Texture2D` objects are required.
+
+## Semantic texture table
+
+```c
+typedef enum map_sym_type_t {
+    t_wall,
+    t_floor,
+    t_character
+} map_sym_type_t;
+
+textures[] = {
+    {'#', t_wall,      "brick", brick, 18, 9},
+    {'E', t_character, "enemy", enemy, 13, 19},
+    {'.', t_floor,     "floor", floor, 4, 4},
+    {'X', t_floor,     "exit",  exit,  4, 4},
+    ...
+};
+```
+
+This table also becomes the source of semantic wall classification:
+
+```text
+map symbol
+    │
+    ▼
+texture_for(symbol, t_wall) != null ?
+    │
+    ├─ yes → solid
+    └─ no  → traversable
+```
+
+So adding another wall kind does not require changing `solid()`.
+
+## Wall sampling
+
+Ray casting still finds the first solid map cell, but now also returns:
+
+```text
+hit map symbol
+hit coordinate within wall face: u ∈ [0,1)
+```
+
+Projection is unchanged:
+
+```text
+d_corrected = d · cos(θ_ray - θ_player)
+wall_height ∝ 1 / d_corrected
+```
+
+For each projected wall screen texel:
+
+```text
+tx = floor(u · texture.width)
+ty = floor(v · texture.height)
+
+palette_index = texture[tx, ty]
+color = palette[palette_index]
+```
+
+A source pixmap pixel is therefore a **virtual pixel**. If a wall is close to the camera, one virtual pixel can become tens of physical screen pixels. Sampling is nearest-neighbor by design so the source-art pixel structure remains visible.
+
+Distance shading is applied after palette lookup:
+
+```text
+source RGBA
+    │
+    ▼
+distance shade
+    │
+    ▼
+DrawRectangle(...)
+```
+
+## Floor tiles
+
+The lower half of the projection is perspective floor-cast from the same world grid.
+
+For a screen row below the horizon:
+
+```text
+row_distance ∝ 1 / (screen_y - horizon)
+```
+
+Each floor sample resolves a world coordinate, then:
+
+```text
+world coordinate
+      │
+      ▼
+map cell symbol
+      │
+      ▼
+t_floor texture
+      │
+      ▼
+fractional world x/y → tx/ty
+      │
+      ▼
+palette color
+```
+
+This lets `'.'`, `'X'`, and future floor symbols use different inline tiles without changing the logical map model.
+
+## Character sprites
+
+Enemies keep their logical world position and a texture symbol, currently `'E'`.
+
+```text
+enemy world position
+      │
+      ▼
+angle + corrected distance
+      │
+      ▼
+projected screen rectangle
+      │
+      ▼
+scale symbolic pixmap
+      │
+      ├─ transparent palette texel → skip
+      └─ opaque texel → zbuffer test → draw
+```
+
+The sprite preserves its pixmap aspect ratio. Each symbolic texel is drawn as a screen rectangle, so virtual pixel size naturally grows as the enemy approaches the camera.
+
+Wall depth still owns the z-buffer. Character texels are emitted only when their corrected depth is in front of the wall depth at that screen column.
+
+## Architecture
+
+```text
+keyboard/clock
+      │
+      ▼
+logical DOOM state
+ map + player + enemies
+      │
+      │ read-only
+      ▼
+ray/floor/entity projection
+      │
+      ├── map symbol ─────► semantic texture table
+      │                         │
+      │                         ▼
+      │                     pixmap string
+      │                         │
+      │                         ▼
+      └────────────────────► palette
+                                │
+                                ▼
+                           screen rectangles
+```
+
+The renderer can therefore be replaced later by GPU textures without altering the gameplay model or level format. The inline pixmaps are the canonical asset representation; raster/GPU textures would only be a cached rendering representation of the same data.
+
+
+# DOOM pickups: health, stamina, weapons
+
+Pickups use the same event/state/render architecture as every other entity in the example. They are logical world entities parsed from level strings; their pixmaps are presentation-only.
+
+```text
+embedded level string
+        │
+        ├─ H → health pickup
+        ├─ S → stamina pickup
+        ├─ G → shotgun pickup
+        └─ C → chaingun pickup
+                │
+                ▼
+          pickup entity pool
+                │
+        player proximity test
+                │
+                ▼
+          mutate player state
+                │
+                ▼
+          pickup.active = false
+```
+
+The source map cell is replaced by ordinary floor when the level is parsed, exactly as enemy source symbols are removed from the collision grid and turned into entities. This keeps map topology independent from transient entity state.
+
+```c
+typedef enum doom_weapon_t {
+    DOOM_WEAPON_PISTOL,
+    DOOM_WEAPON_SHOTGUN,
+    DOOM_WEAPON_CHAINGUN
+} doom_weapon_t;
+
+typedef enum doom_pickup_type_t {
+    DOOM_PICKUP_HEALTH,
+    DOOM_PICKUP_STAMINA,
+    DOOM_PICKUP_SHOTGUN,
+    DOOM_PICKUP_CHAINGUN
+} doom_pickup_type_t;
+
+typedef struct doom_pickup_t {
+    float x;
+    float y;
+    doom_pickup_type_t type;
+    bool active;
+    char texture_symbol;
+} doom_pickup_t;
+```
+
+Player state is extended with:
+
+```c
+int health;            // 0..100
+float stamina;         // 0..100
+int ammo;
+doom_weapon_t weapon;
+uint32_t weapons_owned;
+```
+
+Pickup transitions are deliberately simple:
+
+```text
+H  health   +30, capped at 100
+S  stamina  +45, capped at 100
+G  shotgun  unlock + equip +12 ammo
+C  chaingun unlock + equip +30 ammo
+```
+
+Health/stamina pickups remain in the world when the corresponding resource is already full. Weapon pickups are consumed and add the weapon to `weapons_owned`; the pistol is owned at level start. During play `1`, `2`, and `3` select pistol, shotgun, and chaingun respectively, but only if that weapon has been collected.
+
+Stamina has an actual simulation role rather than being a decorative counter:
+
+```text
+movement                    base speed = 3.0
+Shift + movement + stamina  sprint speed = 5.0
+sprinting                   stamina -= 32 / second
+not sprinting               stamina += 16 / second
+```
+
+Weapon behavior:
+
+```text
+PISTOL
+    cooldown 0.22 s
+    ammo cost 1
+    damage 1
+
+SHOTGUN
+    cooldown 0.48 s
+    ammo cost 2
+    damage 2
+
+CHAINGUN
+    cooldown 0.09 s
+    ammo cost 1
+    damage 1
+```
+
+All remain hitscan weapons so weapon selection extends the current combat model rather than introducing a projectile subsystem.
+
+The new pickup pixmaps use the existing symbolic palette/texture mechanism:
+
+```text
+H → health cross sprite
+S → stamina energy sprite
+G → shotgun sprite
+C → chaingun sprite
+```
+
+They are registered as `t_character`, rendered with the same transparent billboard path as enemies, and depth-tested against the existing ray-cast z-buffer. The minimap also shows active pickups.
+
+The clock transition is now:
+
+```text
+CLOCK(dt)
+  │
+  ├─ turn
+  ├─ move / sprint
+  ├─ drain or regenerate stamina
+  ├─ collect overlapping pickups
+  ├─ fire current weapon
+  ├─ update weapon cooldown
+  ├─ update enemies
+  └─ update damage flash
+```
+
+This preserves the same central rule as the other examples: **events mutate application state; rendering only observes it**.

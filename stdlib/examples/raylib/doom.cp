@@ -21,6 +21,7 @@ comptime {
 #define DOOM_MAX_WIDTH 32
 #define DOOM_MAX_HEIGHT 24
 #define DOOM_MAX_ENEMIES 32
+#define DOOM_MAX_PICKUPS 64
 #define DOOM_LEVEL_COUNT 8
 #define DOOM_PI 3.14159265358979323846f
 #define DOOM_FOV (DOOM_PI / 3.0f)
@@ -59,57 +60,47 @@ static const doom_palette_color_t DOOM_COLORS[] = {
     {'6', "green-down",  0x005500ffu},
     {'=', "grey",        0x7f7f7fffu},
     {'0', "floor-red",   0x24100cffu},
-    {'d', "floor-dark",  0x474759ffu},
+    {'d', "floor-dark",  0x171719ffu},
     {'y', "exit",        0xe0b820ffu},
+    {'b', "blue",        0x1664d8ffu},
+    {'c', "cyan",        0x33d6e8ffu},
+    {'w', "white",       0xf0f0f0ffu},
+    {'o', "orange",      0xff8a20ffu},
+    {'p', "purple",      0x8e44adffu},
     {' ', "transparent", 0x00000000u}
 };
 #define DOOM_COLOR_COUNT ((int)(sizeof(DOOM_COLORS) / sizeof(DOOM_COLORS[0])))
 
 static const char DOOM_TEX_BRICK[] =
-    "111111111111111112111111111111111112\n"
-    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
-    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
-    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
-    "222222222222222222222222222222222222\n"
-    "111111112211111112111111112211111112\n"
-    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr\n"
-    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr\n"
-    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr\n"
-    "111111111111111112111111111111111112\n"
-    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
-    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
-    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
-    "222222222222222222222222222222222222\n"
-    "111111112211111112111111112211111112\n"
-    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr\n"
-    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr\n"
-    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr";
+    "111111111111111112\n"
+    "rrrrrrrrrrrrrrrr12\n"
+    "rrrrrrrrrrrrrrrr12\n"
+    "rrrrrrrrrrrrrrrr12\n"
+    "222222222222222222\n"
+    "111111112211111112\n"
+    "rrrrrrr122rrrrrr12\n"
+    "rrrrrrr122rrrrrr12\n"
+    "rrrrrrr122rrrrrr12";
 
 static const char DOOM_TEX_ENEMY[] =
-    " ===     === \n"
-    "=  ==   ==  =\n"
     "    =====    \n"
-    "  ========  \n"
     "  ==g=r=g==  \n"
     "  ====r====  \n"
     "  =========  \n"
     "  ==rrrrr==  \n"
     "  ==rrrrr==  \n"
-    "   =======   \n"
+    "    =====    \n"
     "======r======\n"
     "== ===r=== ==\n"
-    "== ======= ==\n"
     "== ===r=== ==\n"
-    "== ======= ==\n"
     "== ===r=== ==\n"
-    "== ======= ==\n"
-    "r= === ===  r\n"
-    "   === ===   \n"
-    "   === ===   \n"
-    "   === ===   \n"
-    "   === ===   \n"
-    "   === ===   \n"
-    "   === ===   \n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "r= =======  r\n"
+    "  =========  \n"
+    "  ===   ===  \n"
+    "  ===   ===  \n"
     "  ===   ===  ";
 
 static const char DOOM_TEX_FLOOR[] =
@@ -124,9 +115,57 @@ static const char DOOM_TEX_EXIT[] =
     "y==y\n"
     "yyyy";
 
+static const char DOOM_TEX_HEALTH[] =
+    "   rrr   \n"
+    "   rrr   \n"
+    "rrrrrrrrr\n"
+    "rrrrrrrrr\n"
+    "rrrrrrrrr\n"
+    "   rrr   \n"
+    "   rrr   \n"
+    "         \n"
+    "  =====  ";
+
+static const char DOOM_TEX_STAMINA[] =
+    "   ccc   \n"
+    "  ccccc  \n"
+    " cccwccc \n"
+    "cccwwwccc\n"
+    " cccwccc \n"
+    "  ccccc  \n"
+    "   ccc   \n"
+    "    c    \n"
+    "  =====  ";
+
+static const char DOOM_TEX_SHOTGUN[] =
+    "         \n"
+    " wwwwwww \n"
+    "==wwwwwww\n"
+    "   ooo   \n"
+    "    oo   \n"
+    "    oo   \n"
+    "         \n"
+    "         \n"
+    "  =====  ";
+
+static const char DOOM_TEX_CHAINGUN[] =
+    "         \n"
+    " wwwwww  \n"
+    "======== \n"
+    " bbbbbb  \n"
+    "   pp    \n"
+    "   pp    \n"
+    "         \n"
+    "         \n"
+    "  =====  ";
+
 static const doom_texture_def_t DOOM_TEXTURES[] = {
     {'#', t_wall,      "brick", DOOM_TEX_BRICK, 18, 9},
     {'E', t_character, "enemy", DOOM_TEX_ENEMY, 13, 19},
+    {'H', t_character, "health", DOOM_TEX_HEALTH, 9, 9},
+    {'S', t_character, "stamina", DOOM_TEX_STAMINA, 9, 9},
+    {'G', t_character, "shotgun", DOOM_TEX_SHOTGUN, 9, 9},
+    {'C', t_character, "chaingun", DOOM_TEX_CHAINGUN, 9, 9},
     {'.', t_floor,     "floor", DOOM_TEX_FLOOR, 4, 4},
     {'X', t_floor,     "exit",  DOOM_TEX_EXIT,  4, 4}
 };
@@ -152,6 +191,7 @@ typedef struct doom_event_t {
     float move_strafe;
     float turn_axis;
     bool fire_down;
+    bool sprint_down;
 } doom_event_t;
 
 typedef struct doom_enemy_t {
@@ -163,6 +203,27 @@ typedef struct doom_enemy_t {
     char texture_symbol;
 } doom_enemy_t;
 
+typedef enum doom_weapon_t {
+    DOOM_WEAPON_PISTOL,
+    DOOM_WEAPON_SHOTGUN,
+    DOOM_WEAPON_CHAINGUN
+} doom_weapon_t;
+
+typedef enum doom_pickup_type_t {
+    DOOM_PICKUP_HEALTH,
+    DOOM_PICKUP_STAMINA,
+    DOOM_PICKUP_SHOTGUN,
+    DOOM_PICKUP_CHAINGUN
+} doom_pickup_type_t;
+
+typedef struct doom_pickup_t {
+    float x;
+    float y;
+    doom_pickup_type_t type;
+    bool active;
+    char texture_symbol;
+} doom_pickup_t;
+
 typedef struct doom_level_def_t {
     borrowed const char* name;
     borrowed const char* map;
@@ -172,8 +233,8 @@ static const doom_level_def_t DOOM_LEVELS[DOOM_LEVEL_COUNT] = {
     {
         "1. Entryway",
         "################\n"
-        "#P.....#.......#\n"
-        "#......#..E....#\n"
+        "#P..H..#..S....#\n"
+        "#......#..E.G..#\n"
         "#......#.......#\n"
         "#..............#\n"
         "#..####........#\n"
@@ -188,10 +249,10 @@ static const doom_level_def_t DOOM_LEVELS[DOOM_LEVEL_COUNT] = {
     {
         "2. Crossfire",
         "##################\n"
-        "#P.......#.......#\n"
+        "#P..S....#..H....#\n"
         "#.######.#.#####.#\n"
         "#......#.#.....#.#\n"
-        "#.E....#.....E.#.#\n"
+        "#.E..G.#.....E.#.#\n"
         "#......#####...#.#\n"
         "#..............#.#\n"
         "#.############.#.#\n"
@@ -203,63 +264,63 @@ static const doom_level_def_t DOOM_LEVELS[DOOM_LEVEL_COUNT] = {
     {
         "3. The Fork",
         "####################\n"
-        "#P.................#\n"
+        "#P...H...S.........#\n"
         "#.########.#########\n"
         "#.#......#.#.......#\n"
-        "#.#.E....#.#...E...#\n"
+        "#.#.E..G.#.#...E...#\n"
         "#.#......#.#.......#\n"
         "#.#......#.#.......#\n"
         "#....#####.#####...#\n"
         "#..................#\n"
         "#.######....######.#\n"
-        "#......E...........#\n"
+        "#......E.....C.....#\n"
         "#.................X#\n"
         "####################\n"
     },
     {
         "4. Courtyard",
         "####################\n"
-        "#P.................#\n"
+        "#P...H...S.........#\n"
         "#..................#\n"
         "#...############...#\n"
         "#...#..........#...#\n"
-        "#...#..E....E..#...#\n"
+        "#...#..E.G..E..#...#\n"
         "#...#..........#...#\n"
         "#...#....##....#...#\n"
         "#...#....##....#...#\n"
         "#...#..........#...#\n"
         "#...####....####...#\n"
-        "#........E.........#\n"
+        "#....C...E.........#\n"
         "#.................X#\n"
         "####################\n"
     },
     {
         "5. Zigzag",
         "#######################\n"
-        "#P.....#..............#\n"
+        "#P..H..#....S.........#\n"
         "#####..#.############.#\n"
         "#......#.#............#\n"
         "#.######.#.############\n"
-        "#.#....E.#............#\n"
+        "#.#..G.E.#............#\n"
         "#.#.############.####.#\n"
         "#.#............#....#.#\n"
         "#.############.#.E..#.#\n"
         "#............#.#....#.#\n"
         "############.#.####.#.#\n"
-        "#......E.....#......#X#\n"
+        "#....C.E.....#......#X#\n"
         "#######################\n"
     },
     {
         "6. Reactor",
         "######################\n"
-        "#P...................#\n"
+        "#P..S.....H..........#\n"
         "#..######....######..#\n"
         "#..#....#....#....#..#\n"
-        "#..#.E..######..E.#..#\n"
+        "#..#.E.G######..E.#..#\n"
         "#..#..............#..#\n"
         "#..####..######..##..#\n"
         "#......#.#....#.#....#\n"
-        "#.E....#.#.E..#.#....#\n"
+        "#.E..C.#.#.E..#.#....#\n"
         "#......#.#....#.#....#\n"
         "#..#####.######.####.#\n"
         "#...................X#\n"
@@ -268,16 +329,16 @@ static const doom_level_def_t DOOM_LEVELS[DOOM_LEVEL_COUNT] = {
     {
         "7. Gauntlet",
         "########################\n"
-        "#P.....................#\n"
+        "#P...H....S............#\n"
         "#.####################.#\n"
-        "#.#..E...............#.#\n"
+        "#.#..E..G............#.#\n"
         "#.#.################.#.#\n"
         "#.#.#..............#.#.#\n"
         "#.#.#.E..........E.#.#.#\n"
         "#.#.#.############.#.#.#\n"
         "#.#.#..............#.#.#\n"
         "#.#.################.#.#\n"
-        "#.#........E.........#.#\n"
+        "#.#....C...E.........#.#\n"
         "#.####################.#\n"
         "#.....................X#\n"
         "########################\n"
@@ -285,15 +346,15 @@ static const doom_level_def_t DOOM_LEVELS[DOOM_LEVEL_COUNT] = {
     {
         "8. Last Stand",
         "########################\n"
-        "#P.....................#\n"
+        "#P...H....S............#\n"
         "#..####..######..####..#\n"
         "#..#..#..#....#..#..#..#\n"
-        "#..#E.#..#.EE.#..#.E#..#\n"
+        "#..#E.#G.#.EE.#..#.E#..#\n"
         "#..#..#..#....#..#..#..#\n"
         "#..####..######..####..#\n"
         "#......................#\n"
         "#..####..######..####..#\n"
-        "#..#E.#..#....#..#.E#..#\n"
+        "#..#E.#..#..C.#..#.E#..#\n"
         "#..#..#..#.E..#..#..#..#\n"
         "#..####..######..####..#\n"
         "#.....................X#\n"
@@ -312,12 +373,17 @@ typedef struct doom_app_t {
     float player_y;
     float player_angle;
     int health;
+    float stamina;
     int ammo;
+    doom_weapon_t weapon;
+    uint32_t weapons_owned;
     int score;
     float fire_cooldown;
     float hurt_flash;
     doom_enemy_t enemies[DOOM_MAX_ENEMIES];
     int enemy_count;
+    doom_pickup_t pickups[DOOM_MAX_PICKUPS];
+    int pickup_count;
     float zbuffer[DOOM_SCREEN_WIDTH];
 
     static pub float normalize_angle(float angle) {
@@ -416,6 +482,8 @@ typedef struct doom_app_t {
         doom_app_t.clear_map(self);
         memset(self->enemies, 0, sizeof(self->enemies));
         self->enemy_count = 0;
+        memset(self->pickups, 0, sizeof(self->pickups));
+        self->pickup_count = 0;
         self->map_width = 0;
         self->map_height = 0;
         borrowed const char* source = DOOM_LEVELS[level_index].map;
@@ -450,6 +518,19 @@ typedef struct doom_app_t {
                     enemy->texture_symbol = 'E';
                 }
                 self->map[y][x] = '.';
+            } else if (ch == 'H' || ch == 'S' || ch == 'G' || ch == 'C') {
+                if (self->pickup_count < DOOM_MAX_PICKUPS) {
+                    doom_pickup_t* pickup = &self->pickups[self->pickup_count++];
+                    pickup->x = x + 0.5f;
+                    pickup->y = y + 0.5f;
+                    pickup->active = true;
+                    pickup->texture_symbol = ch;
+                    if (ch == 'H') pickup->type = DOOM_PICKUP_HEALTH;
+                    else if (ch == 'S') pickup->type = DOOM_PICKUP_STAMINA;
+                    else if (ch == 'G') pickup->type = DOOM_PICKUP_SHOTGUN;
+                    else pickup->type = DOOM_PICKUP_CHAINGUN;
+                }
+                self->map[y][x] = '.';
             } else {
                 self->map[y][x] = ch;
             }
@@ -463,7 +544,10 @@ typedef struct doom_app_t {
         self->map_height = y;
         self->current_level = level_index;
         self->health = 100;
+        self->stamina = 100.0f;
         self->ammo = 50;
+        self->weapon = DOOM_WEAPON_PISTOL;
+        self->weapons_owned = 1u << DOOM_WEAPON_PISTOL;
         self->score = 0;
         self->fire_cooldown = 0.0f;
         self->hurt_flash = 0.0f;
@@ -492,22 +576,83 @@ typedef struct doom_app_t {
         return false;
     }
 
-    pub void move_player(borrowed mut *self, float forward, float strafe, float dt) {
+    pub void apply_pickup(borrowed mut *self, mut doom_pickup_t* pickup) {
+        if (pickup == NULL || !pickup->active) return;
+        if (pickup->type == DOOM_PICKUP_HEALTH) {
+            if (self->health >= 100) return;
+            self->health += 30;
+            if (self->health > 100) self->health = 100;
+            self->score += 10;
+        } else if (pickup->type == DOOM_PICKUP_STAMINA) {
+            if (self->stamina >= 100.0f) return;
+            self->stamina += 45.0f;
+            if (self->stamina > 100.0f) self->stamina = 100.0f;
+            self->score += 10;
+        } else if (pickup->type == DOOM_PICKUP_SHOTGUN) {
+            self->weapons_owned |= 1u << DOOM_WEAPON_SHOTGUN;
+            self->weapon = DOOM_WEAPON_SHOTGUN;
+            self->ammo += 12;
+            self->score += 50;
+        } else if (pickup->type == DOOM_PICKUP_CHAINGUN) {
+            self->weapons_owned |= 1u << DOOM_WEAPON_CHAINGUN;
+            self->weapon = DOOM_WEAPON_CHAINGUN;
+            self->ammo += 30;
+            self->score += 75;
+        }
+        pickup->active = false;
+    }
+
+    pub void collect_pickups(borrowed mut *self) {
+        for (int i = 0; i < self->pickup_count; i++) {
+            doom_pickup_t* pickup = &self->pickups[i];
+            if (!pickup->active) continue;
+            float dx = pickup->x - self->player_x;
+            float dy = pickup->y - self->player_y;
+            if (dx * dx + dy * dy < 0.28f) doom_app_t.apply_pickup(self, pickup);
+        }
+    }
+
+    static pub borrowed const char* weapon_name(doom_weapon_t weapon) {
+        if (weapon == DOOM_WEAPON_SHOTGUN) return "SHOTGUN";
+        if (weapon == DOOM_WEAPON_CHAINGUN) return "CHAINGUN";
+        return "PISTOL";
+    }
+
+    pub void select_weapon(borrowed mut *self, doom_weapon_t weapon) {
+        if ((self->weapons_owned & (1u << weapon)) != 0u) self->weapon = weapon;
+    }
+
+    pub void move_player(borrowed mut *self, float forward, float strafe, float dt, bool sprinting) {
+
         if (self->state != DOOM_PLAYING) return;
         float speed = 3.0f;
+        bool moving = fabsf(forward) > 0.01f || fabsf(strafe) > 0.01f;
+        if (sprinting && moving && self->stamina > 0.0f) speed = 5.0f;
         float dx = (cosf(self->player_angle) * forward + cosf(self->player_angle + DOOM_PI * 0.5f) * strafe) * speed * dt;
         float dy = (sinf(self->player_angle) * forward + sinf(self->player_angle + DOOM_PI * 0.5f) * strafe) * speed * dt;
         float nx = self->player_x + dx;
         float ny = self->player_y + dy;
         if (!doom_app_t.solid(self, nx, self->player_y)) self->player_x = nx;
         if (!doom_app_t.solid(self, self->player_x, ny)) self->player_y = ny;
+        doom_app_t.collect_pickups(self);
         if (doom_app_t.exit_at(self, self->player_x, self->player_y)) self->state = DOOM_WON;
     }
 
     pub void fire(borrowed mut *self) {
         if (self->state != DOOM_PLAYING || self->fire_cooldown > 0.0f || self->ammo <= 0) return;
-        self->fire_cooldown = 0.22f;
-        self->ammo--;
+        int ammo_cost = 1;
+        int damage = 1;
+        if (self->weapon == DOOM_WEAPON_SHOTGUN) {
+            self->fire_cooldown = 0.48f;
+            ammo_cost = 2;
+            damage = 2;
+        } else if (self->weapon == DOOM_WEAPON_CHAINGUN) {
+            self->fire_cooldown = 0.09f;
+        } else {
+            self->fire_cooldown = 0.22f;
+        }
+        if (self->ammo < ammo_cost) return;
+        self->ammo -= ammo_cost;
         int target = -1;
         float best_distance = DOOM_MAX_DEPTH;
         for (int i = 0; i < self->enemy_count; i++) {
@@ -526,7 +671,7 @@ typedef struct doom_app_t {
         }
         if (target >= 0) {
             doom_enemy_t* enemy = &self->enemies[target];
-            enemy->health--;
+            enemy->health -= damage;
             if (enemy->health <= 0) {
                 enemy->alive = false;
                 self->score += 100;
@@ -569,7 +714,15 @@ typedef struct doom_app_t {
         if (self->state != DOOM_PLAYING) return;
         float dt = doom_app_t.clamp(event->delta_seconds, 0.0f, 0.05f);
         self->player_angle = doom_app_t.normalize_angle(self->player_angle + event->turn_axis * 2.2f * dt);
-        doom_app_t.move_player(self, event->move_forward, event->move_strafe, dt);
+        bool moving = fabsf(event->move_forward) > 0.01f || fabsf(event->move_strafe) > 0.01f;
+        doom_app_t.move_player(self, event->move_forward, event->move_strafe, dt, event->sprint_down);
+        if (event->sprint_down && moving && self->stamina > 0.0f) {
+            self->stamina -= 32.0f * dt;
+            if (self->stamina < 0.0f) self->stamina = 0.0f;
+        } else {
+            self->stamina += 16.0f * dt;
+            if (self->stamina > 100.0f) self->stamina = 100.0f;
+        }
         if (event->fire_down) doom_app_t.fire(self);
         if (self->fire_cooldown > 0.0f) self->fire_cooldown -= dt;
         if (self->hurt_flash > 0.0f) self->hurt_flash -= dt;
@@ -587,6 +740,12 @@ typedef struct doom_app_t {
                 } else if (event->key == KEY_ENTER || event->key == KEY_SPACE) {
                     doom_app_t.start_selected_level(self);
                 }
+            } else if (self->state == DOOM_PLAYING && event->key == KEY_ONE) {
+                doom_app_t.select_weapon(self, DOOM_WEAPON_PISTOL);
+            } else if (self->state == DOOM_PLAYING && event->key == KEY_TWO) {
+                doom_app_t.select_weapon(self, DOOM_WEAPON_SHOTGUN);
+            } else if (self->state == DOOM_PLAYING && event->key == KEY_THREE) {
+                doom_app_t.select_weapon(self, DOOM_WEAPON_CHAINGUN);
             } else if (event->key == KEY_M) {
                 self->state = DOOM_MENU;
             } else if ((self->state == DOOM_WON || self->state == DOOM_DEAD) && (event->key == KEY_ENTER || event->key == KEY_SPACE)) {
@@ -732,6 +891,13 @@ typedef struct doom_app_t {
             }
         }
 
+        for (int i = 0; i < self->pickup_count; i++) {
+            doom_pickup_t* pickup = &self->pickups[i];
+            if (!pickup->active) continue;
+            borrowed const doom_texture_def_t* texture = doom_app_t.texture_for(pickup->texture_symbol, t_character);
+            doom_app_t.render_character_texture(self, texture, pickup->x, pickup->y);
+        }
+
         for (int i = 0; i < self->enemy_count; i++) {
             doom_enemy_t* enemy = &self->enemies[i];
             if (!enemy->alive) continue;
@@ -754,6 +920,9 @@ typedef struct doom_app_t {
                 if (ch == 'X') color = GREEN;
                 DrawRectangle(ox + x * scale, oy + y * scale, scale - 1, scale - 1, color);
             }
+        }
+        for (int i = 0; i < self->pickup_count; i++) {
+            if (self->pickups[i].active) DrawCircle(ox + (int)(self->pickups[i].x * scale), oy + (int)(self->pickups[i].y * scale), 1.5f, SKYBLUE);
         }
         for (int i = 0; i < self->enemy_count; i++) {
             if (self->enemies[i].alive) DrawCircle(ox + (int)(self->enemies[i].x * scale), oy + (int)(self->enemies[i].y * scale), 2.0f, RED);
@@ -784,10 +953,12 @@ typedef struct doom_app_t {
         doom_app_t.render_world(self);
         if (self->hurt_flash > 0.0f) DrawRectangle(0, 0, DOOM_SCREEN_WIDTH, DOOM_VIEW_HEIGHT, (Color){180, 0, 0, 70});
         DrawRectangle(0, DOOM_VIEW_HEIGHT, DOOM_SCREEN_WIDTH, DOOM_SCREEN_HEIGHT - DOOM_VIEW_HEIGHT, (Color){16, 16, 18, 255});
-        DrawText(TextFormat("HEALTH %03d", self->health), 20, 580, 26, self->health > 25 ? RAYWHITE : RED);
-        DrawText(TextFormat("AMMO %02d", self->ammo), 220, 580, 26, RAYWHITE);
-        DrawText(TextFormat("SCORE %05d", self->score), 390, 580, 26, RAYWHITE);
-        DrawText(DOOM_LEVELS[self->current_level].name, 650, 580, 20, LIGHTGRAY);
+        DrawText(TextFormat("HEALTH %03d", self->health), 20, 575, 24, self->health > 25 ? RAYWHITE : RED);
+        DrawText(TextFormat("STAM %03d", (int)self->stamina), 188, 575, 24, self->stamina > 20.0f ? SKYBLUE : ORANGE);
+        DrawText(TextFormat("AMMO %02d", self->ammo), 345, 575, 24, RAYWHITE);
+        DrawText(doom_app_t.weapon_name(self->weapon), 485, 575, 22, LIGHTGRAY);
+        DrawText(TextFormat("SCORE %05d", self->score), 625, 575, 22, RAYWHITE);
+        DrawText(DOOM_LEVELS[self->current_level].name, 820, 578, 16, LIGHTGRAY);
         doom_app_t.render_minimap(self);
         if (self->state == DOOM_WON) {
             DrawRectangle(220, 220, 584, 120, (Color){0, 0, 0, 220});
@@ -813,7 +984,7 @@ typedef struct doom_app_t {
     float old_x = app.player_x;
     app.state = DOOM_PLAYING;
     app.player_angle = 0.0f;
-    app.move_player(1.0f, 0.0f, 0.1f);
+    app.move_player(1.0f, 0.0f, 0.1f, false);
     @assert(!(app.player_x <= old_x));
 
     app.state = DOOM_PLAYING;
@@ -836,6 +1007,39 @@ typedef struct doom_app_t {
     @assert(!(floor_texture == NULL || floor_texture->width != 4 || floor_texture->height != 4));
     Color transparent = doom_app_t.unpack_rgba(doom_app_t.palette_value(' '));
     @assert(!(transparent.a != 0));
+    @assert(!(doom_app_t.texture_for('H', t_character) == NULL || doom_app_t.texture_for('S', t_character) == NULL));
+    @assert(!(doom_app_t.texture_for('G', t_character) == NULL || doom_app_t.texture_for('C', t_character) == NULL));
+
+    doom_pickup_t hp = {app.player_x, app.player_y, DOOM_PICKUP_HEALTH, true, 'H'};
+    app.health = 60;
+    app.apply_pickup(&hp);
+    @assert(!(app.health != 90 || hp.active));
+    doom_pickup_t stamina = {app.player_x, app.player_y, DOOM_PICKUP_STAMINA, true, 'S'};
+    app.stamina = 20.0f;
+    app.apply_pickup(&stamina);
+    @assert(!(app.stamina < 64.9f || app.stamina > 65.1f || stamina.active));
+    doom_pickup_t shotgun = {app.player_x, app.player_y, DOOM_PICKUP_SHOTGUN, true, 'G'};
+    int before_ammo = app.ammo;
+    app.apply_pickup(&shotgun);
+    @assert(!(app.weapon != DOOM_WEAPON_SHOTGUN || (app.weapons_owned & (1u << DOOM_WEAPON_SHOTGUN)) == 0u || app.ammo != before_ammo + 12 || shotgun.active));
+    doom_pickup_t chaingun = {app.player_x, app.player_y, DOOM_PICKUP_CHAINGUN, true, 'C'};
+    before_ammo = app.ammo;
+    app.apply_pickup(&chaingun);
+    @assert(!(app.weapon != DOOM_WEAPON_CHAINGUN || (app.weapons_owned & (1u << DOOM_WEAPON_CHAINGUN)) == 0u || app.ammo != before_ammo + 30 || chaingun.active));
+    app.select_weapon(DOOM_WEAPON_PISTOL);
+    @assert(!(app.weapon != DOOM_WEAPON_PISTOL));
+    app.select_weapon(DOOM_WEAPON_SHOTGUN);
+    @assert(!(app.weapon != DOOM_WEAPON_SHOTGUN));
+
+    app.stamina = 50.0f;
+    doom_event_t sprint = {0};
+    sprint.type = DOOM_EVENT_CLOCK;
+    sprint.delta_seconds = 0.05f;
+    sprint.move_forward = 1.0f;
+    sprint.sprint_down = true;
+    app.state = DOOM_PLAYING;
+    app.clock(&sprint);
+    @assert(!(app.stamina >= 50.0f));
 
     for (int i = 0; i < DOOM_LEVEL_COUNT; i++) {
         @assert(!(!app.load_level(i) || app.map_width < 10 || app.map_height < 10));
@@ -863,6 +1067,7 @@ int main(int argc, char** argv) {
         clock.move_strafe = (IsKeyDown(KEY_D) ? 1.0f : 0.0f) - (IsKeyDown(KEY_A) ? 1.0f : 0.0f);
         clock.turn_axis = (IsKeyDown(KEY_RIGHT) ? 1.0f : 0.0f) - (IsKeyDown(KEY_LEFT) ? 1.0f : 0.0f);
         clock.fire_down = IsKeyDown(KEY_SPACE);
+        clock.sprint_down = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
         app.event(&clock);
         BeginDrawing();
         app.render();
