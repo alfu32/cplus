@@ -727,6 +727,39 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesMethodReturnReceiversForChainedMemberCompletion() {
+        val uri = "file:///method-return-receiver.cp"
+        val source = "typedef struct inner_t {\n" +
+            "    int value;\n" +
+            "} inner_t;\n" +
+            "typedef struct factory_t {\n" +
+            "    pub inner_t *get(borrowed *self) { return &self->inner; }\n" +
+            "    inner_t inner;\n" +
+            "} factory_t;\n" +
+            "int main(void) {\n" +
+            "    factory_t factory;\n" +
+            "    return factory.get()->value;\n" +
+            "}\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val lines = source.lines()
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":9,\"character\":${lines[9].indexOf("factory.get()->") + "factory.get()->".length}}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":{\"isIncomplete\":false"), response)
+        assertTrue(response.contains("\"label\":\"value\""), response)
+    }
+
+    @Test
     fun indexesComptimeMaterializedDeclarationsWithOriginalRanges() {
         val uri = "file:///generated.cp"
         val source = "comptime string @typename(type T) { return T.name; }\n" +

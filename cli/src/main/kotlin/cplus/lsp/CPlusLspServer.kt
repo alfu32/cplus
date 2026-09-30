@@ -921,7 +921,7 @@ class CPlusLspServer(
     private fun receiverAccess(document: LspDocument, offset: Int): ReceiverAccess? {
         val prefix = document.snapshot.text.substring(0, offset)
         val match = Regex(
-            "([A-Za-z_][A-Za-z0-9_]*(?:\\s*(?:->|\\.)\\s*[A-Za-z_][A-Za-z0-9_]*)*)\\s*(->|\\.)\\s*$"
+            "([A-Za-z_][A-Za-z0-9_]*(?:(?:\\s*(?:->|\\.)\\s*[A-Za-z_][A-Za-z0-9_]*)|(?:\\s*\\([^()]*\\)))*)\\s*(->|\\.)\\s*$"
         ).find(prefix) ?: return null
         val receiver = match.groupValues[1].trim()
         val operator = match.groupValues[2]
@@ -947,6 +947,10 @@ class CPlusLspServer(
                 .minByOrNull { it.scope.size() }
                 ?.ownerName
             return owner?.let { DeclaredType(it, 1, 0) }
+        }
+        val call = Regex("(.+)\\(([^()]*)\\)$").find(value)
+        if (call != null) {
+            return functionCallReturnType(document, call.groupValues[1].trim(), offset)
         }
         if (value.matches(IDENTIFIER)) {
             val variable = visibleSymbols(document)
@@ -981,6 +985,48 @@ class CPlusLspServer(
             }
             .mapNotNull(::declaredTypeInfo)
             .firstOrNull()
+    }
+
+    /** Resolve a simple function or method call to its declared return shape. */
+    private fun functionCallReturnType(
+        document: LspDocument,
+        callee: String,
+        offset: Int
+    ): DeclaredType? {
+        if (callee.matches(IDENTIFIER)) {
+            return visibleSymbols(document)
+                .asSequence()
+                .filter { it.name == callee && it.kind in setOf(6, 12) }
+                .mapNotNull(::functionReturnType)
+                .firstOrNull()
+        }
+        val member = Regex("(.+?)\\s*(->|\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)$").find(callee)
+            ?: return null
+        val parent = receiverValue(document, member.groupValues[1], offset) ?: return null
+        val operatorMatches = when (member.groupValues[2]) {
+            "->" -> parent.pointerDepth > 0
+            "." -> parent.pointerDepth == 0 && parent.arrayDepth == 0
+            else -> false
+        }
+        if (!operatorMatches) return null
+        val owner = resolveTypeAlias(parent.typeName)
+        return visibleSymbols(document)
+            .asSequence()
+            .filter {
+                it.kind == 6 && it.name == member.groupValues[3] &&
+                    it.ownerName?.let(::resolveTypeAlias) == owner
+            }
+            .mapNotNull(::functionReturnType)
+            .firstOrNull()
+    }
+
+    private fun functionReturnType(symbol: LspSymbol): DeclaredType? {
+        val nameOffset = symbol.detail.indexOf(symbol.name)
+        if (nameOffset <= 0) return null
+        val returnDeclaration = symbol.detail.substring(0, nameOffset)
+            .replace(Regex("\\b(pub|priv|static|comptime)\\b"), " ")
+        val shape = typeShape(returnDeclaration) ?: return null
+        return DeclaredType(resolveTypeAlias(shape.base), shape.pointerDepth, shape.arrayDepth)
     }
 
     private fun resolveTypeAlias(typeName: String): String {
