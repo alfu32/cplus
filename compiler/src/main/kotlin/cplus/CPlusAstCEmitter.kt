@@ -265,10 +265,9 @@ class CPlusAstCEmitter {
         }
         val terminal = emit(loweredAst, lowered.source)
         if (terminal.diagnostics.isNotEmpty()) return terminal
-        val generatedNames = lowered.synthesizedDeclarations.map { it.generatedName }.toSet()
         return terminal.copy(
             synthesizedDeclarations = lowered.synthesizedDeclarations,
-            synthesizedNodes = loweredAst.synthesizedDeclarationNodes(generatedNames),
+            synthesizedNodes = loweredAst.synthesizedDeclarationNodes(lowered.synthesizedDeclarations, lowered.source),
             synthesizedSource = lowered.source
         )
     }

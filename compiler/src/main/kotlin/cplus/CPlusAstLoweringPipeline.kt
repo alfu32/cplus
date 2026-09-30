@@ -59,8 +59,7 @@ class CPlusAstLoweringPipeline {
         val synthesizedDeclarations = mutableListOf<CPlusSynthesizedDeclaration>()
 
         fun synthesizedNodesIn(currentAst: CPlusAst): List<CPlusAstNode> {
-            val names = synthesizedDeclarations.map { it.generatedName }.toSet()
-            return currentAst.synthesizedDeclarationNodes(names)
+            return currentAst.synthesizedDeclarationNodes(synthesizedDeclarations, source)
         }
 
         for (step in steps) {
@@ -134,15 +133,22 @@ class CPlusAstLoweringPipeline {
 
 /**
  * Return normalized declaration nodes whose declaration header names one of the generated
- * symbols. The header boundary is important: a function body may call a generated function,
- * but that does not make the enclosing function a synthesized declaration.
+ * symbols and whose identifier origin belongs to the declaration's original source span. The
+ * header boundary is important: a function body may call a generated function, but that does
+ * not make the enclosing function a synthesized declaration. Origin matching also prevents an
+ * unrelated pre-existing prototype with the same generated name from being reported as new.
  */
-fun CPlusAst.synthesizedDeclarationNodes(generatedNames: Set<String>): List<CPlusAstNode> {
-    if (generatedNames.isEmpty()) return emptyList()
+fun CPlusAst.synthesizedDeclarationNodes(
+    declarations: List<CPlusSynthesizedDeclaration>,
+    mappedSource: MappedText
+): List<CPlusAstNode> {
+    if (declarations.isEmpty()) return emptyList()
     val source = source.text
-    return root.descendantsAndSelf()
-        .filter { node ->
-            if (node.kind !in CPlusAstLoweringPipeline.SYNTHESIZED_DECLARATION_KINDS) return@filter false
+    val candidates = root.descendantsAndSelf()
+        .filter { it.kind in CPlusAstLoweringPipeline.SYNTHESIZED_DECLARATION_KINDS }
+        .toList()
+    return declarations.mapNotNull { declaration ->
+        candidates.firstOrNull { node ->
             val declarationBodyStart = node.descendantsAndSelf()
                 .firstOrNull { it.syntaxKind in setOf("compound_statement", "cplus_block") }
                 ?.span?.startOffset
@@ -150,11 +156,14 @@ fun CPlusAst.synthesizedDeclarationNodes(generatedNames: Set<String>): List<CPlu
             node.descendantsAndSelf()
                 .filter { it.kind == CPlusAstKind.IDENTIFIER && it.span.startOffset < declarationBodyStart }
                 .any { identifier ->
-                    source.substring(identifier.span.startOffset, identifier.span.endOffset) in generatedNames
+                    source.substring(identifier.span.startOffset, identifier.span.endOffset) == declaration.generatedName &&
+                        mappedSource.originAt(identifier.span.startOffset)?.let { origin ->
+                            origin.file.name == declaration.sourceSpan.file &&
+                                origin.offset in declaration.sourceSpan.startOffset until declaration.sourceSpan.endOffset
+                        } == true
                 }
         }
-        .distinctBy { it.span.startOffset to it.span.endOffset }
-        .toList()
+    }.distinctBy { it.span.startOffset to it.span.endOffset }
 }
 
 private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =

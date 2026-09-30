@@ -6706,6 +6706,7 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
         val text = """
             #define pub
             #define stat
+            static int factory__answer(void);
             typedef struct factory_t {
                 static pub int answer(void) { return 42; }
                 static pub factory_t *create(int value) { (void) value; return 0; }
