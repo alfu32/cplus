@@ -18,6 +18,79 @@ Every task needs a focused test, the aggregate `./gradlew --offline --no-daemon 
 --max-workers=1 -Dorg.gradle.native=false --console=plain` gate, and a documentation row.
 Native or interactive tasks additionally need their named host/editor evidence.
 
+## Execution-level breakdown
+
+The phase rows above are release gates, not individual coding tasks. The following
+subtasks are the current work units. A subtask is only moved to `DONE` after its
+focused test and aggregate gate are recorded; `DONE-LOCAL` means a host, IDE, or
+release gate is still missing.
+
+### Principal versus ancillary work
+
+The ledger uses this accounting rule:
+
+- **Principal task:** a capability required to achieve a phase gate, such as AST
+  emission, semantic handles, or compiler-aligned LSP resolution. Principal tasks
+  determine migration progress.
+- **Ancillary/mopup:** corrections and evidence discovered while completing a
+  principal task, such as spacing fixes, extra overload cases, regression fixtures,
+  portability repairs, and documentation updates. They remain attributed to their
+  parent and are not counted as separate migration goals.
+
+Consequently, commit count is not task count. The recent semantic-resolution commits
+are one principal P8.8 task with several ancillary passes, not nine independent parser
+projects:
+
+| Principal task | Ancillary/mopup included | Current result |
+|---|---|---|
+| P7.1 AST emission | comma spacing, literal/preprocessor preservation, declarator and method-emission fixtures, unsupported-node rejection | IN PROGRESS; grammar-context coverage remains |
+| P7.3 declaration handles | declaration-kind matching, mapped-origin overlap, generated aggregate members, source-revision boundary tests | DONE-LOCAL for handles; member metadata remains open |
+| P8.8 compiler-aligned LSP resolution | receiver forms, dereference/unary arguments, casts, literal suffixes, ambiguity diagnostics, generated aliases | IN PROGRESS; promotions/conversions/writes remain |
+| P8.9 client recovery | VS Code/Vim restart and stale-revision fixtures | IN PROGRESS; IntelliJ interactive evidence remains |
+
+This prevents corrective commits from inflating the apparent amount of principal work
+completed while still keeping every regression and its evidence traceable.
+
+### Phase 7 active and deferred work
+
+| ID | Parent | Subtask | Status | Exit evidence |
+|---|---|---|---|---|
+| P7.1.a | P7.1 | Preserve terminal spelling for literals, preprocessor regions, and comments | DONE-LOCAL | Emitter fixture reparses and token spellings remain equal |
+| P7.1.b | P7.1 | Replace punctuation-only spacing decisions with grammar-context rules for comma, colon, and postfix operators | DONE-LOCAL | Expression/control-flow fixture plus C11 compile/run |
+| P7.1.c | P7.1 | Cover pointer, array, function-pointer, and nested declarator layout | DONE-LOCAL | Declarator corpus reparses and executes |
+| P7.1.d | P7.1 | Cover attributes and calling-convention modifiers at declaration, method, and callback positions | IN PROGRESS | Attribute corpus has mapped output, reparses, and compiles on available host drivers |
+| P7.1.e | P7.1 | Cover comments adjacent to declarators and nested expressions without changing token boundaries | OPEN | Comment corpus plus token-equivalence and compile gate |
+| P7.1.f | P7.1 | Measure emitter determinism and bounded performance on the repository corpus | DONE-LOCAL | Repeated output/origin equality and benchmark evidence |
+| P7.3.a | P7.3 | Expose generated aliases, tags, functions, variables, and methods | DONE-LOCAL | Generic and method handle fixtures |
+| P7.3.b | P7.3 | Expose synthesized aggregate member handles with mapped spans | DONE-LOCAL | Generic struct member fixture |
+| P7.3.c | P7.3 | Attach normalized member type, declarator, access, and ownership metadata | OPEN | Semantic-index fixture consumed without parser-node coupling |
+| P7.3.d | P7.3 | Publish stable handle identity across comptime revisions and invalidation | OPEN | Multi-pass revision/invalidation fixture |
+| P7.7.a | P7.7 | Run Tree-sitter versus legacy output comparison on the bounded corpus | OPEN | Differential report with categorized mismatches |
+| P7.7.b | P7.7 | Define default-backend feature flag and rollback behavior | OPEN | CLI/compiler configuration test |
+| P7.7.c | P7.7 | Perform release-candidate soak before changing the default | BLOCKED | Depends on P7.1–P7.6 and release host evidence |
+
+### Phase 8 active and deferred work
+
+| ID | Parent | Subtask | Status | Exit evidence |
+|---|---|---|---|---|
+| P8.5.a | P8.5 | Start IntelliJ client, initialize, and synchronize a document | OPEN | Automated IDE fixture reaches initialized state |
+| P8.5.b | P8.5 | Surface diagnostics, completion, navigation, and test gutter actions | OPEN | IntelliJ integration assertions and screenshots/logs |
+| P8.5.c | P8.5 | Recover from LSP exit and restart without stale diagnostics | OPEN | Forced-exit/restart fixture |
+| P8.8.a | P8.8 | Match receiver/value/pointer method lookup and overload ranking | DONE-LOCAL | LSP semantic fixture suite |
+| P8.8.b | P8.8 | Match casts, unary/dereference forms, literal suffixes, and generated aliases | DONE-LOCAL | Focused overload and comptime tests |
+| P8.8.c | P8.8 | Implement C integer promotions and legal pointer/member conversions | OPEN | Positive and negative conversion matrix |
+| P8.8.d | P8.8 | Resolve writes, callback effects, ownership/access annotations, and scope invalidation | OPEN | Semantic-index/LSP consistency matrix |
+| P8.8.e | P8.8 | Reject unsupported or ambiguous resolution conservatively with mapped diagnostics | DONE-LOCAL | Ambiguity and unsupported-form diagnostics |
+| P8.9.a | P8.9 | Verify VS Code child restart and stale-revision handling | DONE-LOCAL | Existing restart fixtures |
+| P8.9.b | P8.9 | Verify Vim restart, quickfix, and import recovery | DONE-LOCAL | Existing headless fixtures |
+| P8.9.c | P8.9 | Verify IntelliJ unexpected exit, restart, and cache invalidation | OPEN | IntelliJ interactive fixture |
+| P8.10.a | P8.10 | Publish mismatch reporting and a legacy-backend rollback switch | OPEN | Release configuration and operator documentation |
+| P8.10.b | P8.10 | Maintain two stable releases with both backends selectable | BLOCKED | Starts only after P7.7 promotion |
+
+`BLOCKED` here means dependency-gated, not an implementation failure. It prevents
+release/retirement work from being counted as active engineering before its inputs
+exist.
+
 ## Phase 7 — AST emission and promotion
 
 | ID | Task | Depends on | Status | Evidence / next action |
