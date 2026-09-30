@@ -47,6 +47,34 @@ data class CPlusSymbol(
     val declaratorQualifiers: List<CPlusDeclaratorQualifier> = emptyList()
 )
 
+/**
+ * Stable semantic handle for a member inside a synthesized aggregate.
+ *
+ * [symbol] carries normalized type/declarator/parameter information. The explicit
+ * generated/original spans and mapped declaration text let tooling navigate back to
+ * the C-plus template or invocation without retaining parser-generator nodes.
+ */
+data class CPlusSynthesizedMember(
+    val ownerType: String,
+    val nodeKind: CPlusAstKind,
+    val symbol: CPlusSymbol,
+    val generatedSpan: SourceSpan,
+    val sourceSpan: SourceSpan,
+    val mappedText: MappedText
+) {
+    val ownership: AllocationOwnership
+        get() = symbol.annotations.asSequence()
+            .map {
+                when (it) {
+                    "borrowed" -> AllocationOwnership.BORROWED
+                    "owned" -> AllocationOwnership.OWNED
+                    else -> AllocationOwnership.NONE
+                }
+            }
+            .firstOrNull { it != AllocationOwnership.NONE }
+            ?: AllocationOwnership.NONE
+}
+
 /** Callable signature attached to a C function-pointer typedef, kept distinct from its return type. */
 data class CPlusFunctionType(
     val returnType: String?,
@@ -317,10 +345,14 @@ class CPlusSemanticAnalyzer {
                                     ?.text(ast.source.text)
                                 val declarator = member.children.firstOrNull { it.fieldName == "declarator" }
                                 val layers = declarator?.declaratorLayers().orEmpty()
+                                val annotations = member.descendants()
+                                    .filter { it.syntaxKind == "cplus_result_annotation" }
+                                    .map { it.text(ast.source.text) }
+                                    .toSet()
                                 fieldDeclaratorLayers[typeName to name] = layers
                                 symbols += CPlusSymbol(
                                     name, CPlusSymbolKind.FIELD, typeName, type, null,
-                                    emptySet(), emptyList(), member.span,
+                                    annotations, emptyList(), member.span,
                                     pointerDepth = layers.count { it == CPlusDeclaratorLayer.POINTER },
                                     declaratorLayers = layers,
                                     declaratorQualifiers = member.declarationQualifiers(ast.source.text)
@@ -337,7 +369,10 @@ class CPlusSemanticAnalyzer {
                                 val access = methodNode.children.firstOrNull { it.syntaxKind == "cplus_access_modifier" }
                                     ?.text(ast.source.text)
                                 val annotations = methodNode.descendants()
-                                    .filter { it.syntaxKind == "cplus_parameter_annotation" }
+                                    .filter {
+                                        it.syntaxKind == "cplus_parameter_annotation" ||
+                                            it.syntaxKind == "cplus_result_annotation"
+                                    }
                                     .map { it.text(ast.source.text) }
                                     .toSet()
                                 val parameterList = methodNode.descendants().firstOrNull { it.syntaxKind == "parameter_list" }

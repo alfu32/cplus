@@ -44,7 +44,7 @@ projects:
 | Principal task                       | Ancillary/mopup included                                                                                              | Current result                                       |
 |--------------------------------------|-----------------------------------------------------------------------------------------------------------------------|------------------------------------------------------|
 | P7.1 AST emission                    | comma spacing, literal/preprocessor preservation, declarator and method-emission fixtures, unsupported-node rejection | IN PROGRESS; grammar-context coverage remains        |
-| P7.3 declaration handles             | declaration-kind matching, mapped-origin overlap, generated aggregate members, source-revision boundary tests         | DONE-LOCAL for handles; member metadata remains open |
+| P7.3 declaration handles             | declaration-kind matching, mapped-origin overlap, generated aggregate members, semantic type/ownership metadata, source-revision boundary tests | DONE-LOCAL; stable revision identity remains open |
 | P8.8 compiler-aligned LSP resolution | receiver forms, dereference/unary arguments, casts, literal suffixes, ambiguity diagnostics, generated aliases        | IN PROGRESS; promotions/conversions/writes remain    |
 | P8.9 client recovery                 | VS Code/Vim restart and stale-revision fixtures                                                                       | IN PROGRESS; IntelliJ interactive evidence remains   |
 
@@ -89,7 +89,7 @@ P7.1 is complete for this bounded matrix; cross-host compiler evidence and defau
 frontend promotion remain P7.6/P7.7 work rather than new P7.1 cases.
 | P7.3.a | P7.3   | Expose generated aliases, tags, functions, variables, and methods                                             | DONE-LOCAL  | Generic and method handle fixtures                                                   |
 | P7.3.b | P7.3   | Expose synthesized aggregate member handles with mapped spans                                                 | DONE-LOCAL  | Generic struct member fixture                                                        |
-| P7.3.c | P7.3   | Attach normalized member type, declarator, access, and ownership metadata                                     | OPEN        | Semantic-index fixture consumed without parser-node coupling                         |
+| P7.3.c | P7.3   | Attach normalized member type, declarator, access, and ownership metadata                                     | DONE-LOCAL  | Generic member handle exposes semantic symbol, `int` type, and advisory `BORROWED` ownership |
 | P7.3.d | P7.3   | Publish stable handle identity across comptime revisions and invalidation                                     | OPEN        | Multi-pass revision/invalidation fixture                                             |
 | P7.7.a | P7.7   | Run Tree-sitter versus legacy output comparison on the bounded corpus                                         | OPEN        | Differential report with categorized mismatches                                      |
 | P7.7.b | P7.7   | Define default-backend feature flag and rollback behavior                                                     | OPEN        | CLI/compiler configuration test                                                      |
@@ -123,7 +123,7 @@ exist.
 |------|---------------------------------------------------------------|------------|-------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | P7.1 | Emit normalized AST terminals with deterministic C formatting | P2, P6     | DONE-LOCAL        | The bounded formatting matrix passes: token boundaries, preprocessing, operators, punctuation, declarators, attributes, comments, nested expressions, control flow, fail-closed rejection, mapping determinism, and repository acceptance. Cross-host evidence and promotion remain P7.6/P7.7 work. |
 | P7.2 | Preserve mapped origins through AST emission and diagnostics  | P4, P6     | DONE-LOCAL        | `#line`, mapped diagnostics, token origins, and pre-hygiene source revisions pass local and supported-host parser CI gates.                                                                                                           |
-| P7.3 | Publish semantic declaration handles                          | P4, P5     | DONE-LOCAL        | Generated aliases, tags, variables, functions, struct/union members, method declarations, source origins, and `TranscodedSource` parity are covered by parser fixtures. Add member type/ownership metadata next.                      |
+| P7.3 | Publish semantic declaration handles                          | P4, P5     | DONE-LOCAL        | Generated aliases, tags, variables, functions, struct/union members, method declarations, semantic member type/declarator/access/ownership metadata, source origins, and `TranscodedSource` parity are covered. Stable identity across later revisions remains open. |
 | P7.4 | Validate the hygiene boundary                                 | P7.1       | DONE              | Pre-hygiene C-plus is reparsed; post-hygiene `CPLUS_*` macros are validated as host C. The boundary is documented and tested.                                                                                                         |
 | P7.5 | Prove deterministic output and performance                    | P7.1       | DONE-LOCAL        | Repeated output/origin equality, incremental Tree-sitter reuse, representative benchmarks, and tagged host benchmark jobs pass. A stable production budget remains a promotion input.                                                 |
 | P7.6 | Run repository acceptance through the AST path                | P7.1–P7.5  | DONE-LOCAL        | 104/104 grammar fixtures, repository C-plus syntax corpus, stdlib fixtures, and finite non-Raylib examples pass locally. Raylib runtime/linking remains host-dependent.                                                               |
@@ -161,6 +161,9 @@ atomic slices, each with focused and aggregate tests:
 9. Synthesized declarations now match by kind and full mapped-origin overlap; generated aggregate member handles are exposed.
 10. The AST emitter now has combined regression coverage for comments, packed attributes,
     function-pointer declarators, nested member expressions, reparsing, and C execution.
+11. Synthesized aggregate members now expose parser-independent semantic handles with owner,
+    normalized symbol/type/declarator metadata, advisory ownership, mapped generated text,
+    and original source spans; the generic-struct fixture verifies `borrowed` propagation.
 
 The latest aggregate result is green with 104/104 grammar parses. The current worktree
 also contains unrelated Raylib example changes; they are intentionally not part of this
@@ -170,8 +173,8 @@ frontend ledger or its commits.
 
 1. **P7.1:** replace the remaining AST-emitter spacing heuristics with grammar-context
    formatting tests for declarators, attributes, comments, and nested expressions.
-2. **P7.3:** add member type/ownership metadata without coupling editor consumers to
-   parser-generator nodes.
+2. **P7.3:** add stable member-handle identity across comptime revisions and invalidation;
+   member type/ownership metadata is now implemented without parser-generator coupling.
 3. **P8.8:** extend semantic resolution only where the compiler contract has an explicit
    bounded rule; unsupported conversions must remain conservative and mapped.
 4. **P8.5/P8.9:** add the real IntelliJ interactive startup/restart evidence.

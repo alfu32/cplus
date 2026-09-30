@@ -183,6 +183,53 @@ fun CPlusAst.synthesizedMemberNodes(synthesizedDeclarations: List<CPlusAstNode>)
         .distinctBy { it.span.startOffset to it.span.endOffset }
 
 /**
+ * Publish parser-independent semantic handles for synthesized aggregate members.
+ *
+ * The semantic index is rebuilt from this successful AST revision and matched to member
+ * nodes by owner and span. Consumers receive normalized symbols and mapped text, rather
+ * than retaining Tree-sitter nodes or depending on parser field names.
+ */
+fun CPlusAst.synthesizedMemberHandles(
+    synthesizedDeclarations: List<CPlusAstNode>,
+    mappedSource: MappedText
+): List<CPlusSynthesizedMember> {
+    require(source.text == mappedSource.text) { "AST and mapped source must contain the same snapshot text" }
+    val memberNodes = synthesizedMemberNodes(synthesizedDeclarations)
+    if (memberNodes.isEmpty()) return emptyList()
+    val semanticSymbols = CPlusSemanticAnalyzer().analyze(this).symbols
+    val aggregateNodes = synthesizedDeclarations.filter {
+        it.kind in setOf(CPlusAstKind.STRUCT_DECLARATION, CPlusAstKind.UNION_DECLARATION)
+    }
+    val aggregateNames = aggregateNodes.associateWith { aggregate ->
+        semanticSymbols.firstOrNull { symbol ->
+            symbol.kind == CPlusSymbolKind.STRUCT && spansOverlap(symbol.span, aggregate.span)
+        }?.name ?: aggregate.descendantsAndSelf()
+            .firstOrNull { it.syntaxKind == "type_identifier" }
+            ?.let { mappedSource.text.substring(it.span.startOffset, it.span.endOffset) }
+    }
+
+    return memberNodes.mapNotNull { node ->
+        val aggregate = aggregateNodes.firstOrNull {
+            node.span.startOffset >= it.span.startOffset && node.span.endOffset <= it.span.endOffset
+        } ?: return@mapNotNull null
+        val owner = aggregateNames[aggregate] ?: return@mapNotNull null
+        val symbol = semanticSymbols.firstOrNull {
+            it.ownerType == owner &&
+                it.kind in setOf(CPlusSymbolKind.FIELD, CPlusSymbolKind.INSTANCE_METHOD, CPlusSymbolKind.STATIC_METHOD) &&
+                spansOverlap(it.span, node.span)
+        } ?: return@mapNotNull null
+        CPlusSynthesizedMember(
+            ownerType = owner,
+            nodeKind = node.kind,
+            symbol = symbol,
+            generatedSpan = node.span,
+            sourceSpan = mappedSource.toOriginalSpan(node.span),
+            mappedText = mappedSource.slice(node.span.startOffset, node.span.endOffset)
+        )
+    }.distinctBy { it.ownerType to (it.symbol.name to it.generatedSpan.startOffset) }
+}
+
+/**
  * Generated identifiers may combine copied template text with generated text.  Looking only at
  * the first character's origin loses declarations such as `box__int_box_t`, whose `box` prefix
  * comes from the generator and whose specialization suffix comes from the invocation.  Any
@@ -203,6 +250,9 @@ private fun originOverlaps(
     }
     return false
 }
+
+private fun spansOverlap(left: SourceSpan, right: SourceSpan): Boolean =
+    left.startOffset < right.endOffset && right.startOffset < left.endOffset
 
 private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =
     sequenceOf(this) + children.asSequence().flatMap { it.descendantsAndSelf() }

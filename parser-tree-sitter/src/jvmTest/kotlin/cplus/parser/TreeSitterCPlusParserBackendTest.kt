@@ -9472,7 +9472,7 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
     fun prototypeMaterializesGenericStructTypeAndSpecializationAlias() {
         val text = """
             comptime type @box(type T) {
-                return @code { struct box { T value; }; };
+                return @code { struct box { borrowed T value; }; };
             }
             comptime typedef box(int) int_box_t;
             int main(void) {
@@ -9517,6 +9517,22 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
         assertTrue(memberName.span.startOffset >= synthesizedStruct.span.startOffset)
         assertTrue(memberName.span.endOffset <= synthesizedStruct.span.endOffset)
         assertTrue(synthesizedSource.text.substring(synthesizedStruct.span.startOffset, synthesizedStruct.span.endOffset).contains("value"))
+        val memberHandle = result.synthesizedMemberHandles.singleOrNull()
+            ?: error("synthesized member semantic handle is missing: ${result.synthesizedMemberHandles}")
+        assertEquals("box__int_box_t", memberHandle.ownerType)
+        assertEquals(CPlusAstKind.FIELD_DECLARATION, memberHandle.nodeKind)
+        assertEquals(CPlusSymbolKind.FIELD, memberHandle.symbol.kind)
+        assertEquals("value", memberHandle.symbol.name)
+        assertEquals("int", memberHandle.symbol.typeName)
+        assertEquals(setOf("borrowed"), memberHandle.symbol.annotations)
+        assertEquals(AllocationOwnership.BORROWED, memberHandle.ownership)
+        assertEquals(name, memberHandle.sourceSpan.file)
+        assertEquals(text.indexOf("borrowed T value"), memberHandle.sourceSpan.startOffset)
+        assertTrue(memberHandle.mappedText.text.contains("int value;"), memberHandle.mappedText.text)
+        assertEquals(
+            result.synthesizedMemberHandles.map { it.symbol.name },
+            generated.synthesizedMemberHandles.map { it.symbol.name }
+        )
         val mappedText = result.cSource ?: error("successful comptime type materialization must retain mapped source")
         val structureOffset = mappedText.text.indexOf("struct box__int_box_t")
         assertEquals(text.indexOf("struct box"), mappedText.originAt(structureOffset)?.offset)

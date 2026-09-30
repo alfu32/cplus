@@ -5,6 +5,7 @@ import cplus.CPlusAstLoweringPipeline
 import cplus.CPlusAstLoweringStep
 import cplus.CPlusAstCEmitter
 import cplus.synthesizedDeclarationNodes
+import cplus.synthesizedMemberHandles
 import cplus.synthesizedMemberNodes
 import cplus.CPlusComptimeIndexer
 import cplus.CPlusImportPaths
@@ -54,6 +55,8 @@ data class TreeSitterPrototypeResult(
     val synthesizedNodes: List<cplus.CPlusAstNode> = emptyList(),
     /** Normalized aggregate-member nodes owned by [synthesizedNodes]. */
     val synthesizedMemberNodes: List<cplus.CPlusAstNode> = emptyList(),
+    /** Parser-independent semantic handles for synthesized aggregate members. */
+    val synthesizedMemberHandles: List<cplus.CPlusSynthesizedMember> = emptyList(),
     /** Mapped source revision whose offsets are used by [synthesizedNodes]. */
     val synthesizedSource: MappedText? = null
 ) {
@@ -830,6 +833,10 @@ class TreeSitterCPlusPrototypeTranspiler(
                 runtimeLowering.synthesizedNodes
             ).distinctBy { it.span.startOffset to it.span.endOffset }
         val synthesizedMemberNodes = ast.synthesizedMemberNodes(synthesizedNodes)
+        val synthesizedMemberHandles = ast.synthesizedMemberHandles(
+            synthesizedNodes,
+            mapped
+        )
         // Validate the emitter's C-plus-shaped intermediate with the C-plus
         // grammar; the hygienic macro names are applied only to final C output.
         val emittedParse = backend.parse(snapshotFor(generatedC.text))
@@ -856,7 +863,8 @@ class TreeSitterCPlusPrototypeTranspiler(
                 synthesizedDeclarations = synthesizedDeclarations,
                 synthesizedNodes = synthesizedNodes,
                 synthesizedMemberNodes = synthesizedMemberNodes,
-                synthesizedSource = runtimeLowering.source
+                synthesizedMemberHandles = synthesizedMemberHandles,
+                synthesizedSource = mapped
             )
         return TreeSitterPrototypeResult(
             hygienicGeneratedC,
@@ -878,7 +886,8 @@ class TreeSitterCPlusPrototypeTranspiler(
             synthesizedDeclarations,
             synthesizedNodes,
             synthesizedMemberNodes,
-            runtimeLowering.source
+            synthesizedMemberHandles,
+            mapped
         )
     }
 
