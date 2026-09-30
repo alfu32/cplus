@@ -43,9 +43,9 @@ Points are relative sizing units, not engineer-days. A task closes only with its
 | CF-19 | retirement | Retire method/receiver and `defer` textual lowerers | CF-07, CF-14, CF-17, CF-18 | RETAINED-FALLBACK | 4 | Parity, independent selection, fail-closed rollback, and mapped-origin gates are complete; deletion is deferred to Phase 9 so the legacy path remains available through phases 1–8 |
 | CF-20 | retirement | Retire `try`/`catch`, test extraction, and allocation textual lowerers | CF-14, CF-17, CF-18 | RETAINED-FALLBACK | 6 | Checked-call/test/allocation parity and rollback gates are complete for the bounded corpus; deletion is deferred to Phase 9 so the legacy path remains available through phases 1–8 |
 | CF-21 | promotion | Run stdlib/examples compile and test acceptance | CF-10, CF-19, CF-20 | DONE-LOCAL | 4 | The AST corpus transcode gate, all standard-library AST fixtures, and the finite non-Raylib example execution gate pass locally; Raylib runtime/link execution remains explicitly host-dependent and is covered by compile/lowering fixtures |
-| CF-22 | promotion | Decide promotion, rollback, and legacy removal | CF-21 | OPEN | 2 | Recorded decision, performance/package evidence, removal or retained fallback rationale |
+| CF-22 | promotion | Decide promotion, rollback, and legacy removal | CF-21 | DONE-LOCAL | 2 | AST-first `AUTO` is promoted as the default; legacy remains selectable as an explicit and automatic compatibility fallback, with removal deferred to the two-release soak |
 
-Total: **22 tasks / 86 points**. `CF-01` through `CF-18` are complete for their bounded contracts; **22 points remain**, of which 6 are external-host evidence and the remainder are future retirement/promotion decisions. Points are intentionally not converted to hours until three completed batches provide an observed rate.
+Total: **22 tasks / 86 points**. `CF-01` through `CF-22` are complete for their bounded contracts; **20 points remain in the broader migration portfolio**, primarily the retained textual-lowerer retirement and interactive editor evidence tracked by the Phase 7–8 ledgers. Points are intentionally not converted to hours until three completed batches provide an observed rate.
 
 ## Execution phases
 
@@ -60,8 +60,9 @@ Total: **22 tasks / 86 points**. `CF-01` through `CF-18` are complete for their 
 | C6 — retirement | CF-19..CF-20 | Each textual lowerer has its own parity and rollback decision | none |
 | C7 — promotion | CF-21..CF-22 | Repository acceptance and promotion decision are recorded | none |
 
-The C4 finite corpus gate and the six-host host-compiler gate are complete. The next
-local batch is **C6**: review the independent textual-lowerer retirement decisions;
+The C4 finite corpus gate, the six-host host-compiler gate, and the bounded C7
+promotion decision are complete. The next local batch is **C6/C8**: close the
+independent textual-lowerer retirement and interactive editor acceptance decisions;
 cross-target ABI/link evidence remains a separate unsupported/externally owned
 boundary and must not be inferred from host-matrix success.
 
@@ -74,6 +75,26 @@ The subproject is complete when:
 3. each textual lowerer has an independent rollback-safe decision;
 4. the stdlib and examples acceptance run is green, excluding only documented intentionally failing fixtures;
 5. the promotion decision and any retained legacy fallback are documented.
+
+## Phase 1–8 promotion decision
+
+Recorded 2026-09-30 after the AST corpus, differential, compiler, packaging, and
+aggregate test gates passed:
+
+- The CLI uses Tree-sitter/AST lowering first through `AUTO` for `transcode`,
+  `compile`, `run`, and `test`.
+- A lowering failure or host-compiler rejection retries the legacy frontend in
+  `AUTO`; `--frontend=legacy`, `CPLUS_FRONTEND`, and the JVM property remain
+  explicit rollback controls.
+- The legacy scanner and textual lowerers are retained through the phases-1–8
+  migration. They are not considered retired merely because the AST path is the
+  default.
+- Physical removal is deferred to Phase 9 and requires two stable releases,
+  mismatch reporting, rollback instructions, and a clean acceptance audit.
+
+This is a promotion decision, not a claim that the complete C language or every
+interactive editor feature has been implemented. The remaining LSP and release
+soak gates stay visible in their own ledgers.
 
 ## Follow-up log
 
@@ -165,6 +186,7 @@ Each entry records the task ID, exact evidence, result, and next dependency. Imp
 | 2026-09-30 | CF-19 / Phase 7 | `astCEmitterPreservesUnevaluatedAndGenericExpressionContexts` covers `sizeof`, `_Alignof`, `offsetof`, `_Generic`, compound literals, designated initializers, reparsing, and host execution. The emitter now inserts canonical spacing after commas without adding whitespace before punctuation; focused and aggregate tests pass with 104/104 grammar parses | P7.1 advances for unevaluated/generic expression contexts; broader grammar-aware formatting, canonical emitter promotion, and textual-lowerer retirement remain open |
 | 2026-09-30 | LSP-5.6c.12 / Phase 8 | Bounded overload inference now recognizes common C integer/floating literal suffixes. `resolvesOverloadsForCIntegerAndFloatingLiteralSuffixes` selects `long` for `1L` and `float` for `1.0f`; focused and aggregate offline Gradle gates pass with 104/104 grammar parses | The LSP preserves this finite scalar-shape slice; complete C literal typing and conversion legality remain compiler-owned, while canonical emitter promotion and textual-lowerer retirement remain open |
 | 2026-09-30 | CF-19 / Phase 7 | `TreeSitterPrototypeResult` and `TranscodedSource` now expose normalized aggregate-member handles derived from synthesized struct/union nodes. The generic-struct fixture verifies a field node belongs to the mapped pre-hygiene synthesized source revision; focused and aggregate offline Gradle gates pass with 104/104 grammar parses | The bounded aggregate-member identity slice is closed; member type/ownership metadata, grammar-aware formatting, canonical emitter promotion, and textual-lowerer retirement remain open |
+| 2026-09-30 | CF-22 / Phase 7–8 | The AST-first CLI default, explicit legacy rollback controls, frozen differential corpus, repository transcode soak, packaged LSP/editor gates, and aggregate 104/104 grammar gate provide the local promotion evidence. The decision retains the legacy scanner/lowerers through phases 1–8 and defers physical removal to Phase 9 after two stable releases | CF-22 is DONE-LOCAL; P7.7, P8.5, P8.9, and P8.10 remain independently tracked because promotion does not imply complete editor parity or legacy retirement |
 
 ## Update protocol
 
