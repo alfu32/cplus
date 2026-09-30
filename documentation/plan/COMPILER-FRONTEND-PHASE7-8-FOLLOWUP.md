@@ -236,6 +236,11 @@ passes. A subsequent isolated GUI smoke attempt was blocked by the host X11/disp
 and IntelliJ profile lock, not by a plugin assertion; repeat it when the smoke
 profile is free.
 
+The follow-up console lifecycle correction adds the newly created IntelliJ content
+before selecting it, eliminating a first-run selection race. The same focused
+`intellij-cplus` test and `buildPlugin` command passes after this correction; the
+worktree remains clean after commit `fe43c64`.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
