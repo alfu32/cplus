@@ -329,6 +329,12 @@ class TranspilerTest {
             assertThrows(IllegalArgumentException::class.java) {
                 CPlusCli().run(listOf("transcode", source.toString(), "--target=linux-x86_64"))
             }
+            assertThrows(IllegalArgumentException::class.java) {
+                CPlusCli().run(listOf("lsp", "--unknown"))
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                CPlusCli().run(listOf("lsp", "--trace"))
+            }
         } finally {
             Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }

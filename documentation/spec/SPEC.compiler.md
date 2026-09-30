@@ -10,6 +10,7 @@ The executable is named `cplus` and accepts these subcommands:
 cplus [global options] help
 cplus [global options] parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
 cplus [global options] parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
+cplus [global options] lsp [--trace path]
 cplus [global options] graph filename.cp [-o imports.json]
 cplus [global options] transcode filename.cp [-o some_file_name.c]
 cplus [global options] compile filename.cp [-o executable]
@@ -24,9 +25,11 @@ as `--target=TRIPLE`), `-v0`, `-v1`, `-v2`, and compiler/linker flags such as
 `-D`, `-I`, `-L`, `-l`, `-framework`, and `--sysroot`. The output selector `-o`
 remains command-specific. `parse` retains its parser-specific `--backend
 legacy|tree-sitter` option after `parse`; it may also be supplied before the
-subcommand for compatibility. `lsp` reserves its options after the `lsp`
-subcommand. Other global options after a subcommand are rejected instead of
-being forwarded accidentally to the host compiler.
+subcommand for compatibility. `lsp` owns its server options after the `lsp`
+subcommand; currently `--trace path` (or `--trace=path`) writes an opt-in
+method-level protocol trace to a file without contaminating JSON-RPC stdout.
+Other global options after a subcommand are rejected instead of being
+forwarded accidentally to the host compiler.
 
 `parse` emits the recovered normalized syntax tree and diagnostics as JSON using schema `cplus.parse.v1`. All offsets are UTF-16 code units. Its default backend is `tree-sitter`; `--backend legacy` selects the legacy scanner adapter, whose ordinary C/C-plus regions are explicitly opaque. This option is for parser comparison and does not change the production transpilation backend. Its default output is stdout; `-o` writes the JSON to a file. Syntax errors still produce the partial tree and diagnostic list, then return status `1`; command or file errors return `2`.
 

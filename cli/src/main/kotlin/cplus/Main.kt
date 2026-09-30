@@ -72,7 +72,7 @@ class CPlusCli(
 
         return when (val command = commandArguments.first()) {
             "parse" -> parse(commandArguments.drop(1))
-            "lsp" -> lsp()
+            "lsp" -> lsp(commandArguments.drop(1))
             "graph" -> importGraph(commandArguments.drop(1))
             "transcode" -> transcode(commandArguments.drop(1))
             "compile" -> compile(commandArguments.drop(1), runAfter = false)
@@ -172,8 +172,27 @@ class CPlusCli(
         "--sysroot", "-sysroot", "--target", "-target", "-arch", "-framework", "-Xlinker", "-Xclang"
     )
 
-    private fun lsp(): Int {
-        CPlusLspServer().serve()
+    private fun lsp(arguments: List<String>): Int {
+        var tracePath: Path? = null
+        var index = 0
+        while (index < arguments.size) {
+            when (val argument = arguments[index]) {
+                "--trace" -> {
+                    if (index + 1 >= arguments.size) throw IllegalArgumentException("lsp --trace requires a file path")
+                    tracePath = Path(arguments[index + 1]).toAbsolutePath().normalize()
+                    index += 2
+                }
+                else -> if (argument.startsWith("--trace=")) {
+                    val value = argument.substringAfter('=')
+                    if (value.isBlank()) throw IllegalArgumentException("lsp --trace requires a file path")
+                    tracePath = Path(value).toAbsolutePath().normalize()
+                    index++
+                } else {
+                    throw IllegalArgumentException("unknown lsp option '$argument'; expected --trace PATH")
+                }
+            }
+        }
+        CPlusLspServer(tracePath = tracePath).serve()
         return 0
     }
 
@@ -877,7 +896,7 @@ usage:
   cplus [global options] version
   cplus [global options] parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
   cplus [global options] parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
-  cplus [global options] lsp
+  cplus [global options] lsp [--trace path]
   cplus [global options] graph filename.cp [-o imports.json]
   cplus [global options] transcode filename.cp [-o some_file_name.c]
   cplus [global options] compile filename.cp [-o executable]
