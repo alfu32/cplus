@@ -1112,6 +1112,40 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesGeneratedComptimeMethodsThroughAReceiverAlias() {
+        val uri = "file:///generated-method-receiver.cp"
+        val source = "comptime string @typename(type T) { return T.name; }\n" +
+            "comptime type @box(type T) {\n" +
+            "    return @code { struct box { T value; pub int get(borrowed *self) { return self->value; } }; };\n" +
+            "}\n" +
+            "comptime typedef box(int) int_box_t;\n" +
+            "int main(void) { int_box_t value; return value.; }\n" +
+            "int use(int_box_t value) { return value.get(); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val line = source.lines().indexOfLast { "return value.;" in it }
+        val definitionLine = source.lines().indexOfLast { "value.get()" in it }
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$line,\"character\":${source.lines()[line].length - 1}}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$definitionLine,\"character\":${source.lines()[definitionLine].indexOf("get")}}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":{\"isIncomplete\":false"), response)
+        assertTrue(response.contains("\"label\":\"get\""), response)
+        assertTrue(response.contains("\"label\":\"value\""), response)
+        assertTrue(response.contains("\"id\":3,\"result\":[{\"uri\":\"$uri\""), response)
+    }
+
+    @Test
     fun ignoresStaleChangesAndClearsDiagnosticsOnClose() {
         val uri = "file:///stale.cp"
         val messages = listOf(
