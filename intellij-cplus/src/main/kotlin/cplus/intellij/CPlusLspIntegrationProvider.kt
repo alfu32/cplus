@@ -26,13 +26,24 @@ private class CPlusLspServerDescriptor(project: Project) : ProjectWideLspClientD
 
     override fun createCommandLine(): GeneralCommandLine {
         val configured = CPlusSettings.getInstance().current().languageServerCommand.trim()
-        return GeneralCommandLine(CPlusLspCommand.arguments(
+        val commandLine = GeneralCommandLine(CPlusLspCommand.arguments(
             CPlusLspCommand.discover(configured, project.basePath)
         ))
+        CPlusLspCommand.ideJavaExecutable()?.let { commandLine.withEnvironment("CPLUS_JAVA", it) }
+        return commandLine
     }
 }
 
 internal object CPlusLspCommand {
+    fun ideJavaExecutable(
+        javaHome: String = System.getProperty("java.home").orEmpty(),
+        isWindows: Boolean = System.getProperty("os.name").orEmpty().contains("win", ignoreCase = true),
+        exists: (File) -> Boolean = { it.isFile && it.canExecute() }
+    ): String? {
+        val executable = if (isWindows) "java.exe" else "java"
+        return File(File(javaHome, "bin"), executable).takeIf(exists)?.path
+    }
+
     fun discover(configured: String, projectBasePath: String?, isWindows: Boolean = System.getProperty("os.name")
         .orEmpty().contains("win", ignoreCase = true), exists: (String) -> Boolean = { File(it).isFile }): String {
         if (configured.isNotBlank()) return configured.trim()

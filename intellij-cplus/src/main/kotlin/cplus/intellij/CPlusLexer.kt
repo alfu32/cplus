@@ -85,6 +85,7 @@ class CPlusLexer : LexerBase() {
                     word in comptimeProperties && previousNonWhitespace(position) == '.' -> CPlusTokenTypes.COMPTIME_PROPERTY
                     word == "flags" && previousHorizontalWord(position) == "comptime" -> CPlusTokenTypes.COMPTIME_KEYWORD
                     word in comptimeKeywords -> CPlusTokenTypes.COMPTIME_KEYWORD
+                    isTypedefAlias(position, tokenEnd) -> CPlusTokenTypes.TYPE
                     word in cTypes -> CPlusTokenTypes.TYPE
                     word in keywords -> CPlusTokenTypes.KEYWORD
                     word in annotations -> CPlusTokenTypes.ANNOTATION
@@ -131,6 +132,37 @@ class CPlusLexer : LexerBase() {
         return buffer.getOrNull(cursor)
     }
 
+    /** Highlights the alias at the end of a typedef declaration as a type. */
+    private fun isTypedefAlias(start: Int, end: Int): Boolean {
+        val before = buffer.subSequence(0, start).toString()
+        val typedef = Regex("\\btypedef\\b").findAll(before).lastOrNull()?.range?.first ?: return false
+        if (before.substring(typedef + "typedef".length).contains(';')) return false
+
+        var braces = 0
+        var parentheses = 0
+        var brackets = 0
+        var statementEnd = -1
+        for (index in typedef until bufferEnd) {
+            when (buffer[index]) {
+                '{' -> braces++
+                '}' -> if (braces > 0) braces--
+                '(' -> parentheses++
+                ')' -> if (parentheses > 0) parentheses--
+                '[' -> brackets++
+                ']' -> if (brackets > 0) brackets--
+                ';' -> if (braces == 0 && parentheses == 0 && brackets == 0) {
+                    statementEnd = index
+                    break
+                }
+            }
+        }
+        if (statementEnd < 0) return false
+        val statement = buffer.subSequence(typedef, statementEnd).toString()
+        val last = Regex("[A-Za-z_][A-Za-z0-9_]*").findAll(statement).lastOrNull() ?: return false
+        val aliasStart = typedef + last.range.first
+        return aliasStart == start && typedef + last.range.last + 1 == end
+    }
+
     private fun isIdentifierPart(character: Char): Boolean = character.isLetterOrDigit() || character == '_'
 
     companion object {
@@ -153,9 +185,8 @@ class CPlusLexer : LexerBase() {
             "char16_t", "char32_t"
         )
         private val cTypes = setOf(
-            "char", "const", "double", "enum", "extern", "float", "inline", "int", "long",
-            "register", "restrict", "short", "signed", "static", "struct", "typedef", "union",
-            "unsigned", "void", "volatile", "_Bool", "bool", "size_t", "ptrdiff_t", "wchar_t",
+            "char", "double", "enum", "float", "int", "long", "short", "signed", "union",
+            "unsigned", "void", "_Bool", "bool", "size_t", "ptrdiff_t", "wchar_t",
             "char16_t", "char32_t"
         )
         private val annotations = setOf(

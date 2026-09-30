@@ -12,6 +12,8 @@ Configure **Settings → Tools → C-plus** with the compiler command, runner co
 
 When the parser command is not configured, the LSP launcher is discovered in this order: an explicitly configured command, project-local `.cplus/cpc` (or its platform launcher), project `c-plus-bin/cpc`, the project root, `$CPLUS_HOME`, user-local `~/.local/bin`, user-local `~/.local/share/c-plus`, and finally `cpc` on `PATH`. This makes the plugin work when IntelliJ is started from Toolbox and does not inherit the shell's `PATH`.
 
+The discovered launcher receives IntelliJ's own Java runtime through `CPLUS_JAVA`, so Toolbox-launched IDEA instances do not depend on `java` being present in their inherited `PATH`. The bundled launchers also accept `CPLUS_JAVA`, `JAVA_HOME`, `IDEA_JDK`, and `JDK_HOME` in that order before falling back to `java` on `PATH`.
+
 With the parser command configured, the Structure tool window shows structs, fields, methods, and top-level functions from the cached `cplus.parse.v1` tree. Entries navigate to their source spans. The view updates when a new parser snapshot is accepted; without an exact-current parser result, the structural outline is empty rather than guessed from incomplete PSI. Test gutter actions also use AST fixture names and offsets from the exact cached snapshot, falling back to the legacy fixture scanner only when no matching parser result is available. **Show C-plus Import Graph** in the editor context menu runs the configured graph command (default `cplus graph`) and offers resolved dependency edges; selecting an edge opens the imported file. Save the editor before invoking it because graph resolution uses the on-disk source.
 
 Build the deployable plugin with:

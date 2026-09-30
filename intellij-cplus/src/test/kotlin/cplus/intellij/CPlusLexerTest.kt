@@ -57,6 +57,17 @@ class CPlusLexerTest {
         assertToken(lex("int main(void) { return helper(); }"), "helper", CPlusTokenTypes.FUNCTION)
     }
 
+    @Test
+    fun `highlights typedef keyword and aliases as types`() {
+        val tokens = lex("typedef int error_code; typedef struct tagged_t { int value; } alias_t; static int f;")
+
+        assertToken(tokens, "typedef", CPlusTokenTypes.KEYWORD)
+        assertToken(tokens, "error_code", CPlusTokenTypes.TYPE)
+        assertToken(tokens, "tagged_t", CPlusTokenTypes.TYPE)
+        assertToken(tokens, "alias_t", CPlusTokenTypes.TYPE)
+        assertToken(tokens, "static", CPlusTokenTypes.KEYWORD)
+    }
+
     private fun assertToken(tokens: List<Pair<String, com.intellij.psi.tree.IElementType>>, text: String, expected: com.intellij.psi.tree.IElementType) {
         assertTrue(tokens.any { it.first == text && it.second == expected }, "token '$text' should use $expected")
     }

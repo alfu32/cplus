@@ -61,6 +61,14 @@ class CPlusParserExternalAnnotatorTest {
     }
 
     @Test
+    fun findsTheJavaRuntimeBundledWithTheIde() {
+        assertEquals(
+            "/opt/idea-jbr/bin/java",
+            CPlusLspCommand.ideJavaExecutable("/opt/idea-jbr", isWindows = false) { it.path == "/opt/idea-jbr/bin/java" }
+        )
+    }
+
+    @Test
     fun decodesVersionedParserDiagnosticsAndUtf16Offsets() {
         val diagnostics = CPlusParserJsonDiagnostics.decode(
             """{"schema":"cplus.parse.v1","diagnostics":[{"code":"TS_ERROR_NODE","message":"bad syntax","severity":"error","span":{"startOffset":4,"endOffset":7,"startLine":1,"startColumn":5,"endLine":1,"endColumn":8}}]}"""
