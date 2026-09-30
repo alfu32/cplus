@@ -831,12 +831,33 @@ class CPlusLspServer(
         if (actual.callableArity != null) return 35
         val expectedPointers = expected.pointerDepth + expected.arrayDepth
         val actualPointers = actual.pointerDepth + actual.arrayDepth
+        if (expectedPointers == 0 && actualPointers == 0) {
+            val expectedNumeric = numericRank(expectedBase)
+            val actualNumeric = numericRank(actualBase)
+            if (expectedNumeric != null && actualNumeric != null) {
+                // Prefer the closest standard scalar conversion when no exact
+                // overload exists. This is deliberately only a ranking hint;
+                // the selected C compiler remains authoritative for legality.
+                return 5 + kotlin.math.abs(expectedNumeric - actualNumeric)
+            }
+        }
         return when {
             expectedBase == actualBase && expectedPointers == actualPointers -> 0
             expectedBase == actualBase -> 10
             expectedPointers == actualPointers -> 20
             else -> 40
         }
+    }
+
+    private fun numericRank(typeName: String): Int? = when (typeName) {
+        "bool" -> 0
+        "char", "signed", "unsigned" -> 1
+        "short" -> 2
+        "int" -> 3
+        "long" -> 4
+        "float" -> 5
+        "double" -> 6
+        else -> null
     }
 
     private fun typeShape(declaration: String): TypeShape? {
