@@ -11,9 +11,9 @@ cplus help
 cplus parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
 cplus parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
 cplus graph filename.cp [-o imports.json]
-cplus transcode filename.cp [-o some_file_name.c] [--frontend legacy|tree-sitter] [--target=TRIPLE]
-cplus compile filename.cp [-o executable] [--frontend legacy|tree-sitter] [passthrough tcc parameters]
-cplus run filename.cp [-o executable] [--frontend legacy|tree-sitter] [passthrough tcc parameters]
+cplus transcode filename.cp [-o some_file_name.c] [--frontend auto|legacy|tree-sitter] [--target=TRIPLE]
+cplus compile filename.cp [-o executable] [--frontend auto|legacy|tree-sitter] [passthrough tcc parameters]
+cplus run filename.cp [-o executable] [--frontend auto|legacy|tree-sitter] [passthrough tcc parameters]
 cplus test [run] [compiler flags] filename.cp [filename2.cp ...] [exact test name ...]
 cplus test transcode [-o test.c] filename.cp
 cplus test compile [-o executable] [compiler flags] filename.cp
@@ -61,7 +61,7 @@ The warning is advisory: it does not suppress source emission. An implicitly
 fatal failure, such as a crashed transcoder or unusable source pass, may still
 terminate generation.
 
-`test` uses the AST-first `AUTO` frontend by default for compatibility-aware migration. Tree-sitter runs first; lowering or host-compiler rejection retries the retained legacy frontend. Its `run`, `compile`, and `transcode` forms accept `--frontend=legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). Explicit Tree-sitter is strict; explicit legacy is the rollback path. The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate.
+`test` uses the AST-first `AUTO` frontend by default for compatibility-aware migration. Tree-sitter runs first; lowering or host-compiler rejection retries the retained legacy frontend. Its `run`, `compile`, and `transcode` forms accept `--frontend=auto|legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). Explicit `auto` is equivalent to the default; explicit Tree-sitter is strict; explicit legacy is the rollback path. At `-v2`, a fallback emits the requested mode, selected backend, failure stage, source location, and up to three host diagnostics. The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate.
 
 For migration tests, fixture extraction is an independent frontend concern. The
 internal `CPlusLegacyPassSelection.extractTests` and

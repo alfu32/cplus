@@ -295,6 +295,13 @@ The repository-wide gate was revalidated after the instrumentation:
 -Dorg.gradle.native=false --console=plain` passed in 4m24s, with 307 tests and
 104/104 Tree-sitter grammar parses successful.
 
+The frontend operator contract now accepts explicit `--frontend=auto` and
+reports automatic fallback details at `-v2`: requested mode, selected legacy
+backend, failure stage, source location, and a bounded host-diagnostic summary.
+The explicit legacy rollback and strict Tree-sitter modes are unchanged. The
+focused selector test passes; the first invocation encountered a transient
+Kotlin incremental classpath failure and the identical rerun passed.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their

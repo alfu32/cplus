@@ -129,6 +129,14 @@ class TranspilerTest {
             )
             assertEquals(0, legacyStatus)
             assertTrue("counter__get(&counter)" in Files.readString(legacyOutput))
+
+            val autoOutput = directory.resolve("counter.auto.c")
+            val autoErrors = StringBuilder()
+            val autoStatus = CPlusCli(output = StringBuilder(), errors = autoErrors).run(
+                listOf("transcode", source.toString(), "--frontend=auto", "-o", autoOutput.toString())
+            )
+            assertEquals(0, autoStatus, autoErrors.toString())
+            assertTrue("counter__get(&counter)" in Files.readString(autoOutput))
         } finally {
             Files.walk(directory).use { paths ->
                 paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)

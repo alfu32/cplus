@@ -247,7 +247,10 @@ class CPlusCli(
 
         var result = compiler.compileExecutable(transcoded, destination, options, activeLogger)
         if (result.exitCode != 0 && parsed.frontend == CompilationFrontend.AUTO) {
-            activeLogger.info("AST-first compilation failed for $sourcePath; retrying with legacy compatibility frontend")
+            activeLogger.info(
+                "frontend fallback: requested=auto selected=legacy reason=host compiler rejected AST output " +
+                    compilerFailureSummary(result)
+            )
             val legacy = transpiler.transpile(
                 source, sourcePath.toString(), activeLogger, importPaths,
                 CPlusTarget.osFromCompilerOptions(parsed.passthrough)
@@ -315,7 +318,10 @@ class CPlusCli(
                 activeLogger
             )
             if (result.exitCode != 0 && parsed.frontend == CompilationFrontend.AUTO) {
-                activeLogger.info("AST-first test compilation failed for ${compiled.path}; retrying with legacy compatibility frontend")
+                activeLogger.info(
+                    "frontend fallback: requested=auto selected=legacy reason=host compiler rejected AST test output " +
+                        compilerFailureSummary(result)
+                )
                 val legacy = transpiler.transpileTests(
                     readSource(compiled.path), compiled.path.toString(), activeLogger,
                     compiled.importPaths, CPlusTarget.osFromCompilerOptions(parsed.compilerFlags)
@@ -366,7 +372,10 @@ class CPlusCli(
                 val options = testCompilerOptions(compiled, parsed.compilerFlags + compiledSources.flatMap { it.transcoded.source.compilerOptions })
                 var result = compiler.compileExecutable(compiled.transcoded.source, executable, options, activeLogger)
                 if (result.exitCode != 0 && parsed.frontend == CompilationFrontend.AUTO) {
-                    activeLogger.info("AST-first test compilation failed for ${compiled.path}; retrying with legacy compatibility frontend")
+                    activeLogger.info(
+                        "frontend fallback: requested=auto selected=legacy reason=host compiler rejected AST test output " +
+                            compilerFailureSummary(result)
+                    )
                     val legacy = transpiler.transpileTests(
                         readSource(compiled.path), compiled.path.toString(), activeLogger,
                         compiled.importPaths, CPlusTarget.osFromCompilerOptions(parsed.compilerFlags)
@@ -446,7 +455,11 @@ class CPlusCli(
         CompilationFrontend.AUTO -> try {
             transpileWithFrontend(source, sourceName, logger, importPaths, targetOs, CompilationFrontend.TREE_SITTER)
         } catch (error: CPlusSyntaxException) {
-            logger.info("tree-sitter frontend could not lower $sourceName; using legacy compatibility frontend")
+            logger.info(
+                "frontend fallback: requested=auto selected=legacy reason=tree-sitter lowering failed " +
+                    "at ${error.sourceSpan?.startLine ?: "?"}:${error.sourceSpan?.startColumn ?: "?"}: " +
+                    (error.message ?: "unknown lowering failure")
+            )
             transpiler.transpile(source, sourceName, logger, importPaths, targetOs)
         }
         CompilationFrontend.TREE_SITTER -> logger.pass("tree-sitter-transpile") {
@@ -499,7 +512,11 @@ class CPlusCli(
         CompilationFrontend.AUTO -> try {
             transpileTestsWithFrontend(source, sourceName, logger, importPaths, targetOs, CompilationFrontend.TREE_SITTER)
         } catch (error: CPlusSyntaxException) {
-            logger.info("tree-sitter test frontend could not lower $sourceName; using legacy compatibility frontend")
+            logger.info(
+                "frontend fallback: requested=auto selected=legacy reason=tree-sitter test lowering failed " +
+                    "at ${error.sourceSpan?.startLine ?: "?"}:${error.sourceSpan?.startColumn ?: "?"}: " +
+                    (error.message ?: "unknown lowering failure")
+            )
             transpiler.transpileTests(source, sourceName, logger, importPaths, targetOs)
         }
         CompilationFrontend.TREE_SITTER -> logger.pass("tree-sitter-test-transpile") {
@@ -575,7 +592,7 @@ class CPlusCli(
             val value = arguments[index]
             when {
                 value == "--frontend" -> {
-                    if (index + 1 >= arguments.size) throw IllegalArgumentException("--frontend requires legacy or tree-sitter")
+                    if (index + 1 >= arguments.size) throw IllegalArgumentException("--frontend requires auto, legacy, or tree-sitter")
                     frontend = parseFrontend(arguments[index + 1])
                     index += 2
                 }
@@ -648,7 +665,7 @@ class CPlusCli(
                 }
                 "--frontend" -> {
                     if (index + 1 >= arguments.size) {
-                        throw IllegalArgumentException("--frontend requires 'legacy' or 'tree-sitter'")
+                        throw IllegalArgumentException("--frontend requires 'auto', 'legacy', or 'tree-sitter'")
                     }
                     frontend = parseFrontend(arguments[index + 1])
                     index += 2
@@ -671,10 +688,11 @@ class CPlusCli(
     }
 
     private fun parseFrontend(value: String): CompilationFrontend = when (value.trim().lowercase()) {
+        "auto", "default" -> CompilationFrontend.AUTO
         "legacy" -> CompilationFrontend.LEGACY
         "tree-sitter", "treesitter", "ast" -> CompilationFrontend.TREE_SITTER
         else -> throw IllegalArgumentException(
-            "unknown compilation frontend '$value'; expected 'legacy' or 'tree-sitter'"
+            "unknown compilation frontend '$value'; expected 'auto', 'legacy', or 'tree-sitter'"
         )
     }
 
@@ -682,6 +700,15 @@ class CPlusCli(
         System.getProperty("cplus.frontend")?.takeIf(String::isNotBlank)?.let(::parseFrontend)
             ?: System.getenv("CPLUS_FRONTEND")?.takeIf(String::isNotBlank)?.let(::parseFrontend)
             ?: CompilationFrontend.AUTO
+
+    private fun compilerFailureSummary(result: TccCompilationResult): String = result.diagnostics
+        .asSequence()
+        .filter { it.severity == DiagnosticSeverity.ERROR || it.severity == DiagnosticSeverity.UNKNOWN }
+        .map { it.message.trim() }
+        .filter(String::isNotEmpty)
+        .take(3)
+        .joinToString(" | ")
+        .ifBlank { "no diagnostic text" }
 
     private fun validateTranscodeTargetOptions(options: List<String>) {
         var index = 0
@@ -781,13 +808,13 @@ usage:
   cplus parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
   cplus lsp
   cplus graph filename.cp [-o imports.json]
-  cplus transcode filename.cp [-o some_file_name.c] [--frontend legacy|tree-sitter] [--target=TRIPLE]
-  cplus compile filename.cp [-o executable] [--frontend legacy|tree-sitter] [passthrough tcc parameters]
-  cplus run filename.cp [-o executable] [--frontend legacy|tree-sitter] [passthrough tcc parameters]
+  cplus transcode filename.cp [-o some_file_name.c] [--frontend auto|legacy|tree-sitter] [--target=TRIPLE]
+  cplus compile filename.cp [-o executable] [--frontend auto|legacy|tree-sitter] [passthrough tcc parameters]
+  cplus run filename.cp [-o executable] [--frontend auto|legacy|tree-sitter] [passthrough tcc parameters]
   cplus test filename.cp [filename2.cp ...] [test name ...]
-  cplus test [run] [--frontend legacy|tree-sitter] [compiler flags] filename.cp ... [test name ...]
-  cplus test transcode [-o output.c] [--frontend legacy|tree-sitter] filename.cp
-  cplus test compile [-o executable] [--frontend legacy|tree-sitter] [compiler flags] filename.cp
+  cplus test [run] [--frontend auto|legacy|tree-sitter] [compiler flags] filename.cp ... [test name ...]
+  cplus test transcode [-o output.c] [--frontend auto|legacy|tree-sitter] filename.cp
+  cplus test compile [-o executable] [--frontend auto|legacy|tree-sitter] [compiler flags] filename.cp
   cplus new project_name|.
 
 global options:
@@ -802,7 +829,7 @@ defaults:
   graph: resolves C-plus imports and emits cplus.imports.v1 dependency-order/edge JSON
   compile/run: filename.cp -> filename
   compiler: bundled TinyCC, then TCC, system tcc on PATH, then compiler from CC
-  frontend: AST-first by default with legacy compatibility fallback; use --frontend=legacy or --frontend=tree-sitter for an explicit backend
+  frontend: AST-first AUTO by default with legacy compatibility fallback; use --frontend=legacy for rollback or --frontend=tree-sitter for strict AST mode
   test: runs all @test blocks by default; run, compile, and transcode are explicit modes
   new: creates a C-plus project with cplus.toml and src/main.cp
 

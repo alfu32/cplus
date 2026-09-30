@@ -174,3 +174,10 @@ The declarator metadata also retains Microsoft pointer-layer modifiers (`__restr
 **Reflection-limit evidence:** a 257-by-257 reflected-field fixture exceeds the 65,536-item budget and produces one mapped limit diagnostic at the nested loop, with no partial source emission. This makes the resource boundary observable and deterministic without changing the legacy compiler's authority.
 
 **Editor-consumer evidence:** local validation passes for the VS Code smoke suite, the headless Vim parser/outline/import-graph suite, and IntelliJ plugin tests targeting IDEA 2026.2.2. The deployable editor-artifact task also packages the versioned VSIX, IntelliJ ZIP, and Vim archives. These consumers use the normalized parse/schema contract with editor-specific fallbacks and presentation; cross-host native parser loading and complete interactive UI parity remain separate acceptance gates.
+
+**Frontend operator contract:** `--frontend=auto` is an explicit spelling of the
+AST-first default. At `-v2`, automatic fallback reports the requested mode,
+selected legacy backend, failure stage, source location, and a bounded compiler
+diagnostic summary; ordinary `-v1` output and generated-program output are
+unchanged. This keeps the legacy rollback observable without making it the
+authoritative replacement.

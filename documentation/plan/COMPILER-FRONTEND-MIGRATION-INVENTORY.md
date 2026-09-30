@@ -17,6 +17,7 @@ The CLI now has the same explicit compilation switch for ordinary programs:
 cpc transcode source.cp --frontend=tree-sitter -o build/source.c
 cpc compile source.cp --frontend=tree-sitter -o build/source
 cpc run source.cp --frontend=legacy
+cpc transcode source.cp --frontend=auto -o build/source.c
 ```
 
 `AUTO` is the default for compilation commands: Tree-sitter is attempted first and
@@ -27,6 +28,11 @@ compilation boundary first. Inside the AST prototype, `TreeSitterPassSelection`
 also records the runtime pass IDs that actually ran and allows focused rollback
 tests to disable one pass; it does not yet pretend that a legacy implementation is
 available as a per-pass substitute.
+
+The explicit `--frontend=auto` spelling is equivalent to the default and is useful
+for scripts that want compatibility-aware selection to be visible in their command
+line. With `-v2`, fallback reports identify the requested mode, selected legacy
+backend, failure stage, source location, and a bounded compiler-diagnostic summary.
 
 Test extraction is a separate mode boundary: `TreeSitterPassSelection.extractTests`
 and `CPlusLegacyPassSelection.extractTests` independently control whether `@test`
