@@ -582,7 +582,10 @@ class CPlusLspServer(
             .distinct()
             .sorted()
         val items = names.joinToString(",", "[", "]") { name ->
-            "{\"label\":${Json.string(name)},\"kind\":${if (name in CPLUS_KEYWORDS) 14 else 6}}"
+            val symbol = symbols.firstOrNull { it.name == name }
+            val detail = symbol?.toolingDetail()
+            "{\"label\":${Json.string(name)},\"kind\":${if (name in CPLUS_KEYWORDS) 14 else 6}" +
+                (detail?.let { ",\"detail\":${Json.string(it)}" } ?: "") + "}"
         }
         return "{\"isIncomplete\":false,\"items\":$items}"
     }
@@ -590,7 +593,7 @@ class CPlusLspServer(
     private fun hover(request: Json.Object): String {
         val document = request.uri()?.let(readDocuments()::get) ?: return "null"
         val symbol = symbolAt(request) ?: return "null"
-        val value = "`${symbol.detail}`"
+        val value = "`${symbol.toolingDetail()}`"
         return "{\"contents\":{\"kind\":\"markdown\",\"value\":${Json.string(value)}},\"range\":${symbol.rangeJson()}}"
     }
 
@@ -1580,16 +1583,34 @@ private data class LspSymbol(
     val span: SourceSpan,
     val selection: SourceSpan,
     val scope: SourceSpan,
-    val ownerName: String? = null
+    val ownerName: String? = null,
+    val access: String? = null,
+    val annotations: Set<String> = emptySet()
 ) {
     fun rangeJson(): String = span.toRangeJson()
-    fun toJson(): String = "{\"name\":${Json.string(name)},\"kind\":$kind," +
-        "\"detail\":${Json.string(detail)},\"location\":{\"uri\":${Json.string(uri)},\"range\":${span.toRangeJson()}}}"
+    fun toolingDetail(): String = buildString {
+        append(detail)
+        access?.takeIf { it.isNotBlank() }?.let { append(" [access=").append(it).append(']') }
+        if (annotations.isNotEmpty()) {
+            append(" [annotations=").append(annotations.sorted().joinToString(",")).append(']')
+        }
+    }
+    fun toJson(): String = buildString {
+        append("{\"name\":").append(Json.string(name))
+        append(",\"kind\":").append(kind)
+        append(",\"detail\":").append(Json.string(toolingDetail()))
+        access?.let { append(",\"cplusAccess\":").append(Json.string(it)) }
+        append(",\"cplusAnnotations\":[")
+        append(annotations.sorted().joinToString(",") { Json.string(it) })
+        append("],\"location\":{\"uri\":")
+        append(Json.string(uri)).append(",\"range\":").append(span.toRangeJson()).append("}}")
+    }
 }
 
 private object LspSymbolIndex {
     fun build(uri: String, parsedText: String, mappedSource: MappedText?, ast: CPlusAst): List<LspSymbol> {
         val symbols = mutableListOf<LspSymbol>()
+        val semanticSymbols = runCatching { CPlusSemanticAnalyzer().analyze(ast).symbols }.getOrDefault(emptyList())
         val declarationKinds = setOf(
             CPlusAstKind.STRUCT_DECLARATION, CPlusAstKind.UNION_DECLARATION,
             CPlusAstKind.ENUM_DECLARATION, CPlusAstKind.TYPE_ALIAS,
@@ -1597,6 +1618,22 @@ private object LspSymbolIndex {
             CPlusAstKind.VARIABLE_DECLARATION, CPlusAstKind.FIELD_DECLARATION
         )
         fun mapSpan(span: SourceSpan): SourceSpan = mappedSource?.toOriginalSpan(span) ?: span
+        fun semanticKind(kind: CPlusAstKind): CPlusSymbolKind? = when (kind) {
+            CPlusAstKind.STRUCT_DECLARATION, CPlusAstKind.UNION_DECLARATION -> CPlusSymbolKind.STRUCT
+            CPlusAstKind.TYPE_ALIAS -> CPlusSymbolKind.TYPE_ALIAS
+            CPlusAstKind.FIELD_DECLARATION -> CPlusSymbolKind.FIELD
+            CPlusAstKind.METHOD_DECLARATION -> null
+            CPlusAstKind.FUNCTION_DECLARATION -> CPlusSymbolKind.FUNCTION
+            else -> null
+        }
+        fun semanticSymbol(node: CPlusAstNode, kind: CPlusAstKind, name: String, owner: String?): CPlusSymbol? {
+            val targetKind = semanticKind(kind)
+            return semanticSymbols.asSequence()
+                .filter { it.name == name && (targetKind == null || it.kind == targetKind) }
+                .filter { it.ownerType == owner || owner == null && it.ownerType == null }
+                .filter { it.span.file == node.span.file && it.span.startOffset < node.span.endOffset && node.span.startOffset < it.span.endOffset }
+                .minByOrNull { kotlin.math.abs(it.span.startOffset - node.span.startOffset) }
+        }
         fun visit(node: CPlusAstNode, scope: SourceSpan, ownerName: String? = null) {
             val nestedScope = if (
                 node.kind in setOf(
@@ -1622,17 +1659,20 @@ private object LspSymbolIndex {
                     val symbolUri = originUri(mappedDeclaration.file)
                         ?.takeUnless { sameSourceUri(it, uri) }
                         ?: uri
+                    val owner = ownerName.takeIf {
+                        node.kind == CPlusAstKind.METHOD_DECLARATION ||
+                            node.kind == CPlusAstKind.FIELD_DECLARATION ||
+                            (node.kind == CPlusAstKind.VARIABLE_DECLARATION && node.syntaxKind == "field_declaration")
+                    }
+                    val semantic = semanticSymbol(node, node.kind, name, owner)
                     symbols += LspSymbol(
                         symbolUri, name, kind,
                         parsedText.substring(node.span.startOffset, node.span.endOffset)
                             .replace(Regex("\\s+"), " ").trim().take(160),
                         mapSpan(node.span), mapSpan(nameNode.span), mapSpan(nestedScope),
-                        ownerName.takeIf {
-                            node.kind == CPlusAstKind.METHOD_DECLARATION ||
-                                node.kind == CPlusAstKind.FIELD_DECLARATION ||
-                                (node.kind == CPlusAstKind.VARIABLE_DECLARATION &&
-                                    node.syntaxKind == "field_declaration")
-                        }
+                        owner,
+                        semantic?.access,
+                        semantic?.annotations.orEmpty()
                     )
                 }
             }

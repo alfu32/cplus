@@ -193,6 +193,35 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun exposesAdvisoryAccessAndOwnershipMetadataThroughSymbolsAndHover() {
+        val uri = "file:///ownership-metadata.cp"
+        val source = "typedef struct box_t {\n" +
+            "    pub int get(borrowed mut *self, owned char* output) { return 0; }\n" +
+            "} box_t;\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val methodPosition = source.lines()[1].indexOf("get")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/documentSymbol\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":1,\"character\":$methodPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"cplusAccess\":\"pub\""), response)
+        assertTrue(response.contains("\"cplusAnnotations\":[\"borrowed\",\"mut\",\"owned\"]"), response)
+        assertTrue(response.contains("access=pub"), response)
+        assertTrue(response.contains("annotations=borrowed,mut,owned"), response)
+    }
+
+    @Test
     fun survivesDeterministicArbitraryProtocolFragmentation() {
         val uri = "file:///fragmented.cp"
         val source = "typedef struct fragmented_t { int value; } fragmented_t;\n"

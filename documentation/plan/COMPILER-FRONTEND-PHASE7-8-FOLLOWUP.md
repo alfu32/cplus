@@ -130,7 +130,7 @@ discovered while closing a row remain ancillary work under that row.
 | P8.8.4 | Array/function decay and legal pointer/member conversions | DONE-LOCAL | Array-to-pointer, function-pointer decay, `void*` compatibility, incompatible-pointer rejection, and receiver operator fixtures; aggregate gate passes |
 | P8.8.5 | Read/write classification and callback mutation effects | DONE-LOCAL | Document-highlight and callback fixtures; richer data-flow remains |
 | P8.8.6 | Generated comptime aliases, members, imports, and revision invalidation | DONE-LOCAL | Materialized-symbol and invalidation fixtures |
-| P8.8.7 | Ownership/access annotations remain advisory and visible to tooling | OPEN | Semantic metadata consistency fixture |
+| P8.8.7 | Ownership/access annotations remain advisory and visible to tooling | DONE-LOCAL | `exposesAdvisoryAccessAndOwnershipMetadataThroughSymbolsAndHover`; document symbols and hover expose access plus sorted annotation metadata |
 | P8.8.8 | Unsupported/ambiguous conversions fail conservatively with mapped diagnostics | DONE-LOCAL | Ambiguity and unsupported-form diagnostics |
 
 ## Phase 7 — AST emission and promotion
@@ -188,6 +188,9 @@ atomic slices, each with focused and aggregate tests:
 14. Pointer matching now distinguishes pointer and array layers: one-dimensional arrays
     decay to compatible pointers, object pointers may match `void*`, incompatible pointer
     bases/depths fail closed, and existing function-pointer/member-receiver tests remain green.
+15. LSP symbols now carry advisory access and ownership annotations from the semantic index;
+    document-symbol JSON exposes `cplusAccess`/`cplusAnnotations`, while completion and hover
+    include the same metadata in display detail without enforcing it.
 
 The latest aggregate result is green with 104/104 grammar parses. The current worktree
 also contains unrelated Raylib example changes; they are intentionally not part of this
@@ -195,10 +198,8 @@ frontend ledger or its commits.
 
 ## Immediate queue
 
-1. **P8.8.7:** expose ownership/access annotations consistently through the semantic index
-   and LSP responses without turning advisory metadata into enforcement.
-2. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
+1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
    compiler contracts are explicit; preserve conservative diagnostics otherwise.
-3. **P8.5/P8.9:** add the real IntelliJ interactive startup/restart evidence.
-4. **P7.7/P8.10:** do not promote or delete legacy code until the above evidence and the
+2. **P8.5/P8.9:** add the real IntelliJ interactive startup/restart evidence.
+3. **P7.7/P8.10:** do not promote or delete legacy code until the above evidence and the
    two-release rollback policy are recorded.
