@@ -119,7 +119,7 @@ being claimed by this local gate.
 | P7.7.b | P7.7   | Define default-backend feature flag and rollback behavior                                                     | DONE-LOCAL  | AST-first `AUTO` mode, explicit `--frontend=tree-sitter`, explicit `--frontend=legacy`, and `CPLUS_FRONTEND`/`cplus.frontend` rollback tests |
 | P7.7.c | P7.7   | Perform release-candidate soak before changing the default                                                    | BLOCKED     | Depends on P7.1–P7.6 and release host evidence                                       |
 | P7.7.d | P7.7   | Preserve compatibility when the AST path cannot yet lower a construct                          | DONE-LOCAL  | AUTO mode falls back after a mapped lowering failure or compiler rejection; explicit Tree-sitter mode remains fail-closed |
-| P7.7.e | P7.7   | Run the promoted default through CLI, stdlib, examples, and aggregate tests                       | DONE-LOCAL  | `./gradlew --offline --no-daemon test --max-workers=1 -Dorg.gradle.native=false --console=plain`; 104/104 grammar parses |
+| P7.7.e | P7.7   | Run the promoted default through CLI, stdlib, examples, and aggregate tests                       | DONE-LOCAL  | `defaultAstFirstFrontendTranscodesTheRepositoryCPlusCorpus` covers the current 69 `.cp`/`.c+` files; focused CLI test and aggregate gate pass; 104/104 grammar parses |
 
 ### Phase 8 active and deferred work
 

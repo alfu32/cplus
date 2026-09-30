@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.nio.file.Files
+import java.nio.file.Path
 
 class TranspilerTest {
     @Test
@@ -167,6 +168,45 @@ class TranspilerTest {
             assertTrue("TEST_FRONTEND_FLAG" in generated, generated)
         } finally {
             Files.walk(directory).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+    }
+
+    @Test
+    fun defaultAstFirstFrontendTranscodesTheRepositoryCPlusCorpus() {
+        val repository = generateSequence(Path.of("").toAbsolutePath().normalize()) { it.parent }
+            .firstOrNull { Files.isDirectory(it.resolve("stdlib")) }
+            ?: error("cannot locate repository stdlib from ${Path.of("").toAbsolutePath()}")
+        val sources = sequenceOf(repository.resolve("stdlib"), repository.resolve("examples"))
+            .filter(Files::isDirectory)
+            .flatMap { root ->
+                Files.walk(root).use { paths ->
+                    paths.filter(Files::isRegularFile)
+                        .filter { it.toString().endsWith(".cp") || it.toString().endsWith(".c+") }
+                        .toList()
+                        .asSequence()
+                }
+            }
+            .sortedBy { it.toString() }
+            .toList()
+        assertTrue(sources.isNotEmpty(), "repository C-plus corpus is empty")
+
+        val outputDirectory = Files.createTempDirectory("cplus-default-frontend-corpus")
+        try {
+            sources.forEach { source ->
+                val output = outputDirectory.resolve(
+                    source.fileName.toString().substringBeforeLast('.') + ".c"
+                )
+                val errors = StringBuilder()
+                val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                    listOf("transcode", source.toString(), "-o", output.toString())
+                )
+                assertEquals(0, status, "default frontend rejected $source: $errors")
+                assertTrue(Files.size(output) > 0, "default frontend emitted no C for $source")
+            }
+        } finally {
+            Files.walk(outputDirectory).use { paths ->
                 paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
             }
         }
