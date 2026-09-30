@@ -46,7 +46,21 @@ trap cleanup EXIT
 
 mkdir -p "$smoke_dir/config/plugins"
 unzip -q -o "$plugin_zip" -d "$smoke_dir/config/plugins"
-printf '%s\n' 'idea.log.debug.categories=#com.intellij.platform.lsp' > "$smoke_dir/config/idea.properties"
+# The installed launcher is IntelliJ Ultimate, but its default disabled-plugin
+# list can disable the Ultimate module in a fresh isolated profile.  The C-plus
+# descriptor intentionally requires that module because the real LSP client is
+# an Ultimate platform service.  Preserve the smoke profile's lightweight UI
+# choice while explicitly keeping Ultimate enabled.
+printf '%s\n' 'com.intellij.classic.ui' > "$smoke_dir/config/disabled_plugins.txt"
+# Mark the isolated profile as having its own bundled-plugin inventory.  This
+# prevents the installed user's migration inventory from re-importing its
+# disabled Ultimate module into the smoke profile.
+: > "$smoke_dir/config/bundled_plugins.txt"
+cat > "$smoke_dir/idea.properties" <<EOF
+idea.config.path=$smoke_dir/config
+idea.system.path=$smoke_dir/system
+idea.log.debug.categories=#com.intellij.platform.lsp
+EOF
 if [[ -z "$source_file" ]]; then
     smoke_project="$smoke_dir/project"
     mkdir -p "$smoke_project/.idea"
@@ -60,11 +74,11 @@ path_value="$PATH"
 if [[ -d "$repo_root/c-plus-bin" ]]; then
     path_value="$repo_root/c-plus-bin:$path_value"
 fi
+trace_file="$smoke_dir/lsp.trace"
 
 set +e
-timeout "$timeout_seconds" xvfb-run -a env PATH="$path_value" "$idea_launcher" \
-    "-Didea.config.path=$smoke_dir/config" \
-    "-Didea.system.path=$smoke_dir/system" \
+timeout "$timeout_seconds" xvfb-run -a env PATH="$path_value" CPLUS_LSP_TRACE="$trace_file" \
+    IDEA_PROPERTIES="$smoke_dir/idea.properties" "$idea_launcher" \
     "$source_file" >"$smoke_dir/launcher.log" 2>&1
 launcher_status=$?
 set -e
@@ -106,8 +120,24 @@ if grep -Fq "CPlusParserExternalAnnotator cannot be cast" "$log_file"; then
     echo "C-plus parser annotator registration failed" >&2
     exit 1
 fi
+if [[ ! -f "$trace_file" ]] || ! grep -Fq "in method=initialize" "$trace_file"; then
+    keep_dir=1
+    echo "C-plus LSP did not receive initialize (launcher status $launcher_status)" >&2
+    exit 1
+fi
+if ! grep -Fq "in method=textDocument/didOpen" "$trace_file"; then
+    keep_dir=1
+    echo "C-plus LSP did not receive document synchronization (launcher status $launcher_status)" >&2
+    exit 1
+fi
+if ! grep -Fq "out method=textDocument/publishDiagnostics" "$trace_file"; then
+    keep_dir=1
+    echo "C-plus LSP did not publish document diagnostics (launcher status $launcher_status)" >&2
+    exit 1
+fi
 
 echo "IntelliJ C-plus LSP smoke passed"
 echo "  plugin: $plugin_zip"
 echo "  source: $source_file"
+echo "  protocol trace: initialize, didOpen, publishDiagnostics"
 echo "  launcher status: $launcher_status (timeout is acceptable after initialization)"

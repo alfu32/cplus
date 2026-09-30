@@ -27,7 +27,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 class CPlusLspServer(
     input: InputStream = System.`in`,
     output: OutputStream = System.out,
-    private val astDiagnosticProvider: (CPlusAst) -> List<ParserDiagnostic> = { it.unsupportedAstDiagnostics() }
+    private val astDiagnosticProvider: (CPlusAst) -> List<ParserDiagnostic> = { it.unsupportedAstDiagnostics() },
+    tracePath: Path? = System.getenv("CPLUS_LSP_TRACE")?.takeIf(String::isNotBlank)?.let { Path.of(it) }
 ) {
     private val input = BufferedInputStream(input)
     private val output = BufferedOutputStream(output)
@@ -39,6 +40,9 @@ class CPlusLspServer(
     private val importsByDocument = LinkedHashMap<String, LinkedHashSet<String>>()
     private val importersByDocument = LinkedHashMap<String, LinkedHashSet<String>>()
     private val activeReadView = ThreadLocal<ReadView?>()
+    /** Optional method-level trace for host integration diagnostics; never touches protocol stdout. */
+    private val tracePath = tracePath
+    private val traceLock = Any()
     /** Cancellations received before a request instance has been dispatched. */
     private val preCancelledRequests = ConcurrentHashMap.newKeySet<String>()
     private val seenRequestIds = ConcurrentHashMap.newKeySet<String>()
@@ -83,6 +87,7 @@ class CPlusLspServer(
                 continue
             }
             val id = request.values["id"]
+            trace("in method=$method id=${id?.encode() ?: "notification"}")
             if (id != null && hasInvalidParameters(method, request)) {
                 respondError(id, -32602, "invalid parameters for $method")
                 continue
@@ -1428,9 +1433,15 @@ class CPlusLspServer(
         return DeclaredType(match.groupValues[1], match.groupValues[2].length, arrayDepth)
     }
 
-    private fun notify(method: String, params: String) = write("{\"jsonrpc\":\"2.0\",\"method\":${Json.string(method)},\"params\":$params}")
+    private fun notify(method: String, params: String) {
+        trace("out method=$method")
+        write("{\"jsonrpc\":\"2.0\",\"method\":${Json.string(method)},\"params\":$params}")
+    }
 
-    private fun respond(id: Json?, result: String) = write("{\"jsonrpc\":\"2.0\",\"id\":${id?.encode() ?: "null"},\"result\":$result}")
+    private fun respond(id: Json?, result: String) {
+        trace("out response id=${id?.encode() ?: "null"}")
+        write("{\"jsonrpc\":\"2.0\",\"id\":${id?.encode() ?: "null"},\"result\":$result}")
+    }
 
     private fun respondForDocument(id: Json?, request: Json.Object, state: RequestState, result: () -> String) {
         val encodedId = id?.encode()
@@ -1445,8 +1456,26 @@ class CPlusLspServer(
     private fun wasCancelled(encodedId: String?): Boolean =
         encodedId != null && preCancelledRequests.remove(encodedId)
 
-    private fun respondError(id: Json?, code: Int, message: String) =
+    private fun respondError(id: Json?, code: Int, message: String) {
+        trace("out error id=${id?.encode() ?: "null"} code=$code")
         write("{\"jsonrpc\":\"2.0\",\"id\":${id?.encode() ?: "null"},\"error\":{\"code\":$code,\"message\":${Json.string(message)}}}")
+    }
+
+    private fun trace(event: String) {
+        val path = tracePath ?: return
+        runCatching {
+            synchronized(traceLock) {
+                path.parent?.let(Files::createDirectories)
+                Files.writeString(
+                    path,
+                    event + System.lineSeparator(),
+                    StandardCharsets.UTF_8,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND
+                )
+            }
+        }
+    }
 
     private fun write(message: String) {
         synchronized(output) {

@@ -41,6 +41,8 @@ class CPlusParserExternalAnnotatorTest {
         val pluginXml = javaClass.getResource("/META-INF/plugin.xml")?.readText()
             ?: error("plugin.xml is not on the test runtime classpath")
 
+        assertTrue(pluginXml.contains("<depends>com.intellij.modules.lsp</depends>"))
+        assertTrue(pluginXml.contains("<depends>com.intellij.modules.ultimate</depends>"))
         assertTrue(pluginXml.contains("<platform.lsp.integrationProvider implementation=\"cplus.intellij.CPlusLspIntegrationProvider\""))
         assertTrue(pluginXml.contains("id=\"cplus.settings\""))
     }

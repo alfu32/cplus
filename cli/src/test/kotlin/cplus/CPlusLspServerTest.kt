@@ -321,6 +321,35 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun writesAnOptInMethodTraceWithoutContaminatingProtocolOutput(@TempDir tempDir: Path) {
+        val uri = "file:///trace.cp"
+        val source = "int main(void) { return 0; }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+        val trace = tempDir.resolve("lsp.trace")
+
+        CPlusLspServer(
+            ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)),
+            output,
+            tracePath = trace
+        ).serve()
+
+        val protocol = output.toString(StandardCharsets.UTF_8)
+        val events = Files.readString(trace)
+        assertTrue(protocol.contains("\"id\":1,\"result\":{"), protocol)
+        assertTrue(protocol.contains("\"id\":2,\"result\":null"), protocol)
+        assertTrue(events.contains("in method=initialize"), events)
+        assertTrue(events.contains("in method=textDocument/didOpen"), events)
+        assertTrue(events.contains("out method=textDocument/publishDiagnostics"), events)
+    }
+
+    @Test
     fun survivesDeterministicUnicodeAndMalformedEditMatrix() {
         /*
          * textDocumentSync is deliberately full-document in the current
