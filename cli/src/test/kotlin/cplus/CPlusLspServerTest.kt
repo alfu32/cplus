@@ -388,6 +388,33 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesOverloadedInstanceMethodByExplicitArgumentType() {
+        val uri = "file:///overload-methods.cp"
+        val source = "typedef struct chooser_t {\n" +
+            "    pub int choose(borrowed *self, int value) { return value; }\n" +
+            "    pub int choose(borrowed *self, const char* value) { return value[0]; }\n" +
+            "} chooser_t;\n" +
+            "int main(void) { chooser_t chooser; return chooser.choose(\"x\"); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val callPosition = source.lines()[4].lastIndexOf("choose")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":4,\"character\":$callPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\""), response)
+        assertTrue(response.contains("\"start\":{\"line\":2"), response)
+    }
+
+    @Test
     fun resolvesAnArrayArgumentAgainstAPointerOverload() {
         val uri = "file:///overload-arrays.cp"
         val source = "int choose(int* values) { return values[0]; }\n" +

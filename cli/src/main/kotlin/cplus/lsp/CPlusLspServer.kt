@@ -662,9 +662,7 @@ class CPlusLspServer(
             val callArity = occurrence.callArity
             // C-plus instance calls omit the implicit receiver even though the
             // lowered declaration contains it as the first parameter.
-            val selectedArity = parameterArity(selected)?.let { arity ->
-                if (selected.ownerName != null) (arity - 1).coerceAtLeast(0) else arity
-            }
+            val selectedArity = callParameterArity(selected)
             return !callSite || callArity == null || selectedArity == null || callArity == selectedArity
         }
         if (selected.kind == 8 && selected.ownerName != null) {
@@ -701,7 +699,10 @@ class CPlusLspServer(
             }.thenBy { it.selection.startOffset })
         }
         receiverType(document, offset)?.let { receiverType ->
-            orderedCandidates.firstOrNull { it.ownerName == receiverType }?.let { return it }
+            val resolvedReceiver = resolveTypeAlias(receiverType)
+            orderedCandidates.firstOrNull {
+                it.ownerName?.let(::resolveTypeAlias) == resolvedReceiver
+            }?.let { return it }
         }
         val scopedCandidates = orderedCandidates
             .filter { it.uri == document.uri && it.scope.contains(offset) }
@@ -757,12 +758,23 @@ class CPlusLspServer(
 
     private fun overloadScore(document: LspDocument, symbol: LspSymbol, arguments: List<String>?): Int? {
         if (arguments == null) return null
-        val parameters = parameterTypes(symbol) ?: return null
+        val parameters = callParameterTypes(symbol) ?: return null
         if (parameters.size != arguments.size) return null
         return parameters.zip(arguments).sumOf { (parameter, argument) ->
             typeMatchScore(document, parameter, argument)
         }
     }
+
+    private fun callParameterTypes(symbol: LspSymbol): List<TypeShape>? {
+        val parameters = parameterTypes(symbol) ?: return null
+        return if (isInstanceMethod(symbol) && parameters.isNotEmpty()) parameters.drop(1) else parameters
+    }
+
+    private fun callParameterArity(symbol: LspSymbol): Int? =
+        callParameterTypes(symbol)?.size ?: parameterArity(symbol)
+
+    private fun isInstanceMethod(symbol: LspSymbol): Boolean =
+        symbol.ownerName != null && !Regex("\\bstatic\\b").containsMatchIn(symbol.detail)
 
     private fun parameterTypes(symbol: LspSymbol): List<TypeShape>? {
         if (symbol.kind !in setOf(6, 12)) return null
