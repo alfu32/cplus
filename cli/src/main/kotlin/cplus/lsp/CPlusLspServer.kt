@@ -333,8 +333,8 @@ class CPlusLspServer(
      * compiler/delegation territory; the LSP must not invent errors for them.
      */
     private fun ambiguousCallableDiagnostics(document: LspDocument): List<ParserDiagnostic> {
-        val symbols = document.symbols
-            .filter { it.kind in setOf(6, 12) && it.ownerName == null }
+        val symbols = visibleSymbols(document)
+            .filter { it.kind in setOf(6, 12) }
         return document.ast.root.descendantsAndSelf()
             .filter { it.kind == CPlusAstKind.CALL_EXPRESSION }
             .mapNotNull { call ->
@@ -343,12 +343,27 @@ class CPlusLspServer(
                 ) return@mapNotNull null
                 val expression = document.parsedText.substring(call.span.startOffset, call.span.endOffset)
                 val (callee, arguments) = callParts(expression) ?: return@mapNotNull null
-                if (!callee.matches(IDENTIFIER)) return@mapNotNull null
-                val candidates = symbols.filter { it.name == callee }
+                val member = Regex("(.+?)\\s*(?:->|\\.)\\s*($IDENTIFIER)").matchEntire(callee)
+                val candidates = if (member == null) {
+                    if (!callee.matches(IDENTIFIER)) return@mapNotNull null
+                    symbols.filter { it.name == callee && it.ownerName == null }.toList()
+                } else {
+                    val receiver = member.groupValues[1]
+                    val owner = receiverValue(
+                        document,
+                        receiver,
+                        call.span.startOffset + receiver.length
+                    )?.typeName?.let(::resolveTypeAlias) ?: return@mapNotNull null
+                    symbols.filter {
+                        it.name == member.groupValues[2] &&
+                            it.ownerName?.let(::resolveTypeAlias) == owner
+                    }.toList()
+                }
                 if (!isAmbiguousCallable(document, candidates, arguments)) return@mapNotNull null
+                val name = member?.groupValues?.get(2) ?: callee
                 ParserDiagnostic(
                     code = "CPLUS_AMBIGUOUS_CALL",
-                    message = "ambiguous call to '$callee'; overload candidates have equal bounded match scores",
+                    message = "ambiguous call to '$name'; overload candidates have equal bounded match scores",
                     severity = ParserDiagnosticSeverity.ERROR,
                     span = call.span
                 )
@@ -1023,9 +1038,11 @@ class CPlusLspServer(
     /** Symbols visible from a document are local symbols plus its resolved import closure. */
     private fun visibleSymbols(document: LspDocument): Sequence<LspSymbol> {
         val reachable = reachableDocuments(document.uri)
-        return reachable.asSequence()
+        return sequenceOf(document.symbols.asSequence())
+            .flatten()
+            .plus(reachable.asSequence().filter { it != document.uri }
             .mapNotNull(readDocuments()::get)
-            .flatMap { candidate -> candidate.symbols.asSequence().map { displaySymbol(it, candidate.uri) } }
+            .flatMap { candidate -> candidate.symbols.asSequence().map { displaySymbol(it, candidate.uri) } })
             .distinctBy { it.uri to it.selection.startOffset }
     }
 
