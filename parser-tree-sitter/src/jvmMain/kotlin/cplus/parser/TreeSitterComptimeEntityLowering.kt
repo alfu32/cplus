@@ -2,6 +2,8 @@ package cplus.parser
 
 import cplus.CPlusAstAdapter
 import cplus.CPlusComptimeIndexer
+import cplus.CPlusAstKind
+import cplus.CPlusSynthesizedDeclaration
 import cplus.CPlusLoweringDiagnostic
 import cplus.CPlusParseResult
 import cplus.CPlusSyntaxNode
@@ -10,7 +12,9 @@ import cplus.MappedTextBuilder
 
 data class TreeSitterComptimeEntityResult(
     val source: MappedText,
-    val diagnostics: List<CPlusLoweringDiagnostic>
+    val diagnostics: List<CPlusLoweringDiagnostic>,
+    /** Runtime declarations materialized by this entity pass. */
+    val synthesizedDeclarations: List<CPlusSynthesizedDeclaration> = emptyList()
 )
 
 /**
@@ -95,6 +99,7 @@ class TreeSitterComptimeEntityLowering(
             .groupBy({ it.first }, { it.second })
         val edits = mutableListOf<Edit>()
         val diagnostics = mutableListOf<CPlusLoweringDiagnostic>()
+        val synthesizedDeclarations = mutableListOf<CPlusSynthesizedDeclaration>()
         val usedGenerators = linkedSetOf<Int>()
         val generatedOrdinaryNames = mutableMapOf<String, cplus.SourceSpan>()
         val generatedStructTags = mutableMapOf<String, cplus.SourceSpan>()
@@ -243,6 +248,24 @@ class TreeSitterComptimeEntityLowering(
                 generatedOrdinaryNames[alias] = invocation.span
                 generatedStructTags[materializedType.structTag] = invocation.span
                 edits += Edit(invocationWrapper.span.startOffset, invocationWrapper.span.endOffset, materializedType.text)
+                synthesizedDeclarations += CPlusSynthesizedDeclaration(
+                    kind = CPlusAstKind.TYPE_ALIAS,
+                    ownerType = null,
+                    sourceName = generator.symbol ?: alias,
+                    generatedName = alias,
+                    isStatic = false,
+                    sourceSpan = invocation.span,
+                    mappedText = materializedType.text
+                )
+                synthesizedDeclarations += CPlusSynthesizedDeclaration(
+                    kind = CPlusAstKind.STRUCT_DECLARATION,
+                    ownerType = null,
+                    sourceName = generator.symbol ?: materializedType.structTag,
+                    generatedName = materializedType.structTag,
+                    isStatic = false,
+                    sourceSpan = invocation.span,
+                    mappedText = materializedType.text
+                )
                 usedGenerators += wrapper.span.startOffset
                 continue
             }
@@ -341,7 +364,22 @@ class TreeSitterComptimeEntityLowering(
                 continue
             }
             edits += Edit(invocationWrapper.span.startOffset, invocationWrapper.span.endOffset, materialized)
-            entityNames.forEach { generatedOrdinaryNames[it] = invocation.span }
+            entityNames.forEach { name ->
+                generatedOrdinaryNames[name] = invocation.span
+                synthesizedDeclarations += CPlusSynthesizedDeclaration(
+                    kind = when (generator.resultKind) {
+                        "function" -> CPlusAstKind.FUNCTION_DECLARATION
+                        "variable" -> CPlusAstKind.VARIABLE_DECLARATION
+                        else -> null
+                    } ?: return@forEach,
+                    ownerType = null,
+                    sourceName = generator.symbol ?: name,
+                    generatedName = name,
+                    isStatic = false,
+                    sourceSpan = invocation.span,
+                    mappedText = materialized
+                )
+            }
             usedGenerators += wrapper.span.startOffset
         }
 
@@ -386,7 +424,7 @@ class TreeSitterComptimeEntityLowering(
                 invocation?.span ?: parsed.source.sourceFile.span(0, 0)
             )))
         }
-        return TreeSitterComptimeEntityResult(materialized, emptyList())
+        return TreeSitterComptimeEntityResult(materialized, emptyList(), synthesizedDeclarations)
     }
 
     private fun materializeTypeEntity(

@@ -7901,6 +7901,15 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
         val generated = result.transcodedSource ?: error("overloaded comptime generators should materialize")
         assertTrue("int generated_one(void)" in generated.code, generated.code)
         assertTrue("int generated_two(void)" in generated.code, generated.code)
+        assertEquals(
+            listOf("generated_one", "generated_two"),
+            result.synthesizedDeclarations.map { it.generatedName }
+        )
+        assertTrue(
+            result.synthesizedDeclarations.all { it.kind == CPlusAstKind.FUNCTION_DECLARATION },
+            result.synthesizedDeclarations.toString()
+        )
+        assertTrue(result.synthesizedDeclarations.all { it.sourceSpan.file == source.id.value })
         val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
         } ?: return
@@ -9358,6 +9367,16 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
         assertTrue(result.successful, "parser=${result.parserDiagnostics}; lowering=${result.loweringDiagnostics}; unsupported=${result.unsupportedNodes}")
         val generated = result.transcodedSource ?: error("successful mixed entity materialization must expose TranscodedSource")
         assertTrue("int generated_seed = 73;" in generated.code, generated.code)
+        assertEquals(listOf("generated_seed"), result.synthesizedDeclarations.map { it.generatedName })
+        assertEquals(
+            listOf(CPlusAstKind.VARIABLE_DECLARATION),
+            result.synthesizedDeclarations.map { it.kind }
+        )
+        assertEquals(name, result.synthesizedDeclarations.single().sourceSpan.file)
+        assertEquals(
+            result.synthesizedDeclarations.map { it.generatedName },
+            generated.synthesizedDeclarations.map { it.generatedName }
+        )
         val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
         } ?: return
@@ -9391,6 +9410,19 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
         assertTrue("typedef struct box__int_box_t" in generated.code, generated.code)
         assertTrue("int value;" in generated.code, generated.code)
         assertTrue("int_box_t;" in generated.code, generated.code)
+        assertEquals(
+            listOf("int_box_t", "box__int_box_t"),
+            result.synthesizedDeclarations.map { it.generatedName }
+        )
+        assertEquals(
+            listOf(CPlusAstKind.TYPE_ALIAS, CPlusAstKind.STRUCT_DECLARATION),
+            result.synthesizedDeclarations.map { it.kind }
+        )
+        assertTrue(result.synthesizedDeclarations.all { it.sourceSpan.file == name })
+        assertEquals(
+            result.synthesizedDeclarations.map { it.generatedName },
+            generated.synthesizedDeclarations.map { it.generatedName }
+        )
         val mappedText = result.cSource ?: error("successful comptime type materialization must retain mapped source")
         val structureOffset = mappedText.text.indexOf("struct box__int_box_t")
         assertEquals(text.indexOf("struct box"), mappedText.originAt(structureOffset)?.offset)

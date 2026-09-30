@@ -129,6 +129,7 @@ class TreeSitterCPlusPrototypeTranspiler(
         var sourceOrder: List<SourceId> = emptyList()
         var compilerOptionOrder: List<SourceId> = emptyList()
         var sourceImports: List<cplus.SourceImportEdge> = emptyList()
+        val comptimeSynthesizedDeclarations = mutableListOf<cplus.CPlusSynthesizedDeclaration>()
         if (!passSelection.resolveComptime) {
             val comptimeNode = descendants(parsed.root).firstOrNull { it.kind in TREE_SITTER_COMPTIME_ROLLBACK_NODES }
             if (comptimeNode != null) {
@@ -365,6 +366,10 @@ class TreeSitterCPlusPrototypeTranspiler(
                         emptyList(),
                         testFixtures = testFixtures
                     )
+                }
+                val entitySource = mapped
+                comptimeSynthesizedDeclarations += entities.synthesizedDeclarations.map { declaration ->
+                    declaration.copy(sourceSpan = entitySource.toOriginalSpan(declaration.sourceSpan))
                 }
                 mapped = entities.source
                 snapshot = snapshotFor(mapped.text)
@@ -816,6 +821,7 @@ class TreeSitterCPlusPrototypeTranspiler(
         // intermediate revision; their source origins remain available through
         // the corresponding mapped output and synthesized-declaration records.
         val synthesizedNodes = runtimeLowering.synthesizedNodes
+        val synthesizedDeclarations = comptimeSynthesizedDeclarations + runtimeLowering.synthesizedDeclarations
         // Validate the emitter's C-plus-shaped intermediate with the C-plus
         // grammar; the hygienic macro names are applied only to final C output.
         val emittedParse = backend.parse(snapshotFor(generatedC.text))
@@ -839,7 +845,7 @@ class TreeSitterCPlusPrototypeTranspiler(
                     .filter { it.sourceChanged }
                     .map { it.stepId }
                     .toSet(),
-                synthesizedDeclarations = runtimeLowering.synthesizedDeclarations,
+                synthesizedDeclarations = synthesizedDeclarations,
                 synthesizedNodes = synthesizedNodes,
                 synthesizedSource = runtimeLowering.source
             )
@@ -860,7 +866,7 @@ class TreeSitterCPlusPrototypeTranspiler(
                 .filter { it.sourceChanged }
                 .map { it.stepId }
                 .toSet(),
-            runtimeLowering.synthesizedDeclarations,
+            synthesizedDeclarations,
             synthesizedNodes,
             runtimeLowering.source
         )
