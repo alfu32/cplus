@@ -159,6 +159,15 @@ comptime int expected_answer = 42;
     @assert(values.capacity() == 0);
 }
 
+@test "dynamic list add accepts scalar values" {
+    int_list_t values;
+    @assert(values.init() == 0);
+    @assert(values.add(7) == 0);
+    @assert(values.size() == 1);
+    @assert(*values.get(0) == 7);
+    values.destroy();
+}
+
 @test "dynamic list stores pointer elements" {
     string_list_t values;
     cstring_t text = "borrowed string";
