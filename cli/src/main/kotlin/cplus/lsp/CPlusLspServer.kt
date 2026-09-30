@@ -1005,9 +1005,9 @@ class CPlusLspServer(
                 ?.ownerName
             return owner?.let { DeclaredType(it, 1, 0) }
         }
-        val call = Regex("(.+)\\(([^()]*)\\)$").find(value)
+        val call = callParts(value)
         if (call != null) {
-            return functionCallReturnType(document, call.groupValues[1].trim(), offset)
+            return functionCallReturnType(document, call.first, offset, call.second)
         }
         if (value.matches(IDENTIFIER)) {
             val variable = visibleSymbols(document)
@@ -1048,14 +1048,14 @@ class CPlusLspServer(
     private fun functionCallReturnType(
         document: LspDocument,
         callee: String,
-        offset: Int
+        offset: Int,
+        arguments: List<String> = emptyList()
     ): DeclaredType? {
         if (callee.matches(IDENTIFIER)) {
-            return visibleSymbols(document)
+            return selectCallable(document, visibleSymbols(document)
                 .asSequence()
                 .filter { it.name == callee && it.kind in setOf(6, 12) }
-                .mapNotNull(::functionReturnType)
-                .firstOrNull()
+                .toList(), arguments)?.let(::functionReturnType)
         }
         val member = Regex("(.+?)\\s*(->|\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)$").find(callee)
             ?: return null
@@ -1067,14 +1067,70 @@ class CPlusLspServer(
         }
         if (!operatorMatches) return null
         val owner = resolveTypeAlias(parent.typeName)
-        return visibleSymbols(document)
+        return selectCallable(document, visibleSymbols(document)
             .asSequence()
             .filter {
                 it.kind == 6 && it.name == member.groupValues[3] &&
                     it.ownerName?.let(::resolveTypeAlias) == owner
             }
-            .mapNotNull(::functionReturnType)
-            .firstOrNull()
+            .toList(), arguments)?.let(::functionReturnType)
+    }
+
+    /** Select a callable return declaration using the same bounded ranking as call navigation. */
+    private fun selectCallable(
+        document: LspDocument,
+        candidates: List<LspSymbol>,
+        arguments: List<String>
+    ): LspSymbol? {
+        if (candidates.isEmpty()) return null
+        return candidates.sortedWith(compareBy<LspSymbol> {
+            overloadScore(document, it, arguments)
+                ?: callParameterArity(it)?.let { arity -> 100 + kotlin.math.abs(arity - arguments.size) }
+                ?: Int.MAX_VALUE
+        }.thenBy { it.selection.startOffset }).first()
+    }
+
+    /** Parse a trailing call, including nested argument expressions. */
+    private fun callParts(expression: String): Pair<String, List<String>>? {
+        val value = expression.trim()
+        if (!value.endsWith(')')) return null
+        var depth = 0
+        var open = -1
+        for (index in value.indices.reversed()) {
+            when (value[index]) {
+                ')' -> depth++
+                '(' -> {
+                    depth--
+                    if (depth == 0) {
+                        open = index
+                        break
+                    }
+                }
+            }
+        }
+        if (open <= 0) return null
+        val callee = value.substring(0, open).trim()
+        if (callee.isEmpty()) return null
+        return callee to splitCallArguments(value.substring(open + 1, value.length - 1))
+    }
+
+    private fun splitCallArguments(arguments: String): List<String> {
+        if (arguments.trim().isEmpty()) return emptyList()
+        val result = mutableListOf<String>()
+        var depth = 0
+        var start = 0
+        arguments.forEachIndexed { index, character ->
+            when (character) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> if (depth > 0) depth--
+                ',' -> if (depth == 0) {
+                    result += arguments.substring(start, index).trim()
+                    start = index + 1
+                }
+            }
+        }
+        result += arguments.substring(start).trim()
+        return result
     }
 
     private fun functionReturnType(symbol: LspSymbol): DeclaredType? {
