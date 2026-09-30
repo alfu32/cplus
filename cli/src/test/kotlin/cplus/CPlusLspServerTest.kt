@@ -1002,6 +1002,36 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun classifiesIndirectPointerAssignmentsAsPointerReads() {
+        val uri = "file:///highlight-pointer-dereference.cp"
+        val source = "int main(void) {\n" +
+            "    int value = 0;\n" +
+            "    int *pointer = &value;\n" +
+            "    *pointer = 7;\n" +
+            "    pointer = &value;\n" +
+            "    return *pointer;\n" +
+            "}\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/documentHighlight\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":9}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        val result = response.substringAfter("\"id\":2,\"result\":[").substringBefore("]}")
+        assertTrue(result.contains("\"kind\":3"), response)
+        assertTrue(result.contains("\"kind\":2"), response)
+        assertTrue(result.count { it == '{' } >= 4, response)
+    }
+
+    @Test
     fun resolvesReferencesToTheReceiverMethodOwner() {
         val uri = "file:///method-references.cp"
         val source = "typedef struct left_t { pub int get(borrowed *self) { return 1; } } left_t;\n" +

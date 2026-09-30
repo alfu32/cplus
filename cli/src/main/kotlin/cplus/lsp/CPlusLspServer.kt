@@ -691,14 +691,24 @@ class CPlusLspServer(
         val text = reference.document.snapshot.text
         val start = reference.span.startOffset.coerceIn(0, text.length)
         val end = reference.span.endOffset.coerceIn(start, text.length)
-        val before = text.substring(0, start).takeLast(3)
+        val beforeText = text.substring(0, start)
+        val before = beforeText.takeLast(3)
         val after = text.substring(end).dropWhile { it.isWhitespace() }
+        // In `*pointer = value`, the assignment mutates the pointee; the
+        // pointer variable itself is read to locate that pointee.  The
+        // lexical assignment check below must not turn that read into a
+        // write highlight.  Keep this deliberately narrow: a leading `*`
+        // immediately before the identifier is the unary-dereference form,
+        // while `pointer->field = value` already has no assignment directly
+        // after the pointer identifier.
+        val unaryDereference = beforeText.trimEnd().endsWith('*') &&
+            !beforeText.trimEnd().endsWith("**")
         val compoundAssignment = before.trimEnd().endsWithAny(
             "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="
         )
         val increment = before.trimEnd().endsWith("++") || before.trimEnd().endsWith("--") ||
             after.trimStart().startsWith("++") || after.trimStart().startsWith("--")
-        val assignment = after.startsWith("=") && !after.startsWith("==")
+        val assignment = !unaryDereference && after.startsWith("=") && !after.startsWith("==")
         return if (compoundAssignment && !before.trimEnd().endsWith("==") || increment || assignment) 3 else 2
     }
 
