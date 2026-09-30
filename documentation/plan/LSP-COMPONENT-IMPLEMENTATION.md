@@ -287,7 +287,7 @@ reliability and release subtasks represented by a single indefinite status.
 | LSP-7.4 | DONE        | Reuse incremental parse sessions safely                  | LSP-7.2          | Unicode/malformed edit fixtures compare incremental results with fresh parses and recover on session failure.                                                                                                                                         |
 | LSP-7.5 | DONE        | Record cold, burst, and overload latency baselines       | LSP-7.3, LSP-7.4 | `:cli:benchmarkLsp` records current Linux x86_64/JDK 21 measurements.                                                                                                                                                                                 |
 | LSP-7.6 | DONE        | Establish sustained-load throughput and memory budgets   | LSP-7.5          | Linux/JDK 21 `benchmarkLspGate` passed for 60 seconds with 2,202 rounds, 36.700 rounds/sec, 46,242 completed requests, successful tail requests, and −567,968 bytes post-GC heap delta. Cross-host validation remains LSP-7.7. |
-| LSP-7.7 | IN PROGRESS | Validate reliability/performance on supported hosts      | LSP-7.6          | The workflow now runs `CPlusLspServerTest` and a 10-second enforced `benchmarkLspGate` on Linux x86_64/arm64, macOS arm64, and Windows x86_64, retaining per-host reports; the gate remains open until a complete CI run passes. |
+| LSP-7.7 | DONE        | Validate reliability/performance on supported hosts      | LSP-7.6          | CI run `36647197070` passed `CPlusLspServerTest`, the enforced benchmark, protocol, and reliability gates on Linux x86_64/arm64, macOS arm64, and Windows x86_64. |
 | LSP-7.8 | DONE        | Expand property/fuzz coverage for positions and edits    | LSP-7.4          | `survivesDeterministicUnicodeAndMalformedEditMatrix` runs 32 deterministic edit seeds with valid snapshots, malformed recovery snapshots, supplementary Unicode, repeated full-document revisions, final symbol recovery, and diagnostics assertions. |
 | LSP-7.9 | IN PROGRESS | Prove crash/restart recovery through each client         | LSP-7.1          | Vim and VS Code child-process restart fixtures pass; VS Code also handles an initialize/pipe-teardown `EPIPE` and permits only one automatic restart per failure window. IntelliJ runtime unexpected-exit coverage remains.                           |
 
@@ -300,8 +300,8 @@ reliability and release subtasks represented by a single indefinite status.
 | LSP-8.3 | DONE        | Document editor configuration and version compatibility     | LSP-6            | VS Code, Vim, and IntelliJ configuration/version guidance is documented and packaged.                      |
 | LSP-8.4 | DONE        | Build editor artifacts and run consumer smoke tests         | LSP-6            | VSIX, IntelliJ 2026.2.2 plugin, Vim archives, npm tests, and headless Vim tests pass locally.              |
 | LSP-8.5 | OPEN        | Run an interactive IntelliJ protocol fixture                | LSP-8.2, LSP-8.4 | Exercise actual IntelliJ LSP client startup, document sync, diagnostics, navigation, and restart.          |
-| LSP-8.6 | OPEN        | Validate release discovery on supported hosts               | LSP-8.1, LSP-8.2 | Hosted release matrix must launch bare and bundled artifacts with protocol-clean stdout.                   |
-| LSP-8.7 | IN PROGRESS | Verify release publication and artifact completeness        | LSP-8.6          | Tagged run `36622759483` published `0.5.57` and passed manifest generation; release-host validation remains before the parent gate closes. |
+| LSP-8.6 | DONE        | Validate release discovery on supported hosts               | LSP-8.1, LSP-8.2 | CI run `36647197070` launched both bare and cross-runtime artifacts with protocol-clean stdout on Linux x86_64/arm64, macOS arm64, and Windows x86_64. |
+| LSP-8.7 | DONE        | Verify release publication and artifact completeness        | LSP-8.6          | Tagged run `36622759483` published `0.5.57` with the generated manifest; run `36647197070` completed bare/cross host validation after the launcher correction. |
 
 ## Dependency graph and execution order
 
@@ -387,3 +387,12 @@ Local verification command:
 The current LSP fixes are pushed only after the focused and aggregate local
 gates pass. Native DLL-per-editor packaging, a separate LSP Gradle module, and
 target-specific compiler/ABI support remain out of scope for this roadmap.
+
+- CI run `36647197070` passed the complete supported-host parser, compiler,
+  benchmark, LSP reliability, editor-bundle, CLI distribution, and packaged-LSP
+  matrix. Both bare and cross-runtime ZIP launchers passed framed
+  initialize/initialized/shutdown/exit validation on Linux x86_64/arm64, macOS
+  arm64, and Windows x86_64. The preceding run `36645700770` exposed a Windows
+  launcher quoting defect; `cpc.cmd` was corrected in `2283728` by removing the
+  trailing path separator before quoting `-Dcplus.home`. The replacement run
+  passed without a timeout or protocol error.
