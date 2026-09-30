@@ -769,9 +769,12 @@ class CPlusLspServer(
                 it.ownerName?.let(::resolveTypeAlias) == resolvedReceiver
             }
         } ?: orderedCandidates.filter { it.ownerName == null }
-        if (callArguments != null && isAmbiguousCallable(document, receiverCandidates, callArguments)) return null
-        if (receiverTypeName != null) receiverCandidates.firstOrNull()?.let { return it }
-        val scopedCandidates = receiverCandidates
+        val compatibleCandidates = if (callArguments == null) receiverCandidates else {
+            receiverCandidates.filter { callableAcceptsArguments(document, it, callArguments) }
+        }
+        if (callArguments != null && isAmbiguousCallable(document, compatibleCandidates, callArguments)) return null
+        if (receiverTypeName != null) compatibleCandidates.firstOrNull()?.let { return it }
+        val scopedCandidates = compatibleCandidates
             .filter { it.uri == document.uri && it.scope.contains(offset) }
         if (scopedCandidates.isNotEmpty()) {
             return if (callArguments != null) {
@@ -783,12 +786,12 @@ class CPlusLspServer(
                 )
             }
         }
-        val precedingCandidates = receiverCandidates
+        val precedingCandidates = compatibleCandidates
             .filter { it.uri == document.uri && it.selection.startOffset <= offset }
         return if (callArguments != null) precedingCandidates.firstOrNull()
-            ?: receiverCandidates.firstOrNull()
+            ?: compatibleCandidates.firstOrNull()
         else precedingCandidates.maxByOrNull { it.selection.startOffset }
-            ?: receiverCandidates.firstOrNull()
+            ?: compatibleCandidates.firstOrNull()
     }
 
     private fun isAmbiguousCallable(
@@ -805,6 +808,15 @@ class CPlusLspServer(
         }.sortedBy { it.second }
         if (ranked.size < 2 || ranked[0].second != ranked[1].second) return false
         return ranked[0].first.selection.startOffset != ranked[1].first.selection.startOffset
+    }
+
+    private fun callableAcceptsArguments(
+        document: LspDocument,
+        symbol: LspSymbol,
+        arguments: List<String>
+    ): Boolean {
+        if (callParameterTypes(symbol) == null) return true
+        return overloadScore(document, symbol, arguments) != null
     }
 
     private fun callArity(text: String, offset: Int): Int? {
@@ -843,9 +855,13 @@ class CPlusLspServer(
         if (arguments == null) return null
         val parameters = callParameterTypes(symbol) ?: return null
         if (parameters.size != arguments.size) return null
-        return parameters.zip(arguments).sumOf { (parameter, argument) ->
-            typeMatchScore(document, parameter, argument)
+        var total = 0
+        parameters.zip(arguments).forEach { (parameter, argument) ->
+            val match = typeMatchScore(document, parameter, argument)
+            if (!match.compatible) return null
+            total += match.score
         }
+        return total
     }
 
     private fun callParameterTypes(symbol: LspSymbol): List<TypeShape>? {
@@ -898,32 +914,40 @@ class CPlusLspServer(
         return -1
     }
 
-    private fun typeMatchScore(document: LspDocument, expected: TypeShape, argument: String): Int {
-        val actual = expressionType(document, argument) ?: return 50
+    private fun typeMatchScore(document: LspDocument, expected: TypeShape, argument: String): TypeMatch {
+        val actual = expressionType(document, argument) ?: return TypeMatch(50, true)
         val expectedBase = resolveTypeAlias(expected.base)
         val actualBase = resolveTypeAlias(actual.base)
         if (expected.callableArity != null) {
             return when {
                 actual.callableArity == expected.callableArity &&
                     (expected.callableReturnBase == null ||
-                        resolveTypeAlias(expected.callableReturnBase) == actualBase) -> 0
-                actual.callableArity != null -> 35
-                else -> 45
+                        resolveTypeAlias(expected.callableReturnBase) == actualBase) -> TypeMatch(0, true)
+                actual.callableArity != null -> TypeMatch(35, true)
+                else -> TypeMatch(45, false)
             }
         }
-        if (actual.callableArity != null) return 35
-        val expectedPointers = expected.pointerDepth + expected.arrayDepth
-        val actualPointers = actual.pointerDepth + actual.arrayDepth
-        if (expectedPointers == 0 && actualPointers == 0) {
-            if (expectedBase == actualBase) return 0
-            numericConversionCost(expectedBase, actualBase)?.let { return 5 + it }
+        if (actual.callableArity != null) return TypeMatch(35, false)
+        val expectedPointer = expected.pointerDepth > 0
+        val actualPointer = actual.pointerDepth > 0
+        val expectedArray = expected.arrayDepth > 0
+        val actualArray = actual.arrayDepth > 0
+        if (expectedPointer || expectedArray || actualPointer || actualArray) {
+            if (expectedBase == actualBase && expected.pointerDepth == actual.pointerDepth &&
+                expected.arrayDepth == actual.arrayDepth
+            ) return TypeMatch(0, true)
+            if (expected.pointerDepth == 1 && expected.arrayDepth == 0 &&
+                actual.pointerDepth == 0 && actual.arrayDepth == 1 && expectedBase == actualBase
+            ) return TypeMatch(2, true)
+            if (expected.pointerDepth == 1 && expected.arrayDepth == 0 &&
+                actual.pointerDepth == 1 && actual.arrayDepth == 0 &&
+                (expectedBase == "void" || actualBase == "void")
+            ) return TypeMatch(8, true)
+            return TypeMatch(0, false)
         }
-        return when {
-            expectedBase == actualBase && expectedPointers == actualPointers -> 0
-            expectedBase == actualBase -> 10
-            expectedPointers == actualPointers -> 20
-            else -> 40
-        }
+        if (expectedBase == actualBase) return TypeMatch(0, true)
+        numericConversionCost(expectedBase, actualBase)?.let { return TypeMatch(5 + it, true) }
+        return TypeMatch(0, false)
     }
 
     private fun numericConversionCost(expected: String, actual: String): Int? {
@@ -1282,9 +1306,11 @@ class CPlusLspServer(
         arguments: List<String>
     ): LspSymbol? {
         if (candidates.isEmpty()) return null
-        val knownArity = candidates.mapNotNull(::callParameterArity)
+        val compatibleCandidates = candidates.filter { callableAcceptsArguments(document, it, arguments) }
+        if (compatibleCandidates.isEmpty()) return null
+        val knownArity = compatibleCandidates.mapNotNull(::callParameterArity)
         if (knownArity.isNotEmpty() && knownArity.none { it == arguments.size }) return null
-        val ranked = candidates.sortedWith(compareBy<LspSymbol> {
+        val ranked = compatibleCandidates.sortedWith(compareBy<LspSymbol> {
             overloadScore(document, it, arguments)
                 ?: callParameterArity(it)?.let { arity -> 100 + kotlin.math.abs(arity - arguments.size) }
                 ?: Int.MAX_VALUE
@@ -1491,6 +1517,8 @@ private data class TypeShape(
     val callableArity: Int? = null,
     val callableReturnBase: String? = null
 )
+
+private data class TypeMatch(val score: Int, val compatible: Boolean)
 
 private data class LspDocument(
     val uri: String,

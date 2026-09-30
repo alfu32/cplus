@@ -127,7 +127,7 @@ discovered while closing a row remain ancillary work under that row.
 | P8.8.1 | Receiver/value/pointer lookup and method ownership | DONE-LOCAL | Receiver-chain and method fixtures |
 | P8.8.2 | Overload arity, exact types, literals, casts, unary/dereference, suffixes, and ambiguity | DONE-LOCAL | Focused LSP resolution and diagnostic fixtures |
 | P8.8.3 | C integer promotions and bounded scalar conversion ranking | DONE-LOCAL | `resolvesCIntegerPromotionsBeforeWiderOverloads`; focused LSP class and aggregate gate pass; host C remains authoritative |
-| P8.8.4 | Array/function decay and legal pointer/member conversions | OPEN | Positive/negative pointer conversion matrix |
+| P8.8.4 | Array/function decay and legal pointer/member conversions | DONE-LOCAL | Array-to-pointer, function-pointer decay, `void*` compatibility, incompatible-pointer rejection, and receiver operator fixtures; aggregate gate passes |
 | P8.8.5 | Read/write classification and callback mutation effects | DONE-LOCAL | Document-highlight and callback fixtures; richer data-flow remains |
 | P8.8.6 | Generated comptime aliases, members, imports, and revision invalidation | DONE-LOCAL | Materialized-symbol and invalidation fixtures |
 | P8.8.7 | Ownership/access annotations remain advisory and visible to tooling | OPEN | Semantic metadata consistency fixture |
@@ -157,7 +157,7 @@ discovered while closing a row remain ancillary work under that row.
 | P8.5  | Interactive IntelliJ LSP startup, features, and restart         | P8.1, P8.4      | OPEN        | Build a real IDE-client fixture for startup/sync, diagnostics, completion, navigation, test gutter, unexpected exit, and restart. This is the main editor evidence gap.                                                                                                                |
 | P8.6  | Supported-host packaged LSP protocol smoke                      | P8.1, packaging | DONE        | CI run `36647197070` passed framed LSP startup/shutdown for the supported bare/cross distributions and host matrix.                                                                                                                                                                    |
 | P8.7  | Bounded LSP scheduling, cancellation, and revision safety       | P8.1            | DONE-LOCAL  | Two workers, bounded queue, overload response, cancellation lifetime, malformed edit matrix, sustained benchmark, and protocol reliability gates pass; repeat host soak if the release matrix changes.                                                                                 |
-| P8.8  | Compiler-aligned semantic resolution                            | P5, P8.1        | IN PROGRESS | Receiver chains, methods, overload ranking, ambiguity diagnostics, casts, unary forms, literal suffixes, callback effects, generated comptime aliases, and bounded C integer promotions are covered. Remaining: pointer/member conversions, richer writes, ownership/access visibility, and complete comptime scope parity. |
+| P8.8  | Compiler-aligned semantic resolution                            | P5, P8.1        | IN PROGRESS | Receiver chains, methods, overload ranking, ambiguity diagnostics, casts, unary forms, literal suffixes, callback effects, generated comptime aliases, C integer promotions, and bounded pointer/member conversions are covered. Remaining: richer writes, ownership/access visibility, and complete comptime scope parity. |
 | P8.9  | Cross-client crash/restart behavior                             | P8.2–P8.5       | IN PROGRESS | VS Code and Vim restart fixtures pass, including bounded automatic recovery; IntelliJ unexpected-exit/restart evidence is still open.                                                                                                                                                  |
 | P8.10 | Two-release legacy soak and migration rollback                  | P7.7, P8.2–P8.9 | OPEN        | After promotion, publish mismatch reporting and rollback instructions, keep legacy selectable for two stable releases, then audit before removal.                                                                                                                                      |
 
@@ -185,6 +185,9 @@ atomic slices, each with focused and aggregate tests:
 13. LSP overload ranking now models the bounded C integer-promotion path: `char`, `short`,
     and `_Bool` arguments prefer an exact `int` overload before `long` or `double`, while
     wider scalar conversions remain conservative tooling hints and host C remains authoritative.
+14. Pointer matching now distinguishes pointer and array layers: one-dimensional arrays
+    decay to compatible pointers, object pointers may match `void*`, incompatible pointer
+    bases/depths fail closed, and existing function-pointer/member-receiver tests remain green.
 
 The latest aggregate result is green with 104/104 grammar parses. The current worktree
 also contains unrelated Raylib example changes; they are intentionally not part of this
@@ -192,10 +195,10 @@ frontend ledger or its commits.
 
 ## Immediate queue
 
-1. **P8.8.4:** define and implement the positive/negative matrix for array/function decay,
-   pointer compatibility, and member receiver conversions.
-2. **P8.8.7:** expose ownership/access annotations consistently through the semantic index
+1. **P8.8.7:** expose ownership/access annotations consistently through the semantic index
    and LSP responses without turning advisory metadata into enforcement.
-4. **P8.5/P8.9:** add the real IntelliJ interactive startup/restart evidence.
-5. **P7.7/P8.10:** do not promote or delete legacy code until the above evidence and the
+2. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
+   compiler contracts are explicit; preserve conservative diagnostics otherwise.
+3. **P8.5/P8.9:** add the real IntelliJ interactive startup/restart evidence.
+4. **P7.7/P8.10:** do not promote or delete legacy code until the above evidence and the
    two-release rollback policy are recorded.
