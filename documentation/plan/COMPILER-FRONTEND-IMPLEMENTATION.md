@@ -1,6 +1,6 @@
 # Compiler Frontend Migration Follow-up
 
-This is the implementation checklist for [`COMPILER-FRONTEND-ARCHITECTURE.md`](COMPILER-FRONTEND-ARCHITECTURE.md). Statuses describe repository work, not promises. A phase advances only when its acceptance checks pass; the legacy compiler remains the default until Phase 7 promotion.
+This is the implementation checklist for [`COMPILER-FRONTEND-ARCHITECTURE.md`](COMPILER-FRONTEND-ARCHITECTURE.md). Statuses describe repository work, not promises. A phase advances only when its acceptance checks pass; compilation commands now use AST-first `AUTO` selection with the legacy compiler retained as a compatibility fallback until promotion and soak gates close.
 
 > **Planning first:** use [`COMPILER-FRONTEND-SUBPROJECT-FOLLOWUP.md`](COMPILER-FRONTEND-SUBPROJECT-FOLLOWUP.md) for the ordered phase/subphase plan, dependencies, exit gates, and current execution queue. This document is the detailed case ledger and evidence record.
 
@@ -18,7 +18,7 @@ The prior checklist mixed code tasks with local, CI, specification, and release-
 
 Specification changes are not an automatic response to a failing test. First classify the failure as (a) implementation defect against an existing normative rule, (b) genuinely ambiguous/conflicting spec text, or (c) an explicitly unsupported prototype slice. Only (b) warrants changing normative language; (c) must be reported as unsupported, not silently excluded from the final conformance inventory. Keep prototype capability notes in sync, but do not repeatedly expand the language contract to fit implementation behavior. For AST-only syntax, use normative expected-output, diagnostic, source-map, and C compile/run tests; do not force the legacy frontend to accept it merely to create a differential test. The overlap corpus is retired slice-by-slice after AST promotion, while the full specification-driven tests remain.
 
-Phase work is reported against its gate ID and evidence class. Do not start unrelated IDE polish while a compiler gate is active; Phase 8 editor migration has its own bounded acceptance checks. The legacy compiler remains production-authoritative throughout Phases 1–8.
+Phase work is reported against its gate ID and evidence class. Do not start unrelated IDE polish while a compiler gate is active; Phase 8 editor migration has its own bounded acceptance checks. The legacy compiler remains retained and selectable throughout Phases 1–8, while `AUTO` attempts the AST frontend first.
 
 ## Finite implementation case ledger
 

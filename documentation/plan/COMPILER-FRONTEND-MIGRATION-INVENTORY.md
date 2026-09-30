@@ -2,8 +2,9 @@
 
 This inventory is the C5 migration boundary. It names every production entry point
 that still depends on the textual compiler and the AST replacement that must become
-authoritative before that entry point is retired. The legacy implementation remains
-the default and is a supported rollback path throughout phases 1–8. Removing a
+authoritative before that entry point is retired. The AST-first `AUTO` mode is now
+the default compilation path; the legacy implementation remains a supported
+fallback and rollback path throughout phases 1–8. Removing a
 scanner or textual lowerer is a later promotion/retirement decision, not a
 prerequisite for this migration.
 
@@ -18,8 +19,10 @@ cpc compile source.cp --frontend=tree-sitter -o build/source
 cpc run source.cp --frontend=legacy
 ```
 
-`legacy` is the default. Tree-sitter failures are mapped to the original C-plus
-span and stop before C compilation. The selector is intentionally at the whole
+`AUTO` is the default for compilation commands: Tree-sitter is attempted first and
+legacy remains the compatibility fallback. Tree-sitter failures are mapped to the original C-plus
+span; `AUTO` retries legacy before C compilation, while explicit Tree-sitter mode
+stops on the mapped failure. The selector is intentionally at the whole
 compilation boundary first. Inside the AST prototype, `TreeSitterPassSelection`
 also records the runtime pass IDs that actually ran and allows focused rollback
 tests to disable one pass; it does not yet pretend that a legacy implementation is
@@ -37,7 +40,7 @@ behavior explicit.
 | Entry point                      | Current owner                                    | AST replacement                                           | Status / retirement gate                                                                    |
 |----------------------------------|--------------------------------------------------|-----------------------------------------------------------|---------------------------------------------------------------------------------------------|
 | `ComptimeCompiler.compile`       | `compiler/Comptime.kt` textual scanner/evaluator | `TreeSitterCPlusPrototypeTranspiler` comptime passes      | AST path is selectable; retire after fixed-point and import differential (`CF-16`, `CF-17`) |
-| `CPlusTranspiler.transpile`      | legacy comptime plus textual runtime lowerers    | prototype AST pipeline plus mapped C emitter              | legacy default; compare through `CF-14`, then migrate per pass                              |
+| `CPlusTranspiler.transpile`      | legacy comptime plus textual runtime lowerers    | prototype AST pipeline plus mapped C emitter              | AST-first `AUTO` with legacy fallback; compare through `CF-14`, then migrate per pass       |
 | `CPlusTranspiler.transpileTests` | textual test discovery/harness extraction        | `CPlusTestExtractionPass` plus AST-lowered fixture bridge | runtime AST extraction exists; test CLI migration is `SP44-03`                              |
 | `StructTypeCollector`            | textual struct-name discovery                    | `CPlusSemanticAnalyzer` / AST symbol index                | replacement exists for AST path; remove only after receiver differential                    |
 | `MethodCallLowerer`              | masked-text receiver rewrite                     | `CPlusMethodCallLoweringPass`                             | AST replacement covered by overlap fixtures; retirement is `CF-19`                          |

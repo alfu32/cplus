@@ -1,6 +1,6 @@
 # Compiler Frontend Migration — Subproject Follow-up
 
-This file turns the open rows in [`COMPILER-FRONTEND-IMPLEMENTATION.md`](COMPILER-FRONTEND-IMPLEMENTATION.md) into executable subprojects. The legacy frontend remains the production path until the relevant migration gates close. A subproject is complete only when its listed acceptance evidence exists; implementation code alone is not completion evidence.
+This file turns the open rows in [`COMPILER-FRONTEND-IMPLEMENTATION.md`](COMPILER-FRONTEND-IMPLEMENTATION.md) into executable subprojects. Compilation now uses AST-first `AUTO` selection, while the legacy frontend remains the production fallback and explicit rollback path until the relevant migration gates close. A subproject is complete only when its listed acceptance evidence exists; implementation code alone is not completion evidence.
 
 The active remaining-work breakdown is maintained separately in [`COMPILER-FRONTEND-CLOSURE-SUBPROJECT.md`](COMPILER-FRONTEND-CLOSURE-SUBPROJECT.md). That file is the execution board for the current open-task subproject; this file retains the phase-level portfolio, historical evidence, and migration follow-up log.
 
