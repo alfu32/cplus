@@ -469,6 +469,30 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun doesNotInferReceiverFromKnownWrongCallArity() {
+        val uri = "file:///wrong-return-arity.cp"
+        val source = "typedef struct box_t { int value; } box_t;\n" +
+            "box_t make(int value) { box_t box; return box; }\n" +
+            "int main(void) { return make(1, 2).value; }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val dotPosition = source.lines()[2].lastIndexOf('.') + 1
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$dotPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":{\"isIncomplete\":false,\"items\":[]}"), response)
+    }
+
+    @Test
     fun resolvesAnArrayArgumentAgainstAPointerOverload() {
         val uri = "file:///overload-arrays.cp"
         val source = "int choose(int* values) { return values[0]; }\n" +

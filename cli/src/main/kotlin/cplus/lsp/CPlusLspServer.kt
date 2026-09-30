@@ -1083,11 +1083,14 @@ class CPlusLspServer(
         arguments: List<String>
     ): LspSymbol? {
         if (candidates.isEmpty()) return null
-        return candidates.sortedWith(compareBy<LspSymbol> {
+        val knownArity = candidates.mapNotNull(::callParameterArity)
+        if (knownArity.isNotEmpty() && knownArity.none { it == arguments.size }) return null
+        val ranked = candidates.sortedWith(compareBy<LspSymbol> {
             overloadScore(document, it, arguments)
                 ?: callParameterArity(it)?.let { arity -> 100 + kotlin.math.abs(arity - arguments.size) }
                 ?: Int.MAX_VALUE
-        }.thenBy { it.selection.startOffset }).first()
+        }.thenBy { it.selection.startOffset })
+        return ranked.firstOrNull { callParameterArity(it) == null || callParameterArity(it) == arguments.size }
     }
 
     /** Parse a trailing call, including nested argument expressions. */
