@@ -26,6 +26,112 @@ comptime {
 #define DOOM_FOV (DOOM_PI / 3.0f)
 #define DOOM_MAX_DEPTH 30.0f
 
+
+/* Inline symbolic pixmap system. Packed colors are 0xRRGGBBAA. */
+typedef struct doom_palette_color_t {
+    char index;
+    borrowed const char* name;
+    uint32_t value;
+} doom_palette_color_t;
+
+typedef enum map_sym_type_t {
+    t_wall,
+    t_floor,
+    t_character
+} map_sym_type_t;
+
+typedef struct doom_texture_def_t {
+    char symbol;
+    map_sym_type_t type;
+    borrowed const char* name;
+    borrowed const char* pixels;
+    int width;
+    int height;
+} doom_texture_def_t;
+
+static const doom_palette_color_t DOOM_COLORS[] = {
+    {'r', "red",         0x771100ffu},
+    {'1', "red-up",      0x992211ffu},
+    {'2', "red-down",    0x550000ffu},
+    {'3', "red-high",    0xff3300ffu},
+    {'g', "green",       0x117700ffu},
+    {'5', "green-up",    0x229911ffu},
+    {'6', "green-down",  0x005500ffu},
+    {'=', "grey",        0x7f7f7fffu},
+    {'0', "floor-red",   0x24100cffu},
+    {'d', "floor-dark",  0x474759ffu},
+    {'y', "exit",        0xe0b820ffu},
+    {' ', "transparent", 0x00000000u}
+};
+#define DOOM_COLOR_COUNT ((int)(sizeof(DOOM_COLORS) / sizeof(DOOM_COLORS[0])))
+
+static const char DOOM_TEX_BRICK[] =
+    "111111111111111112111111111111111112\n"
+    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
+    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
+    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
+    "222222222222222222222222222222222222\n"
+    "111111112211111112111111112211111112\n"
+    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr\n"
+    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr\n"
+    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr\n"
+    "111111111111111112111111111111111112\n"
+    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
+    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
+    "rrrrrrrrrrrrrrrr12rrrrrrrrrrrrrrrr12\n"
+    "222222222222222222222222222222222222\n"
+    "111111112211111112111111112211111112\n"
+    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr\n"
+    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr\n"
+    "rrrrrrr122rrrrrrrrrrrrrrr122rrrrrrrr";
+
+static const char DOOM_TEX_ENEMY[] =
+    " ===     === \n"
+    "=  ==   ==  =\n"
+    "    =====    \n"
+    "  ========  \n"
+    "  ==g=r=g==  \n"
+    "  ====r====  \n"
+    "  =========  \n"
+    "  ==rrrrr==  \n"
+    "  ==rrrrr==  \n"
+    "   =======   \n"
+    "======r======\n"
+    "== ===r=== ==\n"
+    "== ======= ==\n"
+    "== ===r=== ==\n"
+    "== ======= ==\n"
+    "== ===r=== ==\n"
+    "== ======= ==\n"
+    "r= === ===  r\n"
+    "   === ===   \n"
+    "   === ===   \n"
+    "   === ===   \n"
+    "   === ===   \n"
+    "   === ===   \n"
+    "   === ===   \n"
+    "  ===   ===  ";
+
+static const char DOOM_TEX_FLOOR[] =
+    "0d0d\n"
+    "d0d0\n"
+    "0d0d\n"
+    "d0d0";
+
+static const char DOOM_TEX_EXIT[] =
+    "yyyy\n"
+    "y==y\n"
+    "y==y\n"
+    "yyyy";
+
+static const doom_texture_def_t DOOM_TEXTURES[] = {
+    {'#', t_wall,      "brick", DOOM_TEX_BRICK, 18, 9},
+    {'E', t_character, "enemy", DOOM_TEX_ENEMY, 13, 19},
+    {'.', t_floor,     "floor", DOOM_TEX_FLOOR, 4, 4},
+    {'X', t_floor,     "exit",  DOOM_TEX_EXIT,  4, 4}
+};
+#define DOOM_TEXTURE_COUNT ((int)(sizeof(DOOM_TEXTURES) / sizeof(DOOM_TEXTURES[0])))
+
 typedef enum doom_event_type_t {
     DOOM_EVENT_KEYBOARD,
     DOOM_EVENT_CLOCK
@@ -54,6 +160,7 @@ typedef struct doom_enemy_t {
     int health;
     bool alive;
     float attack_cooldown;
+    char texture_symbol;
 } doom_enemy_t;
 
 typedef struct doom_level_def_t {
@@ -225,11 +332,55 @@ typedef struct doom_app_t {
         return value;
     }
 
+
+    static pub borrowed const doom_texture_def_t* texture_for(char symbol, map_sym_type_t type) {
+        for (int i = 0; i < DOOM_TEXTURE_COUNT; i++) {
+            if (DOOM_TEXTURES[i].symbol == symbol && DOOM_TEXTURES[i].type == type) return &DOOM_TEXTURES[i];
+        }
+        return NULL;
+    }
+
+    static pub uint32_t palette_value(char index) {
+        for (int i = 0; i < DOOM_COLOR_COUNT; i++) {
+            if (DOOM_COLORS[i].index == index) return DOOM_COLORS[i].value;
+        }
+        return 0xff00ffffu;
+    }
+
+    static pub Color unpack_rgba(uint32_t value) {
+        Color color;
+        color.r = (unsigned char)((value >> 24) & 0xffu);
+        color.g = (unsigned char)((value >> 16) & 0xffu);
+        color.b = (unsigned char)((value >> 8) & 0xffu);
+        color.a = (unsigned char)(value & 0xffu);
+        return color;
+    }
+
+    static pub char texture_pixel(borrowed const doom_texture_def_t* texture, int x, int y) {
+        if (texture == NULL || x < 0 || y < 0 || x >= texture->width || y >= texture->height) return ' ';
+        int stride = texture->width + 1;
+        return texture->pixels[y * stride + x];
+    }
+
+    static pub Color texture_color(borrowed const doom_texture_def_t* texture, int x, int y) {
+        return doom_app_t.unpack_rgba(doom_app_t.palette_value(doom_app_t.texture_pixel(texture, x, y)));
+    }
+
+    static pub int wrap_texel(float unit, int size) {
+        float f = unit - floorf(unit);
+        if (f < 0.0f) f += 1.0f;
+        int result = (int)(f * (float)size);
+        if (result < 0) result = 0;
+        if (result >= size) result = size - 1;
+        return result;
+    }
+
     pub bool solid(borrowed const *self, float x, float y) {
         int ix = (int)floorf(x);
         int iy = (int)floorf(y);
         if (ix < 0 || iy < 0 || ix >= self->map_width || iy >= self->map_height) return true;
-        return self->map[iy][ix] == '#';
+        char symbol = self->map[iy][ix];
+        return doom_app_t.texture_for(symbol, t_wall) != NULL;
     }
 
     pub bool exit_at(borrowed const *self, float x, float y) {
@@ -296,6 +447,7 @@ typedef struct doom_app_t {
                     enemy->health = 2;
                     enemy->alive = true;
                     enemy->attack_cooldown = 0.0f;
+                    enemy->texture_symbol = 'E';
                 }
                 self->map[y][x] = '.';
             } else {
@@ -445,59 +597,146 @@ typedef struct doom_app_t {
         }
     }
 
-    pub float cast_ray(borrowed mut *self, float angle, int screen_x) {
+    pub float cast_ray(borrowed mut *self, float angle, int screen_x, mut float* out_u, mut char* out_symbol) {
         float sin_a = sinf(angle);
         float cos_a = cosf(angle);
         float distance = 0.02f;
+        float hit_x = self->player_x;
+        float hit_y = self->player_y;
+        char symbol = '#';
         while (distance < DOOM_MAX_DEPTH) {
-            float x = self->player_x + cos_a * distance;
-            float y = self->player_y + sin_a * distance;
-            if (doom_app_t.solid(self, x, y)) break;
+            hit_x = self->player_x + cos_a * distance;
+            hit_y = self->player_y + sin_a * distance;
+            int ix = (int)floorf(hit_x);
+            int iy = (int)floorf(hit_y);
+            if (ix < 0 || iy < 0 || ix >= self->map_width || iy >= self->map_height) {
+                symbol = '#';
+                break;
+            }
+            symbol = self->map[iy][ix];
+            if (doom_app_t.texture_for(symbol, t_wall) != NULL) break;
             distance += 0.025f;
         }
+        float fx = hit_x - floorf(hit_x);
+        float fy = hit_y - floorf(hit_y);
+        float edge_x = fminf(fx, 1.0f - fx);
+        float edge_y = fminf(fy, 1.0f - fy);
+        float u = edge_x < edge_y ? fy : fx;
+        if (out_u != NULL) *out_u = u;
+        if (out_symbol != NULL) *out_symbol = symbol;
         float corrected = distance * cosf(angle - self->player_angle);
         if (corrected < 0.03f) corrected = 0.03f;
         if (screen_x >= 0 && screen_x < DOOM_SCREEN_WIDTH) self->zbuffer[screen_x] = corrected;
         return corrected;
     }
 
+    pub void render_floor(borrowed const *self) {
+        int horizon = DOOM_VIEW_HEIGHT / 2;
+        for (int y = horizon + 1; y < DOOM_VIEW_HEIGHT; y += 2) {
+            float corrected_distance = ((float)DOOM_VIEW_HEIGHT * 0.5f) / (float)(y - horizon);
+            for (int x = 0; x < DOOM_SCREEN_WIDTH; x += 2) {
+                float camera = ((float)x / (float)DOOM_SCREEN_WIDTH) - 0.5f;
+                float angle = self->player_angle + camera * DOOM_FOV;
+                float ray_distance = corrected_distance / cosf(angle - self->player_angle);
+                float wx = self->player_x + cosf(angle) * ray_distance;
+                float wy = self->player_y + sinf(angle) * ray_distance;
+                int mx = (int)floorf(wx);
+                int my = (int)floorf(wy);
+                char symbol = '.';
+                if (mx >= 0 && my >= 0 && mx < self->map_width && my < self->map_height) symbol = self->map[my][mx];
+                borrowed const doom_texture_def_t* texture = doom_app_t.texture_for(symbol, t_floor);
+                if (texture == NULL) texture = doom_app_t.texture_for('.', t_floor);
+                int tx = doom_app_t.wrap_texel(wx, texture->width);
+                int ty = doom_app_t.wrap_texel(wy, texture->height);
+                Color color = doom_app_t.texture_color(texture, tx, ty);
+                float shade = 1.0f / (1.0f + corrected_distance * 0.08f);
+                if (shade < 0.22f) shade = 0.22f;
+                color.r = (unsigned char)((float)color.r * shade);
+                color.g = (unsigned char)((float)color.g * shade);
+                color.b = (unsigned char)((float)color.b * shade);
+                DrawRectangle(x, y, 2, 2, color);
+            }
+        }
+    }
+
+    pub void render_character_texture(
+        borrowed mut *self,
+        borrowed const doom_texture_def_t* texture,
+        float world_x,
+        float world_y
+    ) {
+        if (texture == NULL) return;
+        float dx = world_x - self->player_x;
+        float dy = world_y - self->player_y;
+        float distance = sqrtf(dx * dx + dy * dy);
+        float relative = doom_app_t.normalize_angle(atan2f(dy, dx) - self->player_angle);
+        if (fabsf(relative) >= DOOM_FOV * 0.62f || distance < 0.1f) return;
+        float corrected = distance * cosf(relative);
+        int center_x = (int)((0.5f + relative / DOOM_FOV) * DOOM_SCREEN_WIDTH);
+        int sprite_height = (int)(DOOM_VIEW_HEIGHT / corrected * 0.92f);
+        if (sprite_height > 420) sprite_height = 420;
+        int sprite_width = sprite_height * texture->width / texture->height;
+        if (sprite_width < 1) sprite_width = 1;
+        int left = center_x - sprite_width / 2;
+        int top = DOOM_VIEW_HEIGHT / 2 - sprite_height / 2;
+        int virtual_px_w = sprite_width / texture->width;
+        int virtual_px_h = sprite_height / texture->height;
+        if (virtual_px_w < 1) virtual_px_w = 1;
+        if (virtual_px_h < 1) virtual_px_h = 1;
+        for (int ty = 0; ty < texture->height; ty++) {
+            for (int tx = 0; tx < texture->width; tx++) {
+                Color color = doom_app_t.texture_color(texture, tx, ty);
+                if (color.a == 0) continue;
+                int sx = left + tx * sprite_width / texture->width;
+                int sy = top + ty * sprite_height / texture->height;
+                int sw = (tx + 1) * sprite_width / texture->width - tx * sprite_width / texture->width;
+                int sh = (ty + 1) * sprite_height / texture->height - ty * sprite_height / texture->height;
+                if (sw < 1) sw = virtual_px_w;
+                if (sh < 1) sh = virtual_px_h;
+                int probe_x = sx + sw / 2;
+                if (probe_x < 0 || probe_x >= DOOM_SCREEN_WIDTH) continue;
+                if (corrected >= self->zbuffer[probe_x]) continue;
+                DrawRectangle(sx, sy, sw, sh, color);
+            }
+        }
+    }
+
     pub void render_world(borrowed mut *self) {
         DrawRectangle(0, 0, DOOM_SCREEN_WIDTH, DOOM_VIEW_HEIGHT / 2, (Color){38, 42, 52, 255});
-        DrawRectangle(0, DOOM_VIEW_HEIGHT / 2, DOOM_SCREEN_WIDTH, DOOM_VIEW_HEIGHT / 2, (Color){42, 34, 30, 255});
+        doom_app_t.render_floor(self);
         for (int x = 0; x < DOOM_SCREEN_WIDTH; x += 2) {
             float camera = ((float)x / (float)DOOM_SCREEN_WIDTH) - 0.5f;
             float angle = self->player_angle + camera * DOOM_FOV;
-            float distance = doom_app_t.cast_ray(self, angle, x);
+            float hit_u = 0.0f;
+            char wall_symbol = '#';
+            float distance = doom_app_t.cast_ray(self, angle, x, &hit_u, &wall_symbol);
             if (x + 1 < DOOM_SCREEN_WIDTH) self->zbuffer[x + 1] = distance;
+            borrowed const doom_texture_def_t* texture = doom_app_t.texture_for(wall_symbol, t_wall);
+            if (texture == NULL) texture = doom_app_t.texture_for('#', t_wall);
             int wall_height = (int)(DOOM_VIEW_HEIGHT / distance);
             if (wall_height > DOOM_VIEW_HEIGHT * 2) wall_height = DOOM_VIEW_HEIGHT * 2;
             int top = DOOM_VIEW_HEIGHT / 2 - wall_height / 2;
-            int shade = (int)(225.0f / (1.0f + distance * 0.12f));
-            if (shade < 35) shade = 35;
-            Color wall = {(unsigned char)shade, (unsigned char)(shade * 0.28f), (unsigned char)(shade * 0.22f), 255};
-            DrawRectangle(x, top, 2, wall_height, wall);
+            int tx = doom_app_t.wrap_texel(hit_u, texture->width);
+            float shade = 1.0f / (1.0f + distance * 0.10f);
+            if (shade < 0.25f) shade = 0.25f;
+            for (int sy = 0; sy < wall_height; sy += 2) {
+                int screen_y = top + sy;
+                if (screen_y < 0 || screen_y >= DOOM_VIEW_HEIGHT) continue;
+                int ty = (int)((float)sy / (float)wall_height * (float)texture->height);
+                if (ty >= texture->height) ty = texture->height - 1;
+                Color color = doom_app_t.texture_color(texture, tx, ty);
+                color.r = (unsigned char)((float)color.r * shade);
+                color.g = (unsigned char)((float)color.g * shade);
+                color.b = (unsigned char)((float)color.b * shade);
+                DrawRectangle(x, screen_y, 2, 2, color);
+            }
         }
 
         for (int i = 0; i < self->enemy_count; i++) {
             doom_enemy_t* enemy = &self->enemies[i];
             if (!enemy->alive) continue;
-            float dx = enemy->x - self->player_x;
-            float dy = enemy->y - self->player_y;
-            float distance = sqrtf(dx * dx + dy * dy);
-            float relative = doom_app_t.normalize_angle(atan2f(dy, dx) - self->player_angle);
-            if (fabsf(relative) >= DOOM_FOV * 0.62f || distance < 0.1f) continue;
-            float corrected = distance * cosf(relative);
-            int center_x = (int)((0.5f + relative / DOOM_FOV) * DOOM_SCREEN_WIDTH);
-            if (center_x < 0 || center_x >= DOOM_SCREEN_WIDTH) continue;
-            if (corrected >= self->zbuffer[center_x]) continue;
-            int size = (int)(DOOM_VIEW_HEIGHT / corrected * 0.72f);
-            if (size > 360) size = 360;
-            int x = center_x - size / 2;
-            int y = DOOM_VIEW_HEIGHT / 2 - size / 2;
-            DrawRectangle(x, y, size, size, (Color){126, 22, 20, 255});
-            DrawCircle(center_x - size / 5, y + size / 3, size / 14.0f, YELLOW);
-            DrawCircle(center_x + size / 5, y + size / 3, size / 14.0f, YELLOW);
-            DrawRectangle(center_x - size / 5, y + (size * 2) / 3, (size * 2) / 5, size / 12, BLACK);
+            borrowed const doom_texture_def_t* texture = doom_app_t.texture_for(enemy->texture_symbol, t_character);
+            doom_app_t.render_character_texture(self, texture, enemy->x, enemy->y);
         }
 
         DrawRectangle(DOOM_SCREEN_WIDTH / 2 - 9, DOOM_VIEW_HEIGHT / 2, 18, 2, RAYWHITE);
@@ -582,12 +821,21 @@ typedef struct doom_app_t {
     app.player_y = 1.5f;
     app.player_angle = 0.0f;
     app.enemy_count = 1;
-    app.enemies[0] = (doom_enemy_t){3.5f, 1.5f, 1, true, 0.0f};
+    app.enemies[0] = (doom_enemy_t){3.5f, 1.5f, 1, true, 0.0f, 'E'};
     app.map[1][2] = '.';
     app.map[1][3] = '.';
     int ammo = app.ammo;
     app.fire();
     @assert(!(app.enemies[0].alive || app.score != 100 || app.ammo != ammo - 1));
+
+    borrowed const doom_texture_def_t* brick = doom_app_t.texture_for('#', t_wall);
+    borrowed const doom_texture_def_t* enemy_texture = doom_app_t.texture_for('E', t_character);
+    borrowed const doom_texture_def_t* floor_texture = doom_app_t.texture_for('.', t_floor);
+    @assert(!(brick == NULL || brick->width != 18 || brick->height != 9));
+    @assert(!(enemy_texture == NULL || enemy_texture->width != 13 || enemy_texture->height != 19));
+    @assert(!(floor_texture == NULL || floor_texture->width != 4 || floor_texture->height != 4));
+    Color transparent = doom_app_t.unpack_rgba(doom_app_t.palette_value(' '));
+    @assert(!(transparent.a != 0));
 
     for (int i = 0; i < DOOM_LEVEL_COUNT; i++) {
         @assert(!(!app.load_level(i) || app.map_width < 10 || app.map_height < 10));
