@@ -1,5 +1,6 @@
 package cplus.intellij
 
+import com.intellij.util.xmlb.XmlSerializer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -112,6 +113,26 @@ class CPlusSettingsTest {
 
         assertEquals("CC=gcc\nCPLUS_TRACE=1", settings.current().environment)
         assertEquals(settings.current(), settings.getState())
+    }
+
+    @Test
+    fun persistsSettingsThroughIntellijXmlStateSerialization() {
+        val settings = CPlusSettings()
+        settings.update(
+            compiler = "/opt/cpc compile",
+            runner = "cd project; cpc run",
+            program = "cpc test",
+            parser = "cpc parse",
+            importGraph = "cpc graph",
+            languageServer = "cpc lsp",
+            environment = "CC=clang\nCPLUS_TRACE=1"
+        )
+
+        val serialized = XmlSerializer.serialize(settings.getState())
+        val restored = CPlusSettings()
+        restored.loadState(XmlSerializer.deserialize(serialized, CPlusSettings.State::class.java))
+
+        assertEquals(settings.current(), restored.current())
     }
 
     @Test
