@@ -1071,6 +1071,41 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesParenthesizedAddressAndDereferenceReceivers() {
+        val uri = "file:///parenthesized-receivers.cp"
+        val source = "typedef struct box_t {\n" +
+            "    int value;\n" +
+            "} box_t;\n" +
+            "int main(void) {\n" +
+            "    box_t box;\n" +
+            "    box_t* pointer = &box;\n" +
+            "    return (&box).value + (*pointer).value;\n" +
+            "}\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val line = source.lines()[6]
+        val firstPosition = line.indexOf("(&box).") + "(&box).".length
+        val secondPosition = line.indexOf("(*pointer).") + "(*pointer).".length
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":6,\"character\":$firstPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":6,\"character\":$secondPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":{\"isIncomplete\":false"), response)
+        assertTrue(response.contains("\"id\":3,\"result\":{\"isIncomplete\":false"), response)
+        assertTrue(response.contains("\"label\":\"value\""), response)
+    }
+
+    @Test
     fun resolvesMethodReturnReceiversForChainedMemberCompletion() {
         val uri = "file:///method-return-receiver.cp"
         val source = "typedef struct inner_t {\n" +

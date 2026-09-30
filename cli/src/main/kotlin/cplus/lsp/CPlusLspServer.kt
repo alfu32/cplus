@@ -1107,15 +1107,19 @@ class CPlusLspServer(
 
     private fun receiverAccess(document: LspDocument, offset: Int): ReceiverAccess? {
         val prefix = document.snapshot.text.substring(0, offset)
-        val match = Regex(
-            "([A-Za-z_][A-Za-z0-9_]*(?:(?:\\s*(?:->|\\.)\\s*[A-Za-z_][A-Za-z0-9_]*)|(?:\\s*\\([^()]*\\)))*)\\s*(->|\\.)\\s*$"
+        val explicitReceiverMatch = Regex(
+            "(\\((?:&|\\*)[A-Za-z_][A-Za-z0-9_]*\\))\\s*(->|\\.)\\s*$"
+        ).find(prefix)
+        val match = explicitReceiverMatch ?: Regex(
+            "((?:[A-Za-z_][A-Za-z0-9_]*|\\([^\\n]*\\))(?:(?:\\s*(?:->|\\.)\\s*[A-Za-z_][A-Za-z0-9_]*)|(?:\\s*\\([^()]*\\)))*)\\s*(->|\\.)\\s*$"
         ).find(prefix) ?: return null
         val receiver = match.groupValues[1].trim()
         val operator = match.groupValues[2]
         val declared = receiverValue(document, receiver, offset)
+        val explicitAddressReceiver = receiver.startsWith("(&") && receiver.endsWith(")")
         val operatorMatches = when (operator) {
             "->" -> declared?.pointerDepth ?: 0 > 0
-            "." -> declared?.pointerDepth == 0 && declared.arrayDepth == 0
+            "." -> (declared?.pointerDepth == 0 && declared.arrayDepth == 0) || explicitAddressReceiver
             else -> false
         }
         return ReceiverAccess(
@@ -1127,6 +1131,21 @@ class CPlusLspServer(
     /** Resolve the declared value type of an identifier or a previously selected field. */
     private fun receiverValue(document: LspDocument, expression: String, offset: Int): DeclaredType? {
         val value = expression.trim()
+        if (value.length >= 2 && value.first() == '(' && value.last() == ')' &&
+            matchingOuterParentheses(value)
+        ) {
+            return receiverValue(document, value.substring(1, value.length - 1), offset)
+        }
+        if (value.startsWith("&")) {
+            return receiverValue(document, value.substring(1), offset)?.let {
+                it.copy(pointerDepth = it.pointerDepth + 1)
+            }
+        }
+        if (value.startsWith("*")) {
+            return receiverValue(document, value.substring(1), offset)?.takeIf { it.pointerDepth > 0 }?.let {
+                it.copy(pointerDepth = it.pointerDepth - 1)
+            }
+        }
         if (value == "self") {
             val owner = document.symbols
                 .asSequence()
