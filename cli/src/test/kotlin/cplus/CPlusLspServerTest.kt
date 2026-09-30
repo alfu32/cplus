@@ -602,6 +602,33 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun failsClosedForAmbiguousOverloadedFunctionReturnReceivers() {
+        val uri = "file:///ambiguous-return-receiver.cp"
+        val source = "typedef struct int_box_t { int value; } int_box_t;\n" +
+            "typedef struct text_box_t { char* text; } text_box_t;\n" +
+            "int_box_t make(long value) { int_box_t box; return box; }\n" +
+            "text_box_t make(long value) { text_box_t box; return box; }\n" +
+            "int main(void) { return make(1).; }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val line = source.lines()[4]
+        val position = line.indexOf("make(1).") + "make(1).".length
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":4,\"character\":$position}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":{\"isIncomplete\":false,\"items\":[]}"), response)
+    }
+
+    @Test
     fun doesNotInferReceiverFromKnownWrongCallArity() {
         val uri = "file:///wrong-return-arity.cp"
         val source = "typedef struct box_t { int value; } box_t;\n" +

@@ -1196,7 +1196,19 @@ class CPlusLspServer(
                 ?: callParameterArity(it)?.let { arity -> 100 + kotlin.math.abs(arity - arguments.size) }
                 ?: Int.MAX_VALUE
         }.thenBy { it.selection.startOffset })
-        return ranked.firstOrNull { callParameterArity(it) == null || callParameterArity(it) == arguments.size }
+        val matching = ranked.filter { callParameterArity(it) == null || callParameterArity(it) == arguments.size }
+        if (matching.size > 1) {
+            val firstScore = overloadScore(document, matching[0], arguments)
+                ?: callParameterArity(matching[0])?.let { arity -> 100 + kotlin.math.abs(arity - arguments.size) }
+            val secondScore = overloadScore(document, matching[1], arguments)
+                ?: callParameterArity(matching[1])?.let { arity -> 100 + kotlin.math.abs(arity - arguments.size) }
+            if (firstScore != null && firstScore == secondScore &&
+                matching[0].selection.startOffset != matching[1].selection.startOffset
+            ) {
+                return null
+            }
+        }
+        return matching.firstOrNull()
     }
 
     /** Parse a trailing call, including nested argument expressions. */
