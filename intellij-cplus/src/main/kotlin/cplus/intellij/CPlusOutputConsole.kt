@@ -35,7 +35,11 @@ internal object CPlusOutputConsole {
         content?.let {
             it.displayName = title
             contentManager.setSelectedContent(it)
-        } ?: contentManager.addContent(content(console, title).also(contentManager::setSelectedContent))
+        } ?: run {
+            val newContent = content(console, title)
+            contentManager.addContent(newContent)
+            contentManager.setSelectedContent(newContent)
+        }
         console.clear()
         val commandText = command.joinToString(" ")
         console.print("> $commandText\n\n", ConsoleViewContentType.SYSTEM_OUTPUT)
