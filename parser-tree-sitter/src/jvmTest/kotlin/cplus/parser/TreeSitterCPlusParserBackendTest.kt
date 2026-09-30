@@ -9533,6 +9533,13 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
             result.synthesizedMemberHandles.map { it.symbol.name },
             generated.synthesizedMemberHandles.map { it.symbol.name }
         )
+        val revisedSource = sources.open(SourceId.named(name), text.replace("42", "43"))
+        val revised = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(revisedSource)
+        assertTrue(revised.successful, "revised generic struct should remain valid: ${revised.loweringDiagnostics}")
+        assertEquals(
+            result.synthesizedMemberHandles.map { it.stableId },
+            revised.synthesizedMemberHandles.map { it.stableId }
+        )
         val mappedText = result.cSource ?: error("successful comptime type materialization must retain mapped source")
         val structureOffset = mappedText.text.indexOf("struct box__int_box_t")
         assertEquals(text.indexOf("struct box"), mappedText.originAt(structureOffset)?.offset)

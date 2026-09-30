@@ -62,6 +62,24 @@ data class CPlusSynthesizedMember(
     val sourceSpan: SourceSpan,
     val mappedText: MappedText
 ) {
+    /**
+     * Revision-stable identity for tooling caches. It intentionally excludes generated
+     * offsets and declaration text, so edits elsewhere or body changes do not invalidate
+     * a member identity; overload parameters keep same-named methods distinct.
+     */
+    val stableId: String
+        get() = buildString {
+            append("cplus-member:")
+            append(sourceSpan.file.orEmpty())
+            append(':').append(ownerType)
+            append(':').append(symbol.kind)
+            append(':').append(symbol.name)
+            symbol.parameters.forEach { parameter ->
+                append(':').append(parameter.typeName.orEmpty())
+                append(':').append(parameter.declaratorLayers.joinToString("."))
+            }
+        }
+
     val ownership: AllocationOwnership
         get() = symbol.annotations.asSequence()
             .map {
