@@ -682,15 +682,16 @@ class CPlusLspServer(
 
     private fun symbolAt(request: Json.Object): LspSymbol? {
         val document = request.uri()?.let(readDocuments()::get) ?: return null
-        document.symbolAt(request.position())?.let { return it }
+        val direct = document.symbolAt(request.position())
         val word = document.wordAt(request.position())
         if (word.isEmpty()) return null
         val offset = document.snapshot.offsetAt(request.position()) ?: return null
+        val callArguments = callArguments(document.snapshot.text, offset)
+        if (direct != null && callArguments == null) return direct
         val candidates = visibleSymbols(document)
             .filter { it.name == word }
             .toList()
         val callArity = callArity(document.snapshot.text, offset)
-        val callArguments = callArguments(document.snapshot.text, offset)
         val orderedCandidates = if (callArity == null) candidates else {
             candidates.sortedWith(compareBy<LspSymbol> {
                 overloadScore(document, it, callArguments)
@@ -698,15 +699,16 @@ class CPlusLspServer(
                     ?: Int.MAX_VALUE
             }.thenBy { it.selection.startOffset })
         }
-        val receiverCandidates = receiverType(document, offset)?.let { receiverType ->
+        val receiverTypeName = receiverType(document, offset)
+        val receiverCandidates = receiverTypeName?.let { receiverType ->
             val resolvedReceiver = resolveTypeAlias(receiverType)
             orderedCandidates.filter {
                 it.ownerName?.let(::resolveTypeAlias) == resolvedReceiver
             }
-        } ?: orderedCandidates
+        } ?: orderedCandidates.filter { it.ownerName == null }
         if (callArguments != null && isAmbiguousCallable(document, receiverCandidates, callArguments)) return null
-        receiverCandidates.firstOrNull { it.ownerName != null }?.let { return it }
-        val scopedCandidates = orderedCandidates
+        if (receiverTypeName != null) receiverCandidates.firstOrNull()?.let { return it }
+        val scopedCandidates = receiverCandidates
             .filter { it.uri == document.uri && it.scope.contains(offset) }
         if (scopedCandidates.isNotEmpty()) {
             return if (callArguments != null) {
@@ -718,12 +720,12 @@ class CPlusLspServer(
                 )
             }
         }
-        val precedingCandidates = orderedCandidates
+        val precedingCandidates = receiverCandidates
             .filter { it.uri == document.uri && it.selection.startOffset <= offset }
         return if (callArguments != null) precedingCandidates.firstOrNull()
-            ?: orderedCandidates.firstOrNull()
+            ?: receiverCandidates.firstOrNull()
         else precedingCandidates.maxByOrNull { it.selection.startOffset }
-            ?: orderedCandidates.firstOrNull()
+            ?: receiverCandidates.firstOrNull()
     }
 
     private fun isAmbiguousCallable(
