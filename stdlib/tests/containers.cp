@@ -159,15 +159,6 @@ comptime int expected_answer = 42;
     @assert(values.capacity() == 0);
 }
 
-@test "dynamic list add accepts scalar values" {
-    int_list_t values;
-    @assert(values.init() == 0);
-    @assert(values.add(7) == 0);
-    @assert(values.size() == 1);
-    @assert(*values.get(0) == 7);
-    values.destroy();
-}
-
 @test "dynamic list stores pointer elements" {
     string_list_t values;
     cstring_t text = "borrowed string";
@@ -198,6 +189,17 @@ comptime int expected_answer = 42;
     @assert(scores.empty());
     scores.destroy();
     @assert(scores.capacity() == 0);
+}
+
+@test "dynamic list add accepts values directly" {
+    int_list_t values;
+    @assert(values.init() == 0);
+    @assert(values.add(7) == 0);
+    @assert(values.add(11) == 0);
+    @assert(values.size() == 2);
+    @assert(*values.get(0) == 7);
+    @assert(*values.get(1) == 11);
+    values.destroy();
 }
 
 @test "generic mapper materializes a result list" {

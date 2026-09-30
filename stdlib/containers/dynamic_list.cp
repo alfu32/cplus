@@ -31,23 +31,6 @@ comptime import "stdlib:/memory/xmem.cp";
             return 0;
         }
 
-        pub int add(borrowed mut *self, const T value) {
-            // `T` is a by-value generic parameter and may be an aggregate or scalar;
-            // it cannot be compared to NULL. Pointer-valued elements may still store
-            // NULL intentionally, while `push` validates its separate item pointer.
-            if (self == NULL || !self->initialized) return 1;
-            if (self->length == self->capacity) {
-                if (self->capacity > ((size_t)-1) / 2) return 1;
-                size_t next_capacity = self->capacity == 0 ? 4 : self->capacity * 2;
-                if (next_capacity > ((size_t)-1) / sizeof(T)) return 1;
-                T* resized = realloc_warm(self->items, next_capacity * sizeof(T));
-                if (resized == NULL) return 1;
-                self->items = resized;
-                self->capacity = next_capacity;
-            }
-            self->items[self->length++] = value;
-            return 0;
-        }
         pub int push(borrowed mut *self, borrowed const T* value) {
             if (self == NULL || !self->initialized || value == NULL) return 1;
             if (self->length == self->capacity) {
@@ -60,6 +43,23 @@ comptime import "stdlib:/memory/xmem.cp";
                 self->capacity = next_capacity;
             }
             self->items[self->length++] = *value;
+            return 0;
+        }
+
+        // Value-semantic convenience wrapper. Equivalent to push(&value), but lets
+        // callers add an already-created T directly (especially useful for pointer T).
+        pub int add(borrowed mut *self, const T value) {
+            if (self == NULL || !self->initialized) return 1;
+            if (self->length == self->capacity) {
+                if (self->capacity > ((size_t)-1) / 2) return 1;
+                size_t next_capacity = self->capacity == 0 ? 4 : self->capacity * 2;
+                if (next_capacity > ((size_t)-1) / sizeof(T)) return 1;
+                T* resized = realloc_warm(self->items, next_capacity * sizeof(T));
+                if (resized == NULL) return 1;
+                self->items = resized;
+                self->capacity = next_capacity;
+            }
+            self->items[self->length++] = value;
             return 0;
         }
 
