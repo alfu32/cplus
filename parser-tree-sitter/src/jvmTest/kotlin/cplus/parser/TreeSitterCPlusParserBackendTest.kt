@@ -6606,6 +6606,29 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
     }
 
     @Test
+    fun astCEmitterIsDeterministicAcrossRepeatedEmission() {
+        val text = "typedef struct sample_t { int value; } sample_t;\n" +
+            "int main(void) { sample_t sample = { .value = 41 }; return sample.value + 1 == 42 ? 0 : 1; }\n"
+        val source = sources.open(SourceId.named("ast-c-emitter-determinism.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val mapped = MappedText.identity(source.sourceFile)
+
+        val first = CPlusAstCEmitter().emit(ast, mapped).source ?: error("first emission missing")
+        val second = CPlusAstCEmitter().emit(ast, mapped).source ?: error("second emission missing")
+
+        assertEquals(first.text, second.text)
+        assertEquals(first.text.length, second.text.length)
+        first.text.indices.forEach { offset ->
+            assertEquals(first.originAt(offset), second.originAt(offset), "origin differs at $offset")
+        }
+        val reparsed = backend.parse(sources.open(SourceId.named("ast-c-emitter-determinism.c"), first.text))
+        assertTrue(reparsed.diagnostics.isEmpty(), reparsed.diagnostics.toString())
+        compileAndRunC(first.text)
+    }
+
+    @Test
     fun astCEmitterRejectsRecoveredSyntaxInsteadOfEmittingPartialC() {
         val source = sources.open(SourceId.named("incomplete-ast-emitter.cp"), "int main( {")
         val parsed = backend.parse(source)
