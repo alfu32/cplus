@@ -302,6 +302,11 @@ The explicit legacy rollback and strict Tree-sitter modes are unchanged. The
 focused selector test passes; the first invocation encountered a transient
 Kotlin incremental classpath failure and the identical rerun passed.
 
+Post-commit aggregate validation of the operator contract passed with
+`./gradlew --offline --no-daemon test --max-workers=1
+-Dorg.gradle.native=false --console=plain` in 4m25s: 307 tests and 104/104
+grammar parses succeeded.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
