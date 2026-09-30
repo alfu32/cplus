@@ -543,7 +543,13 @@ class TreeSitterCPlusPrototypeTranspiler(
         }
 
         allocationAnalysis = if (passSelection.enabled(CPlusFrontendPassIds.VALIDATE_SEMANTICS)) {
-            TreeSitterAllocationIntentAnalyzer().analyze(ast)
+            val analysis = TreeSitterAllocationIntentAnalyzer().analyze(ast)
+            // The analyzer sees the reparsed, revision-suffixed Tree-sitter snapshot. Publish
+            // the original imported/generated source coordinates to CLI and IDE consumers.
+            analysis.copy(
+                symbols = analysis.symbols.map { it.copy(sourceSpan = mapped.toOriginalSpan(it.sourceSpan)) },
+                diagnostics = analysis.diagnostics.map { it.copy(sourceSpan = mapped.toOriginalSpan(it.sourceSpan)) }
+            )
         } else {
             cplus.AllocationAnalysisResult()
         }

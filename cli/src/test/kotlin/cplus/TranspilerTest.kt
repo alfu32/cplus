@@ -87,7 +87,7 @@ class TranspilerTest {
     }
 
     @Test
-    fun cliSelectsTreeSitterCompilationFrontendWithoutChangingTheLegacyDefault() {
+    fun cliSelectsTreeSitterCompilationFrontendAndRetainsExplicitLegacyRollback() {
         val directory = Files.createTempDirectory("cplus-frontend-selector")
         try {
             val source = directory.resolve("counter.cp")
@@ -106,6 +106,14 @@ class TranspilerTest {
                 """.trimIndent()
             )
 
+            val defaultOutput = directory.resolve("counter.default.c")
+            val defaultErrors = StringBuilder()
+            val defaultStatus = CPlusCli(output = StringBuilder(), errors = defaultErrors).run(
+                listOf("transcode", source.toString(), "-o", defaultOutput.toString())
+            )
+            assertEquals(0, defaultStatus, defaultErrors.toString())
+            assertTrue("counter__get(&counter)" in Files.readString(defaultOutput))
+
             val treeErrors = StringBuilder()
             val treeStatus = CPlusCli(output = StringBuilder(), errors = treeErrors).run(
                 listOf("transcode", source.toString(), "--frontend=tree-sitter", "-o", treeOutput.toString())
@@ -116,7 +124,7 @@ class TranspilerTest {
 
             val legacyOutput = directory.resolve("counter.legacy.c")
             val legacyStatus = CPlusCli(output = StringBuilder(), errors = StringBuilder()).run(
-                listOf("transcode", source.toString(), "-o", legacyOutput.toString())
+                listOf("transcode", source.toString(), "--frontend=legacy", "-o", legacyOutput.toString())
             )
             assertEquals(0, legacyStatus)
             assertTrue("counter__get(&counter)" in Files.readString(legacyOutput))
@@ -1039,7 +1047,11 @@ class TranspilerTest {
 
             val verboseErrors = StringBuilder()
             assertEquals(0, CPlusCli(output = StringBuilder(), errors = verboseErrors).run(listOf("-v2", "transcode", source.toString())))
-            assertTrue("pass: emit-mapped-c" in verboseErrors.toString(), verboseErrors.toString())
+            assertTrue(
+                "pass: tree-sitter-transpile" in verboseErrors.toString() ||
+                    "pass: emit-mapped-c" in verboseErrors.toString(),
+                verboseErrors.toString()
+            )
 
             val fixtureOutput = StringBuilder()
             val fixtureErrors = StringBuilder()

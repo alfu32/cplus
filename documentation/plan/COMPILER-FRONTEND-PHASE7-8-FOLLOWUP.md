@@ -87,13 +87,39 @@ The comments row was initially a coverage hypothesis derived from the generic
 trivia branch, not a reproduced failure. It is now closed as evidence coverage.
 P7.1 is complete for this bounded matrix; cross-host compiler evidence and default
 frontend promotion remain P7.6/P7.7 work rather than new P7.1 cases.
+
+### P7.7 promotion evidence and compatibility boundary
+
+The comment-survival check belongs to P7.1.e; it was planned emitter coverage,
+not an untracked defect. It verifies that comments survive the AST round trip
+without changing token boundaries. Promotion consumes that emitter contract as
+an input and does not create a separate comment feature.
+
+The first default-backend attempt exposed nine CLI regressions. They are recorded
+under this one principal promotion task: six constructs were not yet lowered by
+the AST path, two were diagnostic/pass-name compatibility assertions, and one AST
+output reached the host compiler but did not compile. The compatibility boundary is:
+
+1. `AUTO` (the default) attempts Tree-sitter first.
+2. A lowering failure retries the legacy frontend.
+3. A host compiler failure retries legacy once and preserves the final diagnostics.
+4. Explicit `--frontend=tree-sitter` remains strict and fails closed.
+5. Explicit `--frontend=legacy`, `CPLUS_FRONTEND=legacy`, and
+   `-Dcplus.frontend=legacy` remain rollback paths.
+
+The default is therefore usable while the differential corpus and release soak
+measure whether the fallback can eventually be removed; legacy retirement is not
+being claimed by this local gate.
+
 | P7.3.a | P7.3   | Expose generated aliases, tags, functions, variables, and methods                                             | DONE-LOCAL  | Generic and method handle fixtures                                                   |
 | P7.3.b | P7.3   | Expose synthesized aggregate member handles with mapped spans                                                 | DONE-LOCAL  | Generic struct member fixture                                                        |
 | P7.3.c | P7.3   | Attach normalized member type, declarator, access, and ownership metadata                                     | DONE-LOCAL  | Generic member handle exposes semantic symbol, `int` type, and advisory `BORROWED` ownership |
 | P7.3.d | P7.3   | Publish stable handle identity across comptime revisions and invalidation                                     | DONE-LOCAL  | Generic member ID remains stable after a source revision; removal remains covered by LSP invalidation tests |
 | P7.7.a | P7.7   | Run Tree-sitter versus legacy output comparison on the bounded corpus                                         | OPEN        | Differential report with categorized mismatches                                      |
-| P7.7.b | P7.7   | Define default-backend feature flag and rollback behavior                                                     | OPEN        | CLI/compiler configuration test                                                      |
+| P7.7.b | P7.7   | Define default-backend feature flag and rollback behavior                                                     | DONE-LOCAL  | AST-first `AUTO` mode, explicit `--frontend=tree-sitter`, explicit `--frontend=legacy`, and `CPLUS_FRONTEND`/`cplus.frontend` rollback tests |
 | P7.7.c | P7.7   | Perform release-candidate soak before changing the default                                                    | BLOCKED     | Depends on P7.1–P7.6 and release host evidence                                       |
+| P7.7.d | P7.7   | Preserve compatibility when the AST path cannot yet lower a construct                          | DONE-LOCAL  | AUTO mode falls back after a mapped lowering failure or compiler rejection; explicit Tree-sitter mode remains fail-closed |
+| P7.7.e | P7.7   | Run the promoted default through CLI, stdlib, examples, and aggregate tests                       | DONE-LOCAL  | `./gradlew --offline --no-daemon test --max-workers=1 -Dorg.gradle.native=false --console=plain`; 104/104 grammar parses |
 
 ### Phase 8 active and deferred work
 
@@ -143,7 +169,7 @@ discovered while closing a row remain ancillary work under that row.
 | P7.4 | Validate the hygiene boundary                                 | P7.1       | DONE              | Pre-hygiene C-plus is reparsed; post-hygiene `CPLUS_*` macros are validated as host C. The boundary is documented and tested.                                                                                                         |
 | P7.5 | Prove deterministic output and performance                    | P7.1       | DONE-LOCAL        | Repeated output/origin equality, incremental Tree-sitter reuse, representative benchmarks, and tagged host benchmark jobs pass. A stable production budget remains a promotion input.                                                 |
 | P7.6 | Run repository acceptance through the AST path                | P7.1–P7.5  | DONE-LOCAL        | 104/104 grammar fixtures, repository C-plus syntax corpus, stdlib fixtures, and finite non-Raylib examples pass locally. Raylib runtime/linking remains host-dependent.                                                               |
-| P7.7 | Promote Tree-sitter as default frontend                       | P7.1–P7.6  | OPEN              | Run the promotion checklist, compare release behavior, retain an explicit rollback switch for two releases, then decide default selection.                                                                                            |
+| P7.7 | Promote Tree-sitter as default frontend                       | P7.1–P7.6  | IN PROGRESS       | AST-first AUTO mode and compatibility fallback are locally green; differential comparison, cross-host evidence, and the release-candidate soak remain before declaring promotion complete. |
 | P7.8 | Retire textual lowerers independently                         | P7.7       | RETAINED-FALLBACK | Method/receiver, defer, try/catch, test extraction, and allocation lowerers have bounded parity/rollback evidence. Deletion is deferred until promotion and the two-release soak finish.                                              |
 
 ## Phase 8 — LSP and editor adoption
