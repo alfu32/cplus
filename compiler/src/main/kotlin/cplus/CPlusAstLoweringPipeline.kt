@@ -149,6 +149,7 @@ fun CPlusAst.synthesizedDeclarationNodes(
         .toList()
     return declarations.mapNotNull { declaration ->
         candidates.firstOrNull { node ->
+            if (node.kind != declaration.kind) return@firstOrNull false
             val declarationBodyStart = node.descendantsAndSelf()
                 .firstOrNull { it.syntaxKind in setOf("compound_statement", "cplus_block") }
                 ?.span?.startOffset
@@ -157,15 +158,36 @@ fun CPlusAst.synthesizedDeclarationNodes(
                 .filter { it.kind == CPlusAstKind.IDENTIFIER && it.span.startOffset < declarationBodyStart }
                 .any { identifier ->
                     source.substring(identifier.span.startOffset, identifier.span.endOffset) == declaration.generatedName &&
-                        mappedSource.originAt(identifier.span.startOffset)?.let { origin ->
-                            (listOf(declaration.sourceSpan) + declaration.originSpans).any { originSpan ->
-                                origin.file.name == originSpan.file &&
-                                    origin.offset in originSpan.startOffset until originSpan.endOffset
-                            }
-                        } == true
+                        originOverlaps(
+                            mappedSource,
+                            identifier.span,
+                            listOf(declaration.sourceSpan) + declaration.originSpans
+                        )
                 }
         }
     }.distinctBy { it.span.startOffset to it.span.endOffset }
+}
+
+/**
+ * Generated identifiers may combine copied template text with generated text.  Looking only at
+ * the first character's origin loses declarations such as `box__int_box_t`, whose `box` prefix
+ * comes from the generator and whose specialization suffix comes from the invocation.  Any
+ * mapped overlap with the declaration's recorded provenance is sufficient, while an entirely
+ * unrelated same-named prototype remains excluded.
+ */
+private fun originOverlaps(
+    mappedSource: MappedText,
+    identifier: SourceSpan,
+    origins: List<SourceSpan>
+): Boolean {
+    if (origins.isEmpty()) return false
+    for (offset in identifier.startOffset until identifier.endOffset) {
+        val origin = mappedSource.originAt(offset) ?: continue
+        if (origins.any { span ->
+                origin.file.name == span.file && origin.offset in span.startOffset until span.endOffset
+            }) return true
+    }
+    return false
 }
 
 private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =

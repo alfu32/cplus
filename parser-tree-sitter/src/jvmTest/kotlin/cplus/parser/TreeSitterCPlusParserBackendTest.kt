@@ -9466,7 +9466,7 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
             generated.synthesizedDeclarations.map { it.generatedName }
         )
         assertEquals(
-            listOf(CPlusAstKind.TYPE_ALIAS),
+            listOf(CPlusAstKind.TYPE_ALIAS, CPlusAstKind.STRUCT_DECLARATION),
             result.synthesizedNodes.map { it.kind },
             result.synthesizedNodes.map { it.kind to it.syntaxKind to it.span }.toString()
         )
