@@ -969,6 +969,16 @@ class CPlusLspServer(
 
     private fun expressionType(document: LspDocument, expression: String): TypeShape? {
         val value = expression.trim()
+        if (value.length >= 2 && value.first() == '(' && value.last() == ')' &&
+            matchingOuterParentheses(value)
+        ) {
+            return expressionType(document, value.substring(1, value.length - 1))
+        }
+        if (value.startsWith("*")) {
+            val pointed = expressionType(document, value.substring(1)) ?: return null
+            if (pointed.pointerDepth == 0) return null
+            return pointed.copy(pointerDepth = pointed.pointerDepth - 1)
+        }
         if (value.matches(Regex("[0-9]+"))) return TypeShape("int", 0, 0)
         if (value.matches(Regex("[0-9]+\\.[0-9]+"))) return TypeShape("double", 0, 0)
         if (value.startsWith("\"") && value.endsWith("\"")) return TypeShape("char", 0, 1)
@@ -990,6 +1000,20 @@ class CPlusLspServer(
             declared.pointerDepth + if (address != null) 1 else 0,
             declared.arrayDepth
         )
+    }
+
+    private fun matchingOuterParentheses(value: String): Boolean {
+        var depth = 0
+        value.forEachIndexed { index, character ->
+            when (character) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0 && index != value.lastIndex) return false
+                }
+            }
+        }
+        return depth == 0
     }
 
     private fun functionTypeShape(symbol: LspSymbol): TypeShape? {

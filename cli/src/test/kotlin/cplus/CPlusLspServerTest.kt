@@ -447,6 +447,30 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesAnOverloadForDereferencedPointerArgument() {
+        val uri = "file:///overload-dereference.cp"
+        val source = "int choose(int value) { return value; }\n" +
+            "int choose(const char* value) { return value[0]; }\n" +
+            "int main(void) { int value = 1; int* pointer = &value; return choose(*pointer); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val callPosition = source.lines()[2].indexOf("choose")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$callPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":0,"), response)
+    }
+
+    @Test
     fun ranksClosestNumericConversionWhenNoExactOverloadExists() {
         val uri = "file:///overload-numeric.cp"
         val source = "long choose(long value) { return value; }\n" +
