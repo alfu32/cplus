@@ -679,6 +679,12 @@ class CPlusLspServer(
             reference.span.startOffset == selected.selection.startOffset
         ) return 3 // LSP DocumentHighlightKind.Write: declaration
 
+        // A function name used as the right-hand side of a function-pointer
+        // initializer or as a callback argument is read as a callable value.
+        // The lexical `=` check below must not misclassify that use as a write;
+        // only the pointer variable being initialized is written.
+        if (selected.kind == 6 || selected.kind == 12) return 2
+
         val text = reference.document.snapshot.text
         val start = reference.span.startOffset.coerceIn(0, text.length)
         val end = reference.span.endOffset.coerceIn(start, text.length)

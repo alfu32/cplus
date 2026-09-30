@@ -880,6 +880,31 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun classifiesCallbackFunctionHighlightsAcrossAssignmentAndArgumentUse() {
+        val uri = "file:///callback-highlights.cp"
+        val source = "int increment(int value) { return value + 1; }\n" +
+            "int apply(int (*callback)(int), int value) { return callback(value); }\n" +
+            "int main(void) { int (*callback)(int) = increment; return apply(increment, 1); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/documentHighlight\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":0,\"character\":5}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        val result = response.substringAfter("\"id\":2,\"result\":[").substringBefore("]}")
+        assertTrue(result.contains("\"kind\":3"), response)
+        assertTrue(result.split("\"kind\":2").size - 1 >= 2, response)
+    }
+
+    @Test
     fun resolvesAReceiverMethodAgainstTheDeclaredStructType() {
         val uri = "file:///receiver.cp"
         val source = "typedef struct counter_t {\n" +
