@@ -3502,6 +3502,9 @@ class TreeSitterCPlusParserBackendTest {
     @Test
     fun astMethodCallRollbackFailsClosedAtTheOriginalCPlusBoundary() {
         val text = """
+            #define pub
+            #define borrowed
+            #define mut
             typedef struct counter_t {
                 int value;
                 pub int get(borrowed *self) { return self->value; }
@@ -3523,8 +3526,10 @@ class TreeSitterCPlusParserBackendTest {
         assertFalse(report.treeSitter.successful)
         assertTrue(report.treeSitter.transcodedSource == null)
         assertTrue(
-            report.treeSitter.unsupportedNodes.any { it.span.startLine == 7 },
-            "expected the disabled receiver call to remain mapped at line 7: ${report.treeSitter.unsupportedNodes}"
+            report.treeSitter.unsupportedNodes.any {
+                it.span.startLine == text.lines().indexOfFirst { line -> "counter.get()" in line } + 1
+            },
+            "expected the disabled receiver call to remain mapped at its original source line: ${report.treeSitter.unsupportedNodes}"
         )
     }
 
@@ -6649,6 +6654,51 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
         val reparsed = backend.parse(sources.open(SourceId.named("ast-c-emitter-determinism.c"), first.text))
         assertTrue(reparsed.diagnostics.isEmpty(), reparsed.diagnostics.toString())
         compileAndRunC(first.text)
+    }
+
+    @Test
+    fun astCEmitterLowersStructuredMethodsBeforeTerminalEmission() {
+        val text = """
+            #define pub
+            #define borrowed
+            #define mut
+            typedef struct counter_t {
+                int value;
+                pub int increment(borrowed mut *self, int amount) {
+                    self->value += amount;
+                    return self->value;
+                }
+            } counter_t;
+            int main(void) {
+                counter_t counter = {0};
+                return counter__increment(&counter, 2) == 2 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-c-emitter-method.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val mapped = MappedText.identity(source.sourceFile)
+
+        val emission = CPlusAstCEmitter().emit(ast, mapped) { lowered ->
+            val reparsed = backend.parse(sources.open(SourceId.named("ast-c-emitter-method-lowered.c"), lowered.text))
+            CPlusAstAdapter().adapt(reparsed)
+        }
+
+        assertTrue(emission.diagnostics.isEmpty(), emission.diagnostics.toString())
+        val generated = emission.source ?: error("structured method AST should emit C")
+        assertEquals(listOf("counter__increment"), emission.synthesizedDeclarations.map { it.generatedName })
+        assertEquals(listOf(CPlusAstKind.FUNCTION_DECLARATION), emission.synthesizedNodes.map { it.kind }.distinct())
+        val synthesizedSource = emission.synthesizedSource ?: error("synthesized node source is missing")
+        val synthesizedName = emission.synthesizedNodes.first().descendantsAndSelf()
+            .first { it.kind == CPlusAstKind.IDENTIFIER &&
+                synthesizedSource.text.substring(it.span.startOffset, it.span.endOffset) == "counter__increment" }
+        assertEquals("counter__increment", synthesizedSource.text.substring(synthesizedName.span.startOffset, synthesizedName.span.endOffset))
+        assertTrue("counter__increment(" in generated.text, generated.text)
+        assertTrue("counter_t *self" in generated.text, generated.text)
+        val reparsed = backend.parse(sources.open(SourceId.named("ast-c-emitter-method-output.c"), generated.text))
+        assertTrue(reparsed.diagnostics.isEmpty(), reparsed.diagnostics.toString())
+        compileAndRunC("#define pub\n#define borrowed\n#define mut\n${generated.text}")
     }
 
     @Test

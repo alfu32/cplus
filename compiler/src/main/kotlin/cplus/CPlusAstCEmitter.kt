@@ -2,7 +2,10 @@ package cplus
 
 data class CPlusAstCEmissionResult(
     val source: MappedText?,
-    val diagnostics: List<CPlusLoweringDiagnostic>
+    val diagnostics: List<CPlusLoweringDiagnostic>,
+    val synthesizedDeclarations: List<CPlusSynthesizedDeclaration> = emptyList(),
+    val synthesizedNodes: List<CPlusAstNode> = emptyList(),
+    val synthesizedSource: MappedText? = null
 )
 
 /**
@@ -216,6 +219,58 @@ class CPlusAstCEmitter {
         }
         newline(previous?.let { source.originAt(it.node.span.endOffset - 1) })
         return CPlusAstCEmissionResult(output.build(), emptyList())
+    }
+
+    /**
+     * Emit an AST that may still contain structured method declarations.
+     *
+     * The parser callback is deliberately supplied by the parser module: the compiler module
+     * owns the normalized AST/emission contract but does not depend on a parser-generator
+     * binding. Method lowering therefore remains an explicit, mapped AST revision followed by
+     * a fresh parse before terminal C emission.
+     */
+    fun emit(
+        ast: CPlusAst,
+        source: MappedText,
+        reparse: (MappedText) -> CPlusAst
+    ): CPlusAstCEmissionResult {
+        val structuredMethods = ast.root.descendantsAndSelf()
+            .filter { it.kind == CPlusAstKind.METHOD_DECLARATION }
+            .toList()
+        if (structuredMethods.isEmpty()) return emit(ast, source)
+
+        val lowered = CPlusStructMethodLoweringPass().lower(ast, source)
+        if (lowered.diagnostics.isNotEmpty()) {
+            return CPlusAstCEmissionResult(null, lowered.diagnostics)
+        }
+        val loweredAst = reparse(lowered.source)
+        if (loweredAst.diagnostics.isNotEmpty() || !loweredAst.structurallyComplete) {
+            val diagnostic = loweredAst.diagnostics.firstOrNull()
+                ?: ParserDiagnostic(
+                    "CPLUS_EMIT_REPARSE_INCOMPLETE",
+                    "structured AST emission requires a complete reparsed lowering revision",
+                    ParserDiagnosticSeverity.ERROR,
+                    loweredAst.root.span
+                )
+            return CPlusAstCEmissionResult(
+                null,
+                listOf(
+                    CPlusLoweringDiagnostic(
+                        "CPLUS_EMIT_REPARSE_INCOMPLETE",
+                        diagnostic.message,
+                        diagnostic.span
+                    )
+                )
+            )
+        }
+        val terminal = emit(loweredAst, lowered.source)
+        if (terminal.diagnostics.isNotEmpty()) return terminal
+        val generatedNames = lowered.synthesizedDeclarations.map { it.generatedName }.toSet()
+        return terminal.copy(
+            synthesizedDeclarations = lowered.synthesizedDeclarations,
+            synthesizedNodes = loweredAst.synthesizedDeclarationNodes(generatedNames),
+            synthesizedSource = lowered.source
+        )
     }
 
     private fun needsSeparator(
