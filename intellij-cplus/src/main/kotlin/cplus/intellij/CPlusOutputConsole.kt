@@ -14,7 +14,7 @@ class CPlusOutputToolWindowFactory : ToolWindowFactory {
         val console = CPlusOutputConsole.create(project)
         console.print("Run a C-plus test or main to see its output here.\n", ConsoleViewContentType.SYSTEM_OUTPUT)
         toolWindow.contentManager.addContent(
-            ContentFactory.getInstance().createContent(console.component, "Output", false)
+            ContentFactory.getInstance().createContent(console.component, "Output", true)
         )
     }
 }
@@ -27,9 +27,9 @@ internal object CPlusOutputConsole {
         val console = create(project)
         val commandText = command.joinToString(" ")
         console.print("> $commandText\n\n", ConsoleViewContentType.SYSTEM_OUTPUT)
-        toolWindow.contentManager.addContent(
-            ContentFactory.getInstance().createContent(console.component, title, false)
-        )
+        val content = ContentFactory.getInstance().createContent(console.component, title, true)
+        toolWindow.contentManager.addContent(content)
+        toolWindow.contentManager.setSelectedContent(content)
         toolWindow.show()
         return console
     }

@@ -227,6 +227,15 @@ Toolbox Java handoff and typedef lexer correction, the clean Linux x86_64/JDK 21
 passed in 6m48s. The earlier transient CLI test-worker `NoClassDefFoundError` did not
 reproduce in the focused AST corpus test or the clean aggregate rerun.
 
+The IntelliJ command-boundary fix now resolves bare `cpc`/`cplus` actions through
+the project launcher for run, test, parse, and import-graph operations, migrates
+persisted legacy `cplus ...` defaults to `cpc ...`, and makes output tabs closeable
+and selected when a run starts. The focused command
+`./gradlew --offline --no-daemon -p intellij-cplus test buildPlugin --max-workers=1 --console=plain`
+passes. A subsequent isolated GUI smoke attempt was blocked by the host X11/display
+and IntelliJ profile lock, not by a plugin assertion; repeat it when the smoke
+profile is free.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their

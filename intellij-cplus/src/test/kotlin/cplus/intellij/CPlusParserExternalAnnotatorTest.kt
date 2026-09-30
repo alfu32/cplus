@@ -61,6 +61,14 @@ class CPlusParserExternalAnnotatorTest {
     }
 
     @Test
+    fun resolvesBareActionsThroughTheRepositoryLauncher() {
+        assertEquals(
+            listOf("/project/c-plus-bin/cpc.sh", "test"),
+            CPlusCommand.resolve("cplus test", "/project") { path -> path == "/project/c-plus-bin/cpc.sh" }
+        )
+    }
+
+    @Test
     fun findsTheJavaRuntimeBundledWithTheIde() {
         assertEquals(
             "/opt/idea-jbr/bin/java",

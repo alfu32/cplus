@@ -16,17 +16,17 @@ import javax.swing.JTextField
 @State(name = "CPlusSettings", storages = [Storage("cplus.xml")])
 class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
     data class State(
-        var compilerCommand: String = "cplus compile",
-        var runnerCommand: String = "cplus run",
-        var testProgram: String = "cplus test",
+        var compilerCommand: String = "cpc compile",
+        var runnerCommand: String = "cpc run",
+        var testProgram: String = "cpc test",
         var parserCommand: String = "",
-        var importGraphCommand: String = "cplus graph",
+        var importGraphCommand: String = "cpc graph",
         var languageServerCommand: String = ""
     )
 
     private var state = State()
     override fun getState(): State = state
-    override fun loadState(state: State) { this.state = state }
+    override fun loadState(state: State) { this.state = state.migrateLegacyDefaults() }
     fun current(): State = state
     fun update(compiler: String, runner: String, program: String, parser: String, importGraph: String, languageServer: String) {
         state = State(compiler, runner, program, parser, importGraph, languageServer)
@@ -35,6 +35,16 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
     companion object {
         fun getInstance(): CPlusSettings = ApplicationManager.getApplication().getService(CPlusSettings::class.java)
     }
+
+    private fun State.migrateLegacyDefaults(): State = copy(
+        compilerCommand = compilerCommand.replaceLegacy("compile"),
+        runnerCommand = runnerCommand.replaceLegacy("run"),
+        testProgram = testProgram.replaceLegacy("test"),
+        importGraphCommand = importGraphCommand.replaceLegacy("graph")
+    )
+
+    private fun String.replaceLegacy(subcommand: String): String =
+        if (trim() == "cplus $subcommand") "cpc $subcommand" else this
 }
 
 class CPlusSettingsConfigurable : Configurable {

@@ -69,6 +69,10 @@ internal object CPlusLspCommand {
     }
 
     fun arguments(command: String): List<String> {
+        return parse(command) + "lsp"
+    }
+
+    fun parse(command: String): List<String> {
         val result = mutableListOf<String>()
         val current = StringBuilder()
         var quote: Char? = null
@@ -94,6 +98,6 @@ internal object CPlusLspCommand {
         if (escaped) current.append('\\')
         if (current.isNotEmpty()) result += current.toString()
         require(result.isNotEmpty()) { "C-plus language server command must not be empty" }
-        return result + "lsp"
+        return result
     }
 }

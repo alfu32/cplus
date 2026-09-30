@@ -236,14 +236,14 @@ internal object CPlusParserJsonDiagnostics {
     }
 }
 
-data class CPlusParserInput(val text: String, val command: String, val sourcePath: String)
+data class CPlusParserInput(val text: String, val command: String, val sourcePath: String, val projectBasePath: String?)
 
 class CPlusParserExternalAnnotator : ExternalAnnotator<CPlusParserInput, CPlusParserResult>() {
     override fun collectInformation(file: PsiFile): CPlusParserInput? {
         if (file.virtualFile == null) return null
         val command = CPlusSettings.getInstance().current().parserCommand.trim()
         if (command.isEmpty()) return null
-        return CPlusParserInput(file.text, command, file.virtualFile.path)
+        return CPlusParserInput(file.text, command, file.virtualFile.path, file.project.basePath)
     }
 
     override fun doAnnotate(collectedInfo: CPlusParserInput): CPlusParserResult? {
@@ -251,8 +251,9 @@ class CPlusParserExternalAnnotator : ExternalAnnotator<CPlusParserInput, CPlusPa
         val output = Files.createTempFile("cplus-intellij-", ".json")
         try {
             Files.writeString(path, collectedInfo.text)
-            val command = splitCommand(collectedInfo.command) + listOf("parse", path.toString(), "-o", output.toString())
-            val process = ProcessBuilder(command).start()
+            val command = CPlusCommand.resolve(collectedInfo.command, collectedInfo.projectBasePath) +
+                listOf("parse", path.toString(), "-o", output.toString())
+            val process = CPlusCommand.configureJava(ProcessBuilder(command)).start()
             if (!process.waitFor(15, TimeUnit.SECONDS)) {
                 process.destroyForcibly()
                 return null
@@ -297,9 +298,4 @@ class CPlusParserExternalAnnotator : ExternalAnnotator<CPlusParserInput, CPlusPa
         }
     }
 
-    private fun splitCommand(command: String): List<String> =
-        Regex("\\\"([^\\\"]*)\\\"|'([^']*)'|(\\S+)")
-            .findAll(command)
-            .map { match -> match.groupValues.drop(1).first(String::isNotEmpty) }
-            .toList()
 }

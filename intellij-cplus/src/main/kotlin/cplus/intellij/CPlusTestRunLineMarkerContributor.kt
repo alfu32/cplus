@@ -30,14 +30,14 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
                 val settings = CPlusSettings.getInstance().current()
                 val commandText = if (fixture != null) settings.testProgram.ifBlank { "cplus test" }
                     else settings.runnerCommand.ifBlank { "cplus run" }
-                val command = splitCommand(commandText) + virtualFile.path + listOfNotNull(fixture?.name)
+                val command = CPlusCommand.resolve(commandText, project) + virtualFile.path + listOfNotNull(fixture?.name)
                 val console = CPlusOutputConsole.open(project, title, command)
                 if (console == null) return
                 object : Task.Backgroundable(project, "C-plus: $title", true) {
                     override fun run(indicator: ProgressIndicator) {
                         val process = try {
-                            val builder = ProcessBuilder(command)
-                                .redirectErrorStream(true)
+                            val builder = CPlusCommand.configureJava(ProcessBuilder(command)
+                                .redirectErrorStream(true))
                             virtualFile.parent?.path?.let { builder.directory(java.io.File(it)) }
                             builder.start()
                         } catch (error: Exception) {
@@ -58,9 +58,4 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
         return Info(AllIcons.RunConfigurations.TestState.Run, { "Run C-plus ${if (fixture == null) "program" else "test"}: $title" }, action)
     }
 
-    private fun splitCommand(command: String): List<String> =
-        Regex("\\\"([^\\\"]*)\\\"|'([^']*)'|([^\\s]+)")
-            .findAll(command)
-            .map { it.groups[1]?.value ?: it.groups[2]?.value ?: it.groups[3]!!.value }
-            .toList()
 }

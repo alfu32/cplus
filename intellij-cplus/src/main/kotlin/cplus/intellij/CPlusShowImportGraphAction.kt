@@ -29,12 +29,12 @@ class CPlusShowImportGraphAction : AnAction("Show Import Graph", "Resolve and na
         val editor = event.getData(CommonDataKeys.EDITOR)
         editor?.document?.let { FileDocumentManager.getInstance().saveDocument(it) }
         val commandText = CPlusSettings.getInstance().current().importGraphCommand.trim()
-        val command = splitCommand(commandText)
-        if (command.isEmpty()) {
+        if (commandText.isEmpty()) {
             Messages.showErrorDialog(project, "Configure the C-plus import graph command in Settings → Tools → C-plus.", "C-plus Import Graph")
             return
         }
 
+        val command = CPlusCommand.resolve(commandText, project)
         object : Task.Backgroundable(project, "C-plus: resolving imports", true) {
             override fun run(indicator: ProgressIndicator) {
                 val result = runCatching { execute(file, command) }
@@ -55,7 +55,7 @@ class CPlusShowImportGraphAction : AnAction("Show Import Graph", "Resolve and na
     }
 
     private fun execute(source: VirtualFile, command: List<String>): CPlusImportGraph {
-        val process = ProcessBuilder(command + source.path)
+        val process = CPlusCommand.configureJava(ProcessBuilder(command + source.path))
             .directory(source.parent?.path?.let(::File))
             .redirectErrorStream(true)
             .start()
@@ -100,9 +100,4 @@ class CPlusShowImportGraphAction : AnAction("Show Import Graph", "Resolve and na
 
     private fun VirtualFile?.isCPlusSource(): Boolean = this != null && extension in setOf("cp", "c+")
 
-    private fun splitCommand(command: String): List<String> =
-        Regex("\\\"([^\\\"]*)\\\"|'([^']*)'|([^\\s]+)")
-            .findAll(command)
-            .map { it.groups[1]?.value ?: it.groups[2]?.value ?: it.groups[3]!!.value }
-            .toList()
 }
