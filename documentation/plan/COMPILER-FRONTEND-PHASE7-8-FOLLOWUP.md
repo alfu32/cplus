@@ -241,6 +241,10 @@ before selecting it, eliminating a first-run selection race. The same focused
 `intellij-cplus` test and `buildPlugin` command passes after this correction; the
 worktree remains clean after commit `fe43c64`.
 
+The IntelliJ command contract now has focused coverage for legacy-default migration,
+custom-command preservation, project-local launcher discovery, quoted command parsing,
+and Windows launcher selection. The plugin test/package gate passes with these cases.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their

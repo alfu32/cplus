@@ -69,6 +69,19 @@ class CPlusParserExternalAnnotatorTest {
     }
 
     @Test
+    fun keepsExplicitLauncherArgumentsAndResolvesWindowsLauncherNames() {
+        assertEquals(
+            listOf("/project/c-plus-bin/cpc.cmd", "test", "--verbose"),
+            CPlusCommand.resolve(
+                "cpc test --verbose",
+                "/project",
+                isWindows = true,
+                exists = { it == "/project/c-plus-bin/cpc.cmd" }
+            )
+        )
+    }
+
+    @Test
     fun findsTheJavaRuntimeBundledWithTheIde() {
         assertEquals(
             "/opt/idea-jbr/bin/java",

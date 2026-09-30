@@ -10,6 +10,7 @@ internal object CPlusCommand {
     fun resolve(
         command: String,
         projectBasePath: String?,
+        isWindows: Boolean = System.getProperty("os.name").orEmpty().contains("win", ignoreCase = true),
         exists: (String) -> Boolean = { File(it).isFile }
     ): List<String> {
         val parts = CPlusLspCommand.parse(command)
@@ -24,6 +25,7 @@ internal object CPlusCommand {
         val discovered = CPlusLspCommand.discover(
             configured = "",
             projectBasePath = projectBasePath,
+            isWindows = isWindows,
             exists = exists
         )
         return listOf(discovered) + parts.drop(1)
