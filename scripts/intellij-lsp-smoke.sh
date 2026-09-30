@@ -85,6 +85,11 @@ if ! grep -Fq "LSP server initialized" "$log_file"; then
     echo "C-plus LSP did not initialize (launcher status $launcher_status)" >&2
     exit 1
 fi
+if grep -Eq "exec: java: not found|Java runtime not found" "$log_file" "$smoke_dir/launcher.log"; then
+    keep_dir=1
+    echo "C-plus LSP launcher lost its Java runtime or could not create the process" >&2
+    exit 1
+fi
 if grep -Fq "CPlusParserExternalAnnotator cannot be cast" "$log_file"; then
     keep_dir=1
     echo "C-plus parser annotator registration failed" >&2

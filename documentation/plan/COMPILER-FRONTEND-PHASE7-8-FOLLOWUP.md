@@ -217,6 +217,9 @@ atomic slices, each with focused and aggregate tests:
 15. LSP symbols now carry advisory access and ownership annotations from the semantic index;
     document-symbol JSON exposes `cplusAccess`/`cplusAnnotations`, while completion and hover
     include the same metadata in display detail without enforcing it.
+16. The IntelliJ smoke harness now checks the actual Toolbox failure signature (`java: not found`)
+    without treating unrelated IDE process warnings as C-plus failures. The packaged 0.5.58
+    plugin initializes the LSP successfully under the extended local startup window.
 
 The latest aggregate result is green with 104/104 grammar parses. After the IntelliJ
 Toolbox Java handoff and typedef lexer correction, the clean Linux x86_64/JDK 21 gate
