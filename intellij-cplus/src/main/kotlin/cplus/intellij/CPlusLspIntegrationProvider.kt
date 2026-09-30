@@ -37,17 +37,23 @@ internal object CPlusLspCommand {
         .orEmpty().contains("win", ignoreCase = true), exists: (String) -> Boolean = { File(it).isFile }): String {
         if (configured.isNotBlank()) return configured.trim()
         val root = projectBasePath?.takeIf { it.isNotBlank() }
-        if (root != null) {
-            val candidates = if (isWindows) {
-                listOf("cpc.cmd", "cpc.exe", "cpc")
-            } else {
-                listOf("cpc.sh", "cpc")
+        val names = if (isWindows) listOf("cpc.cmd", "cpc.exe", "cpc") else listOf("cpc.sh", "cpc")
+        val candidates = buildList {
+            if (root != null) {
+                addAll(names.map { File(File(root, ".cplus"), it).path })
+                addAll(names.map { File(File(root, "c-plus-bin"), it).path })
+                addAll(names.map { File(root, it).path })
             }
-            candidates
-                .map { File(File(root, ".cplus"), it).path }
-                .firstOrNull(exists)
-                ?.let { return it }
+            System.getenv("CPLUS_HOME")?.takeIf { it.isNotBlank() }?.let { home ->
+                addAll(names.map { File(home, it).path })
+            }
+            val userHome = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
+            if (userHome != null) {
+                addAll(names.map { File(File(userHome, ".local/bin"), it).path })
+                addAll(names.map { File(File(userHome, ".local/share/c-plus"), it).path })
+            }
         }
+        candidates.firstOrNull(exists)?.let { return it }
         return "cpc"
     }
 
