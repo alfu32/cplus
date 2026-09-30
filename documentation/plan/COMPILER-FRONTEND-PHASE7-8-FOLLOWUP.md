@@ -218,9 +218,11 @@ atomic slices, each with focused and aggregate tests:
     document-symbol JSON exposes `cplusAccess`/`cplusAnnotations`, while completion and hover
     include the same metadata in display detail without enforcing it.
 
-The latest aggregate result is green with 104/104 grammar parses. The current worktree
-also contains unrelated Raylib example changes; they are intentionally not part of this
-frontend ledger or its commits.
+The latest aggregate result is green with 104/104 grammar parses. After the IntelliJ
+Toolbox Java handoff and typedef lexer correction, the clean Linux x86_64/JDK 21 gate
+`./gradlew --offline --no-daemon test --max-workers=1 -Dorg.gradle.native=false --console=plain`
+passed in 6m48s. The earlier transient CLI test-worker `NoClassDefFoundError` did not
+reproduce in the focused AST corpus test or the clean aggregate rerun.
 
 ## Immediate queue
 
