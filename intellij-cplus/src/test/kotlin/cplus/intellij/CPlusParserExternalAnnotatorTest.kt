@@ -28,6 +28,15 @@ class CPlusParserExternalAnnotatorTest {
     }
 
     @Test
+    fun registersTheParserAsAnExternalAnnotator() {
+        val pluginXml = javaClass.getResource("/META-INF/plugin.xml")?.readText()
+            ?: error("plugin.xml is not on the test runtime classpath")
+
+        assertTrue(pluginXml.contains("<externalAnnotator language=\"C-plus\""))
+        assertFalse(pluginXml.contains("<annotator language=\"C-plus\""))
+    }
+
+    @Test
     fun discoversProjectLauncherBeforeInstalledCpc() {
         assertEquals(
             "/project/.cplus/cpc.sh",
