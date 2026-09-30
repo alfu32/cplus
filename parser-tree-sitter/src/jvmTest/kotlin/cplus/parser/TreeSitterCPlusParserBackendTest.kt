@@ -5,6 +5,7 @@ import cplus.ParserBackendId
 import cplus.SourceId
 import cplus.SourceManager
 import cplus.CPlusAstAdapter
+import cplus.CPlusAstNode
 import cplus.CPlusAstCEmitter
 import cplus.CPlusAstLoweringPipeline
 import cplus.CPlusAstLoweringStep
@@ -6657,6 +6658,35 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
         assertEquals(null, emission.source)
         assertEquals("CPLUS_EMIT_UNLOWERED_CONSTRUCT", emission.diagnostics.single().code)
         assertEquals(source.id.value, emission.diagnostics.single().span.file)
+    }
+
+    @Test
+    fun astCEmitterRejectsUnknownCPlusNodesInsteadOfPassingThemToTheHostCompiler() {
+        val text = "int answer = 41;\n"
+        val source = sources.open(SourceId.named("unsupported-cplus-emitter.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val candidate = ast.root.descendantsAndSelf()
+            .first { it.kind == CPlusAstKind.TYPE }
+        val unsupported = candidate.copy(
+            kind = CPlusAstKind.OTHER,
+            syntaxKind = "cplus_future_type",
+            children = emptyList()
+        )
+        fun replace(node: CPlusAstNode): CPlusAstNode = node.copy(
+            children = node.children.map { child ->
+                if (child === candidate) unsupported else replace(child)
+            }
+        )
+        val mutated = ast.copy(root = replace(ast.root))
+
+        val emission = CPlusAstCEmitter().emit(mutated, MappedText.identity(source.sourceFile))
+
+        assertEquals(null, emission.source)
+        assertEquals("CPLUS_EMIT_UNSUPPORTED_NODE", emission.diagnostics.single().code)
+        assertEquals(source.id.value, emission.diagnostics.single().span.file)
+        assertEquals(candidate.span, emission.diagnostics.single().span)
     }
 
     @Test

@@ -62,6 +62,27 @@ class CPlusAstCEmitter {
                 )
             )
         }
+        // A parser extension may normalize a future C-plus construct as an
+        // otherwise structurally complete `OTHER` node.  Do not pass its
+        // source spelling through to the C compiler: that would turn an
+        // unsupported frontend construct into an apparently successful, but
+        // semantically undefined, emission.  Ordinary C extensions remain
+        // host-compiler territory and are therefore intentionally preserved.
+        val unsupportedCPlusNode = ast.root.descendantsAndSelf().firstOrNull { node ->
+            node.kind == CPlusAstKind.OTHER && node.syntaxKind.startsWith("cplus_")
+        }
+        if (unsupportedCPlusNode != null) {
+            return CPlusAstCEmissionResult(
+                null,
+                listOf(
+                    CPlusLoweringDiagnostic(
+                        "CPLUS_EMIT_UNSUPPORTED_NODE",
+                        "C generation cannot emit unsupported C-plus syntax '${unsupportedCPlusNode.syntaxKind}'",
+                        unsupportedCPlusNode.span
+                    )
+                )
+            )
+        }
 
         val tokens = mutableListOf<Token>()
         fun visit(node: CPlusAstNode, ancestors: List<String>) {
