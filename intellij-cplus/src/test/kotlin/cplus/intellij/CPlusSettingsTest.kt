@@ -78,4 +78,12 @@ class CPlusSettingsTest {
         assertEquals(custom, settings.current())
         assertEquals(custom, settings.current())
     }
+
+    @Test
+    fun gutterActionsUseCpcForBlankBuiltInCommands() {
+        val settings = CPlusSettings.State(compilerCommand = "", runnerCommand = "", testProgram = "")
+
+        assertEquals("cpc test", CPlusTestRunLineMarkerContributor.commandText(settings, CPlusTestFixture("fixture", 0, 1)))
+        assertEquals("cpc run", CPlusTestRunLineMarkerContributor.commandText(settings, null))
+    }
 }

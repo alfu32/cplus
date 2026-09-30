@@ -9,6 +9,12 @@ import com.intellij.psi.PsiElement
 import com.intellij.execution.lineMarker.RunLineMarkerContributor
 
 class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
+    companion object {
+        internal fun commandText(settings: CPlusSettings.State, fixture: CPlusTestFixture?): String =
+            if (fixture != null) settings.testProgram.ifBlank { "cpc test" }
+            else settings.runnerCommand.ifBlank { "cpc run" }
+    }
+
     override fun getInfo(element: PsiElement): Info? {
         val file = element.containingFile
         val virtualFile = file.virtualFile ?: return null
@@ -28,8 +34,7 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
             override fun actionPerformed(event: AnActionEvent) {
                 val project = event.project ?: return
                 val settings = CPlusSettings.getInstance().current()
-                val commandText = if (fixture != null) settings.testProgram.ifBlank { "cpc test" }
-                    else settings.runnerCommand.ifBlank { "cpc run" }
+                val commandText = commandText(settings, fixture)
                 val command = CPlusCommand.resolve(commandText, project) + virtualFile.path + listOfNotNull(fixture?.name)
                 val console = CPlusOutputConsole.open(project, title, command)
                 if (console == null) return
