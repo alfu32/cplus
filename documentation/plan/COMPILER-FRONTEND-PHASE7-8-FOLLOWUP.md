@@ -179,8 +179,8 @@ discovered while closing a row remain ancillary work under that row.
 | P8.1  | Define and serve `cplus.parse.v1` normalized AST JSON           | P2              | DONE        | UTF-16 spans, categories, recovery flags, diagnostics, saved/stdin CLI modes, and malformed-input behavior are tested.                                                                                                                                                                 |
 | P8.2  | VS Code parser, outline, tests, diagnostics, and restart client | P8.1            | DONE-LOCAL  | npm tests, parser-backed outline/Test Explorer, stale revision handling, diagnostics, child restart, and VSIX packaging pass.                                                                                                                                                          |
 | P8.3  | Vim parser, outline, quickfix, imports, and restart client      | P8.1            | DONE-LOCAL  | Headless parser/outline/import/restart fixtures and archive packaging pass.                                                                                                                                                                                                            |
-| P8.4  | IntelliJ parser cache, annotator, structure, navigation, tests  | P8.1            | DONE-LOCAL  | IntelliJ 2026.2.2 unit/plugin packaging tests and exact-source cache fixtures pass.                                                                                                                                                                                                    |
-| P8.5  | Interactive IntelliJ LSP startup, features, and restart         | P8.1, P8.4      | IN PROGRESS | A real IntelliJ IDEA 2026.2.2 headless run loaded the packaged plugin, opened `doom.cp`, started `cpc lsp`, initialized it in 0.332s, and shut it down cleanly. Parser registration was corrected to `externalAnnotator`; diagnostics/navigation/completion and forced-restart fixtures remain. |
+| P8.4  | IntelliJ parser cache, annotator, structure, navigation, tests  | P8.1            | DONE-LOCAL  | `./gradlew --offline --no-daemon editorArtifacts --max-workers=1` passes at version 0.5.59, including IntelliJ 2026.2.2 unit/plugin packaging tests, VS Code VSIX packaging, and Vim archives.                                                                                     |
+| P8.5  | Interactive IntelliJ LSP startup, features, and restart         | P8.1, P8.4      | IN PROGRESS | A real IntelliJ IDEA 2026.2.2 headless run loaded the packaged plugin, opened `doom.cp`, started `cpc lsp`, initialized it, and shut it down cleanly. The current 0.5.59 artifact gate is green; diagnostics/navigation/completion and forced-restart fixtures remain. |
 | P8.6  | Supported-host packaged LSP protocol smoke                      | P8.1, packaging | DONE        | CI run `36647197070` passed framed LSP startup/shutdown for the supported bare/cross distributions and host matrix.                                                                                                                                                                    |
 | P8.7  | Bounded LSP scheduling, cancellation, and revision safety       | P8.1            | DONE-LOCAL  | Two workers, bounded queue, overload response, cancellation lifetime, malformed edit matrix, sustained benchmark, and protocol reliability gates pass; repeat host soak if the release matrix changes.                                                                                 |
 | P8.8  | Compiler-aligned semantic resolution                            | P5, P8.1        | DONE-LOCAL | The bounded semantic-parity matrix is green: receiver/method lookup, overloads, diagnostics, scalar/pointer conversions, writes/callback effects, generated comptime scope, and advisory metadata. Richer data-flow and complete host-ABI legality remain outside this tooling contract. |
@@ -306,6 +306,12 @@ Post-commit aggregate validation of the operator contract passed with
 `./gradlew --offline --no-daemon test --max-workers=1
 -Dorg.gradle.native=false --console=plain` in 4m25s: 307 tests and 104/104
 grammar parses succeeded.
+
+The editor artifact gate was revalidated at version 0.5.59 with
+`./gradlew --offline --no-daemon editorArtifacts --max-workers=1 --console=plain`:
+VS Code packaging, IntelliJ 2026.2.2 plugin tests/package, and Vim archive
+packaging all passed. This refreshes P8.4/P8.5.a evidence; it does not claim
+interactive IntelliJ feature or restart coverage.
 
 ## Immediate queue
 
