@@ -305,6 +305,15 @@ reliability and release subtasks represented by a single indefinite status.
 | LSP-7.8 | DONE        | Expand property/fuzz coverage for positions and edits    | LSP-7.4          | `survivesDeterministicUnicodeAndMalformedEditMatrix` runs 32 deterministic edit seeds with valid snapshots, malformed recovery snapshots, supplementary Unicode, repeated full-document revisions, final symbol recovery, and diagnostics assertions. |
 | LSP-7.9 | IN PROGRESS | Prove crash/restart recovery through each client         | LSP-7.1          | Vim and VS Code child-process restart fixtures pass; VS Code also handles an initialize/pipe-teardown `EPIPE` and permits only one automatic restart per failure window. IntelliJ 2026.2.2 now has real plugin-load/LSP-start/clean-stop evidence; unexpected-exit/restart coverage remains. |
 
+#### LSP-7.9 acceptance subtasks
+
+| ID       | Status      | Subtask                              | Acceptance evidence / next action                                                                                  |
+|----------|-------------|--------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| LSP-7.9.a | DONE-LOCAL | Recover VS Code child-process exit   | Real child-process fixture covers `EPIPE`, one automatic restart, and explicit restart.                              |
+| LSP-7.9.b | DONE-LOCAL | Recover Vim child-process exit      | Headless Vim restart fixture passes.                                                                                |
+| LSP-7.9.c | DONE-LOCAL | Start and stop IntelliJ LSP cleanly | IntelliJ 2026.2.2 loads C-plus, starts `cpc lsp`, initializes, and shuts down cleanly in the isolated smoke run.     |
+| LSP-7.9.d | OPEN       | Recover an unexpectedly killed IntelliJ server | Add a deterministic child-server kill and assert the client state/restart behavior; manual restart alone is insufficient. |
+
 ### LSP-8 — packaging and release
 
 | ID      | Status      | Subtask                                                     | Dependencies     | Evidence / remaining action                                                                                |
@@ -316,6 +325,15 @@ reliability and release subtasks represented by a single indefinite status.
 | LSP-8.5 | IN PROGRESS | Run an interactive IntelliJ protocol fixture                | LSP-8.2, LSP-8.4 | A headless IntelliJ IDEA 2026.2.2 run loaded `C-plus (0.5.57)`, opened `doom.cp`, started `cpc lsp`, initialized in 0.332s, and stopped cleanly. Add assertions for document diagnostics, navigation/completion, test gutter, unexpected exit, and restart. |
 | LSP-8.6 | DONE        | Validate release discovery on supported hosts               | LSP-8.1, LSP-8.2 | CI run `36647197070` launched both bare and cross-runtime artifacts with protocol-clean stdout on Linux x86_64/arm64, macOS arm64, and Windows x86_64. |
 | LSP-8.7 | DONE        | Verify release publication and artifact completeness        | LSP-8.6          | Tagged run `36622759483` published `0.5.57` with the generated manifest; run `36647197070` completed bare/cross host validation after the launcher correction. |
+
+#### LSP-8.5 acceptance subtasks
+
+| ID       | Status      | Subtask                                      | Acceptance evidence / next action                                                                                          |
+|----------|-------------|----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| LSP-8.5.a | DONE-LOCAL | Load the packaged plugin in IntelliJ         | `scripts/intellij-lsp-smoke.sh` loads the 0.5.57 plugin in IntelliJ IDEA 2026.2.2 under an isolated profile.                  |
+| LSP-8.5.b | IN PROGRESS | Activate LSP for a real project document     | The smoke harness opens `doom.cp` and observes `cpc lsp` initialization; add protocol-visible diagnostics/document-sync checks. |
+| LSP-8.5.c | IN PROGRESS | Verify editor feature presentation           | Exercise diagnostics, completion, navigation, structure, and test gutter against a real IDE document.                       |
+| LSP-8.5.d | OPEN       | Verify unexpected exit and restart            | Kill the child server, assert recovery, and exercise the restart action with log/protocol evidence.                         |
 
 ## Dependency graph and execution order
 
