@@ -698,12 +698,14 @@ class CPlusLspServer(
                     ?: Int.MAX_VALUE
             }.thenBy { it.selection.startOffset })
         }
-        receiverType(document, offset)?.let { receiverType ->
+        val receiverCandidates = receiverType(document, offset)?.let { receiverType ->
             val resolvedReceiver = resolveTypeAlias(receiverType)
-            orderedCandidates.firstOrNull {
+            orderedCandidates.filter {
                 it.ownerName?.let(::resolveTypeAlias) == resolvedReceiver
-            }?.let { return it }
-        }
+            }
+        } ?: orderedCandidates
+        if (callArguments != null && isAmbiguousCallable(document, receiverCandidates, callArguments)) return null
+        receiverCandidates.firstOrNull { it.ownerName != null }?.let { return it }
         val scopedCandidates = orderedCandidates
             .filter { it.uri == document.uri && it.scope.contains(offset) }
         if (scopedCandidates.isNotEmpty()) {
@@ -722,6 +724,22 @@ class CPlusLspServer(
             ?: orderedCandidates.firstOrNull()
         else precedingCandidates.maxByOrNull { it.selection.startOffset }
             ?: orderedCandidates.firstOrNull()
+    }
+
+    private fun isAmbiguousCallable(
+        document: LspDocument,
+        candidates: List<LspSymbol>,
+        arguments: List<String>
+    ): Boolean {
+        val ranked = candidates.mapNotNull { candidate ->
+            val score = overloadScore(document, candidate, arguments)
+                ?: callParameterArity(candidate)?.let { arity ->
+                    100 + kotlin.math.abs(arity - arguments.size)
+                }
+            score?.let { candidate to it }
+        }.sortedBy { it.second }
+        if (ranked.size < 2 || ranked[0].second != ranked[1].second) return false
+        return ranked[0].first.selection.startOffset != ranked[1].first.selection.startOffset
     }
 
     private fun callArity(text: String, offset: Int): Int? {

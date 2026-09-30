@@ -412,6 +412,30 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun failsClosedForEquallyRankedCallableCandidates() {
+        val uri = "file:///overload-ambiguous.cp"
+        val source = "int choose(long value) { return (int)value; }\n" +
+            "int choose(long value) { return (int)value + 1; }\n" +
+            "int main(void) { return choose(1); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val callPosition = source.lines()[2].indexOf("choose")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$callPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[]"), response)
+    }
+
+    @Test
     fun resolvesOverloadedInstanceMethodByExplicitArgumentType() {
         val uri = "file:///overload-methods.cp"
         val source = "typedef struct chooser_t {\n" +
