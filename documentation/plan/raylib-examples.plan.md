@@ -11,6 +11,7 @@
 - [x] Q*bert — graph/grid traversal with tile state changes.
 - [x] Bomberman — grid world, timers, explosions, propagation.
 - [x] Lode Runner — platform/grid mechanics, AI pursuit.
+- [x] DOOM — embedded string levels, level selector, ray-cast 2.5D view, enemies and hitscan combat.
 - [ ] Sokoban — pure deterministic puzzle state, no clock required.
 - [ ] Minesweeper — board generation, reveal propagation, flags.
 - [ ] Connect Four — tiny discrete board-state machine.
@@ -2446,3 +2447,627 @@ Langton's Ant    asynchronous single-agent automaton
 
 That is becoming a particularly good **C+ raylib example suite**, because each game exercises a materially different application-state topology rather than being five cosmetic variations of the same game loop.
 
+
+
+# BATCH 4
+
+# DOOM
+
+DOOM keeps the same C+ application architecture as the other raylib examples:
+
+```text
+keyboard events ─┐
+                 ├──> doom_app_t.event(...)
+clock events ────┘
+                         │
+                         ▼
+                   logical game state
+                         │
+                         ├── grid / entities / health / ammo
+                         ├── collision + AI + combat
+                         └── selected/current level
+                         │
+                         ▼ read-only projection
+                   doom_app_t.render(...)
+                         │
+                         ▼
+                    ray-cast view
+                         │
+                         ▼
+                       raylib
+```
+
+The important separation remains the same as in the other examples: **clock/input events mutate the model; rendering only projects it**. The first-person renderer is not the world model.
+
+## Level source model
+
+All levels are self-contained in the source file. There are no WADs, external maps, textures, or runtime level files.
+
+```c
+typedef struct doom_level_def_t {
+    borrowed const char* name;
+    borrowed const char* map;
+} doom_level_def_t;
+
+static const doom_level_def_t DOOM_LEVELS[8] = {
+    { "1. Entryway",  "... embedded map string ..." },
+    { "2. Crossfire", "... embedded map string ..." },
+    ...
+};
+```
+
+Map alphabet:
+
+```text
+#   solid wall
+.   walkable floor
+P   player spawn; converted to floor when parsed
+E   enemy spawn; converted to floor + enemy entity when parsed
+X   level exit
+```
+
+The parser materializes one selected source string into the runtime grid and entity arrays:
+
+```text
+embedded level string
+        │
+        ▼
+      parse
+        │
+        ├──> map[y][x]
+        ├──> player position/angle
+        ├──> enemy entities
+        └──> exit cell
+```
+
+Eight levels are embedded:
+
+```text
+1. Entryway
+2. Crossfire
+3. The Fork
+4. Courtyard
+5. Zigzag
+6. Reactor
+7. Gauntlet
+8. Last Stand
+```
+
+## Application state
+
+```c
+typedef enum doom_state_t {
+    DOOM_MENU,
+    DOOM_PLAYING,
+    DOOM_WON,
+    DOOM_DEAD
+} doom_state_t;
+
+typedef struct doom_enemy_t {
+    float x;
+    float y;
+    int health;
+    bool alive;
+    float attack_cooldown;
+} doom_enemy_t;
+
+typedef struct doom_app_t {
+    doom_state_t state;
+
+    char map[DOOM_MAX_HEIGHT][DOOM_MAX_WIDTH + 1];
+    int map_width;
+    int map_height;
+
+    int selected_level;
+    int current_level;
+
+    float player_x;
+    float player_y;
+    float player_angle;
+
+    int health;
+    int ammo;
+    int score;
+
+    doom_enemy_t enemies[DOOM_MAX_ENEMIES];
+    int enemy_count;
+
+    float fire_cooldown;
+    float hurt_flash;
+
+    float zbuffer[DOOM_SCREEN_WIDTH];
+} doom_app_t;
+```
+
+`zbuffer` belongs to the projection/render state. The map, player, enemies, health, ammo, and score form the logical game state.
+
+## Level selection
+
+The application starts in `DOOM_MENU` and presents all eight levels before any level is loaded.
+
+```text
+             DOOM_MENU
+                 │
+      ┌──────────┼──────────┐
+      │          │          │
+    UP/W       DOWN/S      1..8
+      │          │          │
+      └────── selected_level┘
+                 │
+           ENTER / SPACE
+                 │
+                 ▼
+             load_level
+                 │
+                 ▼
+            DOOM_PLAYING
+```
+
+A completed or failed level returns to the selector with Enter/Space. `M` returns to the selector while playing.
+
+## Input events
+
+Keyboard event transitions:
+
+```text
+MENU
+  UP/W, DOWN/S      → select level
+  1..8              → select + start level directly
+  ENTER / SPACE     → start selected level
+
+PLAYING
+  M                  → return to level selector
+
+WON / DEAD
+  ENTER / SPACE      → return to level selector
+```
+
+Held controls are sampled into the clock event:
+
+```c
+typedef struct doom_event_t {
+    doom_event_type_t type;
+    int key;
+    float delta_seconds;
+
+    float move_forward;
+    float move_strafe;
+    float turn_axis;
+    bool fire_down;
+} doom_event_t;
+```
+
+```text
+W / S or UP / DOWN   → forward/back
+A / D                → strafe left/right
+LEFT / RIGHT         → rotate
+SPACE                → fire
+```
+
+As with Jetpac, continuous input is represented in the clock event rather than by latching key-down transitions into application state.
+
+## Clock transition
+
+```text
+CLOCK(dt)
+    │
+    ├─ clamp dt
+    ├─ rotate player
+    ├─ integrate forward/strafe movement
+    │      └─ collision against map grid
+    ├─ detect exit tile
+    ├─ process held fire + cooldown
+    │      └─ hitscan target selection
+    ├─ update enemy cooldowns
+    ├─ enemy line-of-sight test
+    ├─ enemy pursuit/collision
+    ├─ enemy melee attack
+    └─ update transient hurt/fire timers
+```
+
+Movement uses axis-separated collision resolution:
+
+```text
+proposed x ── wall? ── no ──> commit x
+proposed y ── wall? ── no ──> commit y
+```
+
+That permits wall sliding without requiring a full rigid-body physics system.
+
+## Combat
+
+Player fire is a logical hitscan operation, independent of the ray-cast renderer:
+
+```text
+fire
+ │
+ ├─ ammo > 0 ?
+ ├─ cooldown ready ?
+ │
+ ▼
+for each live enemy
+ │
+ ├─ in aiming cone ?
+ ├─ nearest so far ?
+ └─ unobstructed line of sight ?
+         │
+         ▼
+      target
+         │
+         ├─ health--
+         ├─ death → alive=false
+         └─ score
+```
+
+The renderer and weapon therefore share geometry concepts but not state mutation. A wall-column ray cannot itself damage an enemy.
+
+## Enemy update
+
+Enemies use a deliberately small state model:
+
+```text
+live enemy
+    │
+    ├─ player too far / occluded → idle
+    │
+    ├─ player in melee range
+    │      └─ attack when cooldown expires
+    │
+    └─ otherwise
+           └─ move toward player
+                ├─ wall collision
+                └─ enemy separation
+```
+
+This is enough to exercise entity update, visibility queries, cooldowns, collision, and game-over transitions without introducing a navigation subsystem into the example.
+
+## Renderer
+
+The grid is projected using a classic 2.5D ray caster. For each screen column:
+
+```text
+screen column x
+      │
+      ▼
+ray angle = player angle + camera offset
+      │
+      ▼
+advance ray through map
+      │
+      ▼
+first wall hit
+      │
+      ▼
+correct fisheye distance
+      │
+      ├──> wall slice height
+      ├──> distance shading
+      └──> zbuffer[x]
+```
+
+Formally, for horizontal camera coordinate `u ∈ [-1/2, 1/2]`:
+
+```text
+θ_ray = θ_player + u · FOV
+
+p(d) = p_player + d · (cos θ_ray, sin θ_ray)
+```
+
+The first `d` where `map[floor(p.y)][floor(p.x)]` is a wall gives the ray intersection. Projection uses the fisheye-corrected distance:
+
+```text
+d_corrected = d · cos(θ_ray - θ_player)
+
+wall_height ∝ 1 / d_corrected
+```
+
+Enemies are billboard-like projected entities. Their projected distance is tested against `zbuffer` so a wall can occlude an enemy.
+
+```text
+logical world
+  map + player + enemies
+          │
+          ├───────────────┐
+          ▼               ▼
+      wall rays       enemy projection
+          │               │
+          └──── zbuffer ───┘
+                  │
+                  ▼
+                frame
+```
+
+A small top-down minimap is another read-only view of the same logical state.
+
+## Completion states
+
+```text
+player enters X
+      │
+      ▼
+   DOOM_WON
+      │
+ ENTER/SPACE
+      │
+      ▼
+   DOOM_MENU
+```
+
+```text
+health <= 0
+      │
+      ▼
+   DOOM_DEAD
+      │
+ ENTER/SPACE
+      │
+      ▼
+   DOOM_MENU
+```
+
+This DOOM example extends the raylib suite with a different projection model without changing the application architecture:
+
+```text
+existing examples:   state → 2D renderer
+DOOM:                state → ray-cast 2.5D renderer
+```
+
+The significant new workload is therefore not a new application model, but **view synthesis from a grid world plus visibility-sensitive entity interaction**.
+
+---
+
+# DOOM inline pixmap / tile textures
+
+The DOOM example keeps the same event/state/render architecture. Texturing is a **rendering concern only**: level parsing, movement, collision, AI, combat, health, exits, and visibility still operate on the logical map and entities.
+
+The texture system has three data layers:
+
+```text
+palette index
+    │
+    ▼
+RGBA color
+
+pixmap string
+    │  characters are palette indices
+    ▼
+virtual texels
+
+map/entity symbol
+    │
+    ▼
+(texture role, pixmap)
+```
+
+## Palette
+
+Colors are declared inline and packed as `0xRRGGBBAA`:
+
+```c
+typedef struct doom_palette_color_t {
+    char index;
+    borrowed const char* name;
+    uint32_t value;
+} doom_palette_color_t;
+
+colors[] = {
+    {'r', "red",         0x771100ff},
+    {'1', "red-up",      0x992211ff},
+    {'2', "red-down",    0x550000ff},
+    {'3', "red-high",    0xff3300ff},
+    {'g', "green",       0x117700ff},
+    {'5', "green-up",    0x229911ff},
+    {'6', "green-down",  0x005500ff},
+    {'=', "grey",        0x7f7f7fff},
+    {' ', "transparent", 0x00000000},
+    ...
+};
+```
+
+`' '` is a transparent texel, which is especially useful for character sprites.
+
+## Pixmap definitions
+
+A pixmap is an ordinary source string whose characters reference the palette:
+
+```c
+brick =
+    "111111111111111112\n"
+    "rrrrrrrrrrrrrrrr12\n"
+    "rrrrrrrrrrrrrrrr12\n"
+    "rrrrrrrrrrrrrrrr12\n"
+    "222222222222222222\n"
+    "111111112211111112\n"
+    "rrrrrrr122rrrrrr12\n"
+    "rrrrrrr122rrrrrr12\n"
+    "rrrrrrr122rrrrrr12";
+
+enemy =
+    "    =====    \n"
+    "  ==g=r=g==  \n"
+    "  ====r====  \n"
+    "  =========  \n"
+    "  ==rrrrr==  \n"
+    "  ==rrrrr==  \n"
+    "    =====    \n"
+    "======r======\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "== ===r=== ==\n"
+    "r= =======  r\n"
+    "  =========  \n"
+    "  ===   ===  \n"
+    "  ===   ===  \n"
+    "  ===   ===  ";
+```
+
+The texture definition records dimensions once, so sampling is constant-time:
+
+```c
+typedef struct doom_texture_def_t {
+    char symbol;
+    map_sym_type_t type;
+    borrowed const char* name;
+    borrowed const char* pixels;
+    int width;
+    int height;
+} doom_texture_def_t;
+```
+
+No image files, decoding, allocation, upload, or raylib `Texture2D` objects are required.
+
+## Semantic texture table
+
+```c
+typedef enum map_sym_type_t {
+    t_wall,
+    t_floor,
+    t_character
+} map_sym_type_t;
+
+textures[] = {
+    {'#', t_wall,      "brick", brick, 18, 9},
+    {'E', t_character, "enemy", enemy, 13, 19},
+    {'.', t_floor,     "floor", floor, 4, 4},
+    {'X', t_floor,     "exit",  exit,  4, 4},
+    ...
+};
+```
+
+This table also becomes the source of semantic wall classification:
+
+```text
+map symbol
+    │
+    ▼
+texture_for(symbol, t_wall) != null ?
+    │
+    ├─ yes → solid
+    └─ no  → traversable
+```
+
+So adding another wall kind does not require changing `solid()`.
+
+## Wall sampling
+
+Ray casting still finds the first solid map cell, but now also returns:
+
+```text
+hit map symbol
+hit coordinate within wall face: u ∈ [0,1)
+```
+
+Projection is unchanged:
+
+```text
+d_corrected = d · cos(θ_ray - θ_player)
+wall_height ∝ 1 / d_corrected
+```
+
+For each projected wall screen texel:
+
+```text
+tx = floor(u · texture.width)
+ty = floor(v · texture.height)
+
+palette_index = texture[tx, ty]
+color = palette[palette_index]
+```
+
+A source pixmap pixel is therefore a **virtual pixel**. If a wall is close to the camera, one virtual pixel can become tens of physical screen pixels. Sampling is nearest-neighbor by design so the source-art pixel structure remains visible.
+
+Distance shading is applied after palette lookup:
+
+```text
+source RGBA
+    │
+    ▼
+distance shade
+    │
+    ▼
+DrawRectangle(...)
+```
+
+## Floor tiles
+
+The lower half of the projection is perspective floor-cast from the same world grid.
+
+For a screen row below the horizon:
+
+```text
+row_distance ∝ 1 / (screen_y - horizon)
+```
+
+Each floor sample resolves a world coordinate, then:
+
+```text
+world coordinate
+      │
+      ▼
+map cell symbol
+      │
+      ▼
+t_floor texture
+      │
+      ▼
+fractional world x/y → tx/ty
+      │
+      ▼
+palette color
+```
+
+This lets `'.'`, `'X'`, and future floor symbols use different inline tiles without changing the logical map model.
+
+## Character sprites
+
+Enemies keep their logical world position and a texture symbol, currently `'E'`.
+
+```text
+enemy world position
+      │
+      ▼
+angle + corrected distance
+      │
+      ▼
+projected screen rectangle
+      │
+      ▼
+scale symbolic pixmap
+      │
+      ├─ transparent palette texel → skip
+      └─ opaque texel → zbuffer test → draw
+```
+
+The sprite preserves its pixmap aspect ratio. Each symbolic texel is drawn as a screen rectangle, so virtual pixel size naturally grows as the enemy approaches the camera.
+
+Wall depth still owns the z-buffer. Character texels are emitted only when their corrected depth is in front of the wall depth at that screen column.
+
+## Architecture
+
+```text
+keyboard/clock
+      │
+      ▼
+logical DOOM state
+ map + player + enemies
+      │
+      │ read-only
+      ▼
+ray/floor/entity projection
+      │
+      ├── map symbol ─────► semantic texture table
+      │                         │
+      │                         ▼
+      │                     pixmap string
+      │                         │
+      │                         ▼
+      └────────────────────► palette
+                                │
+                                ▼
+                           screen rectangles
+```
+
+The renderer can therefore be replaced later by GPU textures without altering the gameplay model or level format. The inline pixmaps are the canonical asset representation; raster/GPU textures would only be a cached rendering representation of the same data.
