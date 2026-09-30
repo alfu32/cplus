@@ -217,7 +217,7 @@ status is only a summary; work is considered converged when every row below is
 | LSP-5  | 5.6c.2 function-pointer compatibility  | DONE        | Match direct function values to compatible function-pointer overloads using return type and callback arity                 | 5.6c            |
 | LSP-5  | 5.6d write/reference effects           | OPEN        | Distinguish reads, writes, declarations, and callback/function-pointer references                                                      | 5.6e            |
 | LSP-5  | 5.6e comptime parity                   | OPEN        | Expose generated declarations, scopes, aliases, and source origins consistently in all semantic features                               | LSP-5 gate      |
-| LSP-2  | 2.5 unsupported-AST diagnostics        | IN PROGRESS | Classify recovered/unsupported AST fragments as warnings with mapped ranges; preserve compiler/parser failures as errors, continue emission for recoverable cases, and verify both severities in every editor adapter; implicitly fatal transcoder crashes may stop generation | 2.1–2.4 |
+| LSP-2  | 2.5 unsupported-AST diagnostics        | DONE        | Recovered/unsupported AST fragments are mapped warnings, compiler/parser failures remain errors, recoverable diagnostics do not stop emission, and all three adapters preserve both severities; implicitly fatal transcoder crashes may stop generation | 2.1–2.4 |
 | LSP-2  | 2.5a AST warning classification        | DONE        | `CPLUS_UNSUPPORTED_AST` warnings are emitted for top-level unmapped named/opaque AST fragments, with source spans and duplicate suppression | 2.5b–c |
 | LSP-2  | 2.5b severity and emission contract    | DONE        | Warning severity remains advisory and parser recovery diagnostics remain errors; LSP session and document queries continue after warning publication | 2.5c |
 | LSP-2  | 2.5c editor severity fixtures           | DONE        | VS Code's framed client fixture, Vim quickfix fixture, and IntelliJ decoder fixture preserve warning severity 2 and parser/compiler error severity 1 | LSP-2 gate |
@@ -260,7 +260,7 @@ reliability and release subtasks represented by a single indefinite status.
 
 | ID      | Status | Subtask                                      | Dependencies | Evidence / remaining action                                                                                         |
 |---------|--------|----------------------------------------------|--------------|---------------------------------------------------------------------------------------------------------------------|
-| LSP-2.5 | IN PROGRESS | Report unsupported/recovered AST fragments | LSP-2.1–2.4 | Mapped warning generation and all three adapter severity fixtures pass; implicitly fatal generation failures remain errors and the parent diagnostics gate remains open until the broader document matrix is recorded. |
+| LSP-2.5 | DONE        | Report unsupported/recovered AST fragments | LSP-2.1–2.4 | Mapped warning generation, parser-error preservation, and VS Code/Vim/IntelliJ severity fixtures pass; implicitly fatal generation failures remain errors. |
 
 ### LSP-5 — workspace and semantic services
 
