@@ -28,8 +28,8 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
             override fun actionPerformed(event: AnActionEvent) {
                 val project = event.project ?: return
                 val settings = CPlusSettings.getInstance().current()
-                val commandText = if (fixture != null) settings.testProgram.ifBlank { "cplus test" }
-                    else settings.runnerCommand.ifBlank { "cplus run" }
+                val commandText = if (fixture != null) settings.testProgram.ifBlank { "cpc test" }
+                    else settings.runnerCommand.ifBlank { "cpc run" }
                 val command = CPlusCommand.resolve(commandText, project) + virtualFile.path + listOfNotNull(fixture?.name)
                 val console = CPlusOutputConsole.open(project, title, command)
                 if (console == null) return

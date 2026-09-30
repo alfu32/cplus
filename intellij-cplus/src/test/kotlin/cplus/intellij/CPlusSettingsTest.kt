@@ -42,4 +42,40 @@ class CPlusSettingsTest {
 
         assertEquals(custom, settings.current())
     }
+
+    @Test
+    fun normalizesLegacyStateEvenWhenItWasAlreadyLoadedBeforeTheMigration() {
+        val settings = CPlusSettings()
+        settings.update(
+            compiler = "cplus compile",
+            runner = "cplus run",
+            program = "cplus test",
+            parser = "",
+            importGraph = "cplus graph",
+            languageServer = ""
+        )
+
+        assertEquals("cpc compile", settings.current().compilerCommand)
+        assertEquals("cpc run", settings.current().runnerCommand)
+        assertEquals("cpc test", settings.current().testProgram)
+        assertEquals("cpc graph", settings.current().importGraphCommand)
+    }
+
+    @Test
+    fun keepsCustomCommandsWhenReadingStateRepeatedly() {
+        val settings = CPlusSettings()
+        val custom = CPlusSettings.State(
+            compilerCommand = "./tools/cplus compile",
+            runnerCommand = "mise exec -- cpc run",
+            testProgram = "./scripts/run-tests.sh",
+            parserCommand = "",
+            importGraphCommand = "./tools/graph",
+            languageServerCommand = ""
+        )
+
+        settings.loadState(custom)
+
+        assertEquals(custom, settings.current())
+        assertEquals(custom, settings.current())
+    }
 }

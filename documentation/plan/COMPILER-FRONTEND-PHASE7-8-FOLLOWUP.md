@@ -264,6 +264,16 @@ records instead of relying only on startup text. The current host replay was
 unable to start IntelliJ because its X11 display was unavailable; no feature
 status was advanced from that attempted replay.
 
+The IntelliJ run/test command boundary was hardened after a live settings
+capture showed obsolete `cplus ...` defaults reaching the gutter action. The
+action fallbacks now use `cpc test`/`cpc run`, and `CPlusSettings` normalizes
+legacy built-ins both when loading persisted state and whenever state is read
+or updated. Custom commands are preserved verbatim. The focused
+`./gradlew --offline --no-daemon -p intellij-cplus test buildPlugin --max-workers=1 --console=plain`
+gate passes, including regressions for already-loaded legacy state and repeated
+custom-state reads. A live IDE must reload the newly built plugin before its
+settings panel can reflect this correction.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their

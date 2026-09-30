@@ -27,9 +27,18 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
     private var state = State()
     override fun getState(): State = state
     override fun loadState(state: State) { this.state = state.migrateLegacyDefaults() }
-    fun current(): State = state
+    /**
+     * Settings are persisted by IntelliJ and can outlive a plugin update.  Keep
+     * the migration idempotent at the read boundary as well as in loadState so
+     * callers never receive the obsolete built-in `cplus ...` commands.
+     */
+    fun current(): State {
+        val migrated = state.migrateLegacyDefaults()
+        if (migrated != state) state = migrated
+        return state
+    }
     fun update(compiler: String, runner: String, program: String, parser: String, importGraph: String, languageServer: String) {
-        state = State(compiler, runner, program, parser, importGraph, languageServer)
+        state = State(compiler, runner, program, parser, importGraph, languageServer).migrateLegacyDefaults()
     }
 
     companion object {
