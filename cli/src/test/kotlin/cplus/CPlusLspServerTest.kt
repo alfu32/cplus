@@ -1146,6 +1146,45 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun invalidatesGeneratedComptimeMembersAfterDocumentChange() {
+        val uri = "file:///generated-method-invalidation.cp"
+        val source = "comptime type @box(type T) {\n" +
+            "    return @code { struct box { T value; pub int get(borrowed *self) { return self->value; } }; };\n" +
+            "}\n" +
+            "comptime typedef box(int) int_box_t;\n" +
+            "int main(void) { int_box_t value; return value.; }\n"
+        val changed = "int main(void) { int_box_t value; return value.; }\n"
+        fun encode(value: String): String = value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+        val completionLine = source.lines().indexOfLast { "return value.;" in it }
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"${encode(source)}\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$completionLine,\"character\":${source.lines()[completionLine].length - 1}}}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":2},\"contentChanges\":[{\"text\":\"${encode(changed)}\"}]}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/completion\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":0,\"character\":${changed.lines().first().length - 1}}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":{\"isIncomplete\":false"), response)
+        assertTrue(response.contains("\"id\":2,\"result\".*\"label\":\"get\"".toRegex()), response)
+        val updatedCompletion = response.substringAfter("\"id\":3,\"result\":")
+            .substringBefore("Content-Length")
+        assertFalse(updatedCompletion.contains("\"label\":\"get\""), response)
+        assertFalse(updatedCompletion.contains("\"label\":\"int_box_t\""), response)
+    }
+
+    @Test
     fun ignoresStaleChangesAndClearsDiagnosticsOnClose() {
         val uri = "file:///stale.cp"
         val messages = listOf(
