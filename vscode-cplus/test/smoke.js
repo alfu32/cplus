@@ -11,6 +11,9 @@ const diagnostics = require("../out/lspDiagnostics.js");
 
 assert.deepEqual(discovery.resolveLanguageServerCommand({ configured: "java -jar 'c-plus.jar'" }), ["java", "-jar", "c-plus.jar"]);
 assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "/project", platform: "linux", exists: (path) => path === "/project/.cplus/cpc.sh" }), ["/project/.cplus/cpc.sh"]);
+assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "/project", platform: "linux", exists: (path) => path === "/project/c-plus-bin/cpc.sh" }), ["/project/c-plus-bin/cpc.sh"]);
+assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "/project", platform: "linux", cplusHome: "/opt/c-plus", exists: (path) => path === "/opt/c-plus/cpc.sh" }), ["/opt/c-plus/cpc.sh"]);
+assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "/project", platform: "linux", userHome: "/home/tester", exists: (path) => path === "/home/tester/.local/bin/cpc.sh" }), ["/home/tester/.local/bin/cpc.sh"]);
 assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "C:/project", platform: "win32", exists: (path) => path.endsWith("cpc.cmd") }), ["C:/project/.cplus/cpc.cmd"]);
 assert.deepEqual(discovery.resolveLanguageServerCommand({ workspaceRoot: "/project", exists: () => false }), ["cpc"]);
 assert.match(discovery.languageServerDiscoveryFailure(["cpc"]), /install the cpc launcher/);

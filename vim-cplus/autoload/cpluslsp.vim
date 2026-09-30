@@ -51,7 +51,7 @@ function! cpluslsp#Start() abort
 endfunction
 
 " Resolve in the same order as the other editor clients: explicit command,
-" project-local .cplus launcher, then the installed cpc command.
+" project-local launchers, CPLUS_HOME/user-local launchers, then PATH.
 function! cpluslsp#DiscoverCommand() abort
   let configured = get(g:, 'cplus_language_server_command', '')
   if empty(configured) && exists('g:cplus_command')
@@ -64,22 +64,36 @@ function! cpluslsp#DiscoverCommand() abort
     return configured
   endif
   if has('win32')
-    let candidates = ['.cplus/cpc.cmd', '.cplus/cpc.exe', '.cplus/cpc']
+    let names = ['cpc.cmd', 'cpc.exe', 'cpc']
   else
-    let candidates = ['.cplus/cpc.sh', '.cplus/cpc']
+    let names = ['cpc.sh', 'cpc']
   endif
-  for candidate in candidates
-    let found = findfile(candidate, '.;')
-    if !empty(found)
-      return fnamemodify(found, ':p')
+  for directory in ['.cplus', 'c-plus-bin', '']
+    for name in names
+      let found = findfile(empty(directory) ? name : directory . '/' . name, '.;')
+      if !empty(found)
+        return fnamemodify(found, ':p')
+      endif
+    endfor
+  endfor
+  let cplus_home = exists('$CPLUS_HOME') ? $CPLUS_HOME : ''
+  for root in [cplus_home, expand('$HOME') . '/.local/bin', expand('$HOME') . '/.local/share/c-plus']
+    if empty(root) || root ==# '/.local/bin' || root ==# '/.local/share/c-plus'
+      continue
     endif
+    for name in names
+      let found = root . '/' . name
+      if filereadable(found) && executable(found)
+        return fnamemodify(found, ':p')
+      endif
+    endfor
   endfor
   return 'cpc'
 endfunction
 
 function! cpluslsp#DiscoveryFailure(command) abort
   return 'C-plus language server could not be started (' . join(a:command, ' ') . '). ' .
-        \ 'Set g:cplus_language_server_command, add .cplus/cpc(.sh|.cmd), or install cpc in PATH.'
+        \ 'Set g:cplus_language_server_command, add .cplus/cpc(.sh|.cmd) or c-plus-bin/cpc, or install cpc in PATH.'
 endfunction
 
 function! cpluslsp#Stop() abort

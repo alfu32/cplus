@@ -1,5 +1,5 @@
 declare const require: (moduleName: string) => any;
-declare const process: { platform: string };
+declare const process: { platform: string; env?: { [key: string]: string | undefined } };
 const fileSystem = require("node:fs") as { existsSync(path: string): boolean };
 const pathModule = require("node:path") as { join(...parts: string[]): string };
 
@@ -8,12 +8,16 @@ export interface LspDiscoveryOptions {
     workspaceRoot?: string;
     platform?: string;
     exists?: (path: string) => boolean;
+    cplusHome?: string;
+    userHome?: string;
 }
 
 /**
  * Resolve the executable without making editor configuration carry packaging
  * knowledge. An explicitly configured command always wins; otherwise a
- * project-local launcher is preferred over the installed `cpc` command.
+ * project-local launchers are preferred over installed commands. Keep this
+ * order aligned with the IntelliJ and Vim clients so IDEs started outside a
+ * login shell can still find a repository or user-local launcher.
  */
 export function resolveLanguageServerCommand(options: LspDiscoveryOptions = {}): string[] {
     const configured = options.configured?.trim() ?? "";
@@ -21,13 +25,32 @@ export function resolveLanguageServerCommand(options: LspDiscoveryOptions = {}):
 
     const root = options.workspaceRoot?.trim();
     const exists = options.exists ?? fileSystem.existsSync;
-    if (root) {
-        const candidates = (options.platform ?? process.platform) === "win32"
+    const candidates = (options.platform ?? process.platform) === "win32"
             ? ["cpc.cmd", "cpc.exe", "cpc"]
             : ["cpc.sh", "cpc"];
+    if (root) {
+        for (const directory of [".cplus", "c-plus-bin", ""]) {
+            for (const candidate of candidates) {
+                const path = pathModule.join(root, directory, candidate);
+                if (exists(path)) return [path];
+            }
+        }
+    }
+    const environment = process.env ?? {};
+    const cplusHome = options.cplusHome ?? environment.CPLUS_HOME;
+    if (cplusHome) {
         for (const candidate of candidates) {
-            const path = pathModule.join(root, ".cplus", candidate);
+            const path = pathModule.join(cplusHome, candidate);
             if (exists(path)) return [path];
+        }
+    }
+    const userHome = options.userHome ?? environment.HOME ?? environment.USERPROFILE;
+    if (userHome) {
+        for (const directory of [pathModule.join(userHome, ".local", "bin"), pathModule.join(userHome, ".local", "share", "c-plus")]) {
+            for (const candidate of candidates) {
+                const path = pathModule.join(directory, candidate);
+                if (exists(path)) return [path];
+            }
         }
     }
     return ["cpc"];
@@ -35,8 +58,8 @@ export function resolveLanguageServerCommand(options: LspDiscoveryOptions = {}):
 
 export function languageServerDiscoveryFailure(command: string[]): string {
     return `C-plus language server '${command.join(" ")}' could not be started. ` +
-        "Set cplus.languageServerCommand, add .cplus/cpc(.sh|.cmd) to the project, " +
-        "or install the cpc launcher and add it to PATH.";
+        "Set cplus.languageServerCommand, add a project .cplus/cpc(.sh|.cmd) or " +
+        "c-plus-bin/cpc launcher, or install the cpc launcher and add it to PATH.";
 }
 
 export function splitCommand(command: string): string[] {

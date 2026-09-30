@@ -14,6 +14,10 @@ closed buffers and maps server diagnostics into the quickfix list. Existing
 parser commands remain available as a fallback; stop or restart it with
 `:CPlusLspStop` or `:CPlusLspRestart`.
 
+With no explicit command, discovery checks project `.cplus`, project
+`c-plus-bin`, the project root, `CPLUS_HOME`, user-local `~/.local/bin`, and
+`~/.local/share/c-plus`, then falls back to `cpc` on `PATH`.
+
 Install by adding this directory to Vim's `runtimepath`, for example:
 
 ```vim
