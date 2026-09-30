@@ -125,7 +125,7 @@ being claimed by this local gate.
 
 | ID      | Parent | Subtask                                                                                | Status     | Exit evidence                                        |
 |---------|--------|----------------------------------------------------------------------------------------|------------|------------------------------------------------------|
-| P8.5.a  | P8.5   | Start IntelliJ client, initialize, and synchronize a document                          | OPEN       | Automated IDE fixture reaches initialized state      |
+| P8.5.a  | P8.5   | Start IntelliJ client, initialize, and synchronize a document                          | DONE-LOCAL | Isolated IntelliJ IDEA 2026.2.2 fixture loads the packaged plugin, opens `doom.cp`, discovers the project-local launcher, and reaches LSP initialization |
 | P8.5.b  | P8.5   | Surface diagnostics, completion, navigation, and test gutter actions                   | OPEN       | IntelliJ integration assertions and screenshots/logs |
 | P8.5.c  | P8.5   | Recover from LSP exit and restart without stale diagnostics                            | OPEN       | Forced-exit/restart fixture                          |
 | P8.8.a  | P8.8   | Match receiver/value/pointer method lookup and overload ranking                        | DONE-LOCAL | LSP semantic fixture suite                           |
