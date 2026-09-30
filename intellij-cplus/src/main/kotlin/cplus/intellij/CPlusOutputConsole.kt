@@ -7,29 +7,38 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.openapi.util.Key
 import com.intellij.ui.content.ContentFactory
 
 class CPlusOutputToolWindowFactory : ToolWindowFactory {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val console = CPlusOutputConsole.create(project)
         console.print("Run a C-plus test or main to see its output here.\n", ConsoleViewContentType.SYSTEM_OUTPUT)
-        toolWindow.contentManager.addContent(
-            ContentFactory.getInstance().createContent(console.component, "Output", true)
-        )
+        toolWindow.contentManager.addContent(CPlusOutputConsole.content(console, "Output"))
     }
 }
 
 internal object CPlusOutputConsole {
+    private val consoleKey = Key.create<ConsoleView>("cplus.output.console")
+
     fun create(project: Project): ConsoleView = ConsoleViewImpl(project, false)
+
+    fun content(console: ConsoleView, title: String) = ContentFactory.getInstance()
+        .createContent(console.component, title, true)
+        .also { it.putUserData(consoleKey, console) }
 
     fun open(project: Project, title: String, command: List<String>): ConsoleView? {
         val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("C-plus") ?: return null
-        val console = create(project)
+        val contentManager = toolWindow.contentManager
+        val content = contentManager.contents.firstOrNull { it.getUserData(consoleKey) != null }
+        val console = content?.getUserData(consoleKey) ?: create(project)
+        content?.let {
+            it.displayName = title
+            contentManager.setSelectedContent(it)
+        } ?: contentManager.addContent(content(console, title).also(contentManager::setSelectedContent))
+        console.clear()
         val commandText = command.joinToString(" ")
         console.print("> $commandText\n\n", ConsoleViewContentType.SYSTEM_OUTPUT)
-        val content = ContentFactory.getInstance().createContent(console.component, title, true)
-        toolWindow.contentManager.addContent(content)
-        toolWindow.contentManager.setSelectedContent(content)
         toolWindow.show()
         return console
     }

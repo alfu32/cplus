@@ -230,7 +230,7 @@ reproduce in the focused AST corpus test or the clean aggregate rerun.
 The IntelliJ command-boundary fix now resolves bare `cpc`/`cplus` actions through
 the project launcher for run, test, parse, and import-graph operations, migrates
 persisted legacy `cplus ...` defaults to `cpc ...`, and makes output tabs closeable
-and selected when a run starts. The focused command
+and reusable/selected when a run starts. The focused command
 `./gradlew --offline --no-daemon -p intellij-cplus test buildPlugin --max-workers=1 --console=plain`
 passes. A subsequent isolated GUI smoke attempt was blocked by the host X11/display
 and IntelliJ profile lock, not by a plugin assertion; repeat it when the smoke
