@@ -313,6 +313,17 @@ VS Code packaging, IntelliJ 2026.2.2 plugin tests/package, and Vim archive
 packaging all passed. This refreshes P8.4/P8.5.a evidence; it does not claim
 interactive IntelliJ feature or restart coverage.
 
+The IntelliJ smoke harness now has an opt-in protocol trace: setting
+`CPLUS_LSP_TRACE` records inbound method names and outbound notifications while
+leaving JSON-RPC stdout untouched. It selects the isolated profile through
+`IDEA_PROPERTIES`, supplies a local bundled-plugin inventory, and checks
+`initialize`, `textDocument/didOpen`, and `textDocument/publishDiagnostics`.
+The focused CLI LSP test and the IntelliJ `test buildPlugin` gate pass. A fresh
+profile replay still requires host-level Unix-domain socket support, and the
+previous initialized-profile replay disabled the Ultimate module; therefore
+P8.5.b/c and P8.9.c remain open until a real host replay proves the protocol
+trace and restart behavior.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their

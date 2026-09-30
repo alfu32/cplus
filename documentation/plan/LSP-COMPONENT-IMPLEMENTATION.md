@@ -336,6 +336,18 @@ reliability and release subtasks represented by a single indefinite status.
 | LSP-8.5.c | IN PROGRESS | Verify editor feature presentation       | Exercise diagnostics, completion, navigation, structure, and test gutter against a real IDE document.                                                                  |
 | LSP-8.5.d | OPEN        | Verify unexpected exit and restart       | Kill the child server, assert recovery, and exercise the restart action with log/protocol evidence.                                                                    |
 
+#### IntelliJ smoke harness note
+
+The CLI LSP server has an opt-in `CPLUS_LSP_TRACE` file trace for host-integration
+diagnostics. It records method names only, keeps protocol stdout clean, and is used
+by `scripts/intellij-lsp-smoke.sh` to require `initialize`, `textDocument/didOpen`,
+and `textDocument/publishDiagnostics`. The harness selects its isolated profile via
+the launcher's supported `IDEA_PROPERTIES` environment variable and supplies a local
+bundled-plugin inventory so the user's plugin migration settings are not imported.
+The focused server test and IntelliJ plugin test/package gate pass. A fresh IntelliJ
+profile still requires host-level Unix-domain socket support; until that replay is
+run outside the restricted sandbox, LSP-8.5.b/c and LSP-7.9.d remain open.
+
 ## Dependency graph and execution order
 
 ```text
