@@ -219,7 +219,7 @@ class TreeSitterCPlusParserBackendTest {
         )
         val actualLiveKinds = kinds.filter { it.startsWith("cplus_") }.toSet()
         assertEquals(expectedLiveKinds, actualLiveKinds)
-        assertEquals(69, modules.size)
+        assertEquals(71, modules.size)
     }
 
     @Test

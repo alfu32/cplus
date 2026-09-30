@@ -326,6 +326,10 @@ The complete `:cli:test` suite passes after migrating its fixtures to this
 grammar. This closes the operator-contract slice but does not close the
 interactive IntelliJ lifecycle gates.
 
+The live Tree-sitter grammar-proof corpus now contains 71 supported `.cp`/`.c+`
+files after the stdlib React modules were added; the exact inventory assertion
+was refreshed from 69 to 71 before rerunning the full migration gate.
+
 The IntelliJ smoke harness now has an opt-in protocol trace: setting
 `CPLUS_LSP_TRACE` records inbound method names and outbound notifications while
 leaving JSON-RPC stdout untouched. It selects the isolated profile through
