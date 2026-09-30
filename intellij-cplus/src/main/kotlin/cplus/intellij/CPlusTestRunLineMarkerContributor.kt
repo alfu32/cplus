@@ -35,7 +35,11 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
                 val project = event.project ?: return
                 val settings = CPlusSettings.getInstance().current()
                 val commandText = commandText(settings, fixture)
-                val command = CPlusCommand.resolve(commandText, project) + virtualFile.path + listOfNotNull(fixture?.name)
+                val command = CPlusCommand.execution(
+                    commandText,
+                    project.basePath,
+                    listOf(virtualFile.path) + listOfNotNull(fixture?.name)
+                )
                 val console = CPlusOutputConsole.open(project, title, command)
                 if (console == null) return
                 object : Task.Backgroundable(project, "C-plus: $title", true) {

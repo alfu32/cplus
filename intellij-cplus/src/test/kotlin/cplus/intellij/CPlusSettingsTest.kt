@@ -132,4 +132,12 @@ class CPlusSettingsTest {
         assertTrue(result.output.contains("probe"))
         assertEquals("ok", result.environment["PROBE_ENV"])
     }
+
+    @Test
+    fun commandProbeRunsSemicolonSeparatedConfigurationStatements() {
+        val result = CPlusCommand.probe("printf first; printf second", "", timeoutSeconds = 2)
+
+        assertEquals(0, result.exitCode)
+        assertTrue(result.output.contains("firstsecond"))
+    }
 }

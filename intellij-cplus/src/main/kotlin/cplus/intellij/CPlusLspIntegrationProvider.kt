@@ -47,8 +47,7 @@ private class CPlusLspServerDescriptor(project: Project) : ProjectWideLspClientD
 
     override fun createCommandLine(): GeneralCommandLine {
         val configured = CPlusSettings.getInstance().current().languageServerCommand.trim()
-        val executable = CPlusLspCommand.discover(configured, project.basePath)
-        val arguments = CPlusLspCommand.arguments(executable)
+        val arguments = CPlusCommand.execution(configured, project.basePath, listOf("lsp"))
         logger.info("C-plus LSP command: ${arguments.joinToString(" ")}")
         val commandLine = GeneralCommandLine(arguments)
         CPlusCommand.parseEnvironment(CPlusSettings.getInstance().current().environment)

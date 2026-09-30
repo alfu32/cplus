@@ -251,8 +251,11 @@ class CPlusParserExternalAnnotator : ExternalAnnotator<CPlusParserInput, CPlusPa
         val output = Files.createTempFile("cplus-intellij-", ".json")
         try {
             Files.writeString(path, collectedInfo.text)
-            val command = CPlusCommand.resolve(collectedInfo.command, collectedInfo.projectBasePath) +
+            val command = CPlusCommand.execution(
+                collectedInfo.command,
+                collectedInfo.projectBasePath,
                 listOf("parse", path.toString(), "-o", output.toString())
+            )
             val process = CPlusCommand.configureJava(
                 CPlusCommand.configureEnvironment(ProcessBuilder(command), CPlusSettings.getInstance().current().environment)
             ).start()

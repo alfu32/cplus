@@ -34,10 +34,9 @@ class CPlusShowImportGraphAction : AnAction("Show Import Graph", "Resolve and na
             return
         }
 
-        val command = CPlusCommand.resolve(commandText, project)
         object : Task.Backgroundable(project, "C-plus: resolving imports", true) {
             override fun run(indicator: ProgressIndicator) {
-                val result = runCatching { execute(file, command) }
+                val result = runCatching { execute(file, commandText) }
                 ApplicationManager.getApplication().invokeLater {
                     result.fold(
                         onSuccess = { graph -> showGraph(project, file, graph, editor) },
@@ -54,10 +53,10 @@ class CPlusShowImportGraphAction : AnAction("Show Import Graph", "Resolve and na
         }.queue()
     }
 
-    private fun execute(source: VirtualFile, command: List<String>): CPlusImportGraph {
+    private fun execute(source: VirtualFile, commandText: String): CPlusImportGraph {
         val process = CPlusCommand.configureJava(
             CPlusCommand.configureEnvironment(
-                ProcessBuilder(command + source.path),
+                ProcessBuilder(CPlusCommand.execution(commandText, source.parent?.path, listOf(source.path))),
                 CPlusSettings.getInstance().current().environment
             )
         )

@@ -32,6 +32,24 @@ internal object CPlusCommand {
         return listOf(discovered) + parts.drop(1)
     }
 
+    /** Builds a process invocation, allowing configured shell statements separated by semicolons. */
+    fun execution(command: String, projectBasePath: String?, appendedArguments: List<String> = emptyList()): List<String> {
+        val statements = splitStatements(command)
+        require(statements.isNotEmpty()) { "C-plus command must not be empty" }
+        if (statements.size == 1) return resolve(statements.single(), projectBasePath) + appendedArguments
+
+        val rewritten = statements.map { rewriteDiscoverableExecutable(it, projectBasePath) }.toMutableList()
+        if (appendedArguments.isNotEmpty()) {
+            rewritten[rewritten.lastIndex] += appendedArguments.joinToString(" ", prefix = " ", transform = ::shellQuote)
+        }
+        val shellCommand = rewritten.joinToString("; ")
+        return if (System.getProperty("os.name").orEmpty().contains("win", ignoreCase = true)) {
+            listOf("cmd.exe", "/d", "/s", "/c", shellCommand)
+        } else {
+            listOf("sh", "-c", shellCommand)
+        }
+    }
+
     fun configureJava(processBuilder: ProcessBuilder): ProcessBuilder {
         CPlusLspCommand.ideJavaExecutable()?.let { processBuilder.environment()["CPLUS_JAVA"] = it }
         return processBuilder
@@ -46,7 +64,7 @@ internal object CPlusCommand {
         val overrides = parseEnvironment(environmentText)
         val workingDirectory = File(System.getProperty("user.dir").orEmpty().ifBlank { "." }).absoluteFile
         val resolved = try {
-            resolve(command, workingDirectory.path)
+            execution(command, workingDirectory.path)
         } catch (error: Exception) {
             return CPlusCommandProbeResult(null, workingDirectory.path, overrides, "", null, error.message ?: error.javaClass.simpleName)
         }
@@ -95,4 +113,40 @@ internal object CPlusCommand {
         }
         return result
     }
+
+    internal fun splitStatements(command: String): List<String> {
+        val result = mutableListOf<String>()
+        val current = StringBuilder()
+        var quote: Char? = null
+        var escaped = false
+        command.forEach { character ->
+            when {
+                escaped -> { current.append(character); escaped = false }
+                character == '\\' && quote != '\'' -> { current.append(character); escaped = true }
+                quote != null && character == quote -> { current.append(character); quote = null }
+                quote == null && (character == '\'' || character == '"') -> { current.append(character); quote = character }
+                quote == null && character == ';' -> {
+                    if (current.toString().trim().isNotEmpty()) result += current.toString().trim()
+                    current.clear()
+                }
+                else -> current.append(character)
+            }
+        }
+        if (current.toString().trim().isNotEmpty()) result += current.toString().trim()
+        return result
+    }
+
+    private fun rewriteDiscoverableExecutable(statement: String, projectBasePath: String?): String {
+        val match = Regex("^(\\s*)(?:'|\\\")?(cpc(?:\\.sh|\\.cmd|\\.exe)?|cplus)(?:'|\\\")?(?=\\s|$)", RegexOption.IGNORE_CASE)
+            .find(statement) ?: return statement
+        val discovered = resolve(match.groupValues[2], projectBasePath).first()
+        return match.groupValues[1] + shellQuote(discovered) + statement.substring(match.range.last + 1)
+    }
+
+    private fun shellQuote(value: String): String =
+        if (System.getProperty("os.name").orEmpty().contains("win", ignoreCase = true)) {
+            "\"${value.replace("\"", "\\\"")}\""
+        } else {
+            "'${value.replace("'", "'\\\"'\\\"'")}'"
+        }
 }

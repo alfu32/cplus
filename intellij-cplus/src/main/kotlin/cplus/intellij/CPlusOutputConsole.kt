@@ -34,13 +34,15 @@ internal object CPlusOutputConsole {
     fun open(project: Project, title: String, command: List<String>): ConsoleView? {
         val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("C-plus") ?: return null
         val contentManager = toolWindow.contentManager
-        // Keep the persistent Output tab as a welcome/diagnostic console, but
-        // give every run its own closeable content. Reusing the first content
-        // hid the close handle and made completed runs impossible to dismiss.
-        val console = create(project)
-        val newContent = content(console, title)
-        contentManager.addContent(newContent)
-        contentManager.setSelectedContent(newContent)
+        // Keep one persistent Output tab. Repeated gutter runs replace its
+        // contents instead of creating text tabs that cannot be dismissed.
+        val outputContent = contentManager.contents.firstOrNull { it.displayName == "Output" }
+        val console = outputContent?.getUserData(consoleKey) ?: create(project).also {
+            val newContent = content(it, "Output")
+            contentManager.addContent(newContent)
+        }
+        val selectedContent = contentManager.contents.firstOrNull { it.displayName == "Output" }
+        if (selectedContent != null) contentManager.setSelectedContent(selectedContent)
         console.clear()
         val commandText = command.joinToString(" ")
         console.print("> $commandText\n\n", ConsoleViewContentType.SYSTEM_OUTPUT)
