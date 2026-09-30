@@ -275,7 +275,7 @@ reliability and release subtasks represented by a single indefinite status.
 | LSP-5.4d | DONE   | Resolve bounded reference identity and call arity                      | LSP-5.4c     | Function, callback-value, variable, field, instance/static method, and arity fixtures pass.                                                     |
 | LSP-5.5a | DONE   | Add revision guards and cancellation                                   | LSP-5.4d     | Queued and in-flight cancellation tests suppress obsolete responses.                                                                            |
 | LSP-5.5b | DONE   | Add bounded asynchronous scheduling and orderly drain                  | LSP-5.5a     | Two workers, queue capacity 64, exact-future cleanup, overload `-32001`, and shutdown drain are tested.                                         |
-| LSP-5.6  | OPEN   | Replace bounded syntax lookup with complete compiler semantic services | LSP-5.5b     | Canonical scoped types and conservative same-name callable ranking are implemented; broader pointer/member conversions, writes, and complete comptime scope parity remain. |
+| LSP-5.6  | OPEN   | Replace bounded syntax lookup with complete compiler semantic services | LSP-5.5b     | Canonical scoped types, recursive chained field receiver typing, and conservative same-name callable ranking are implemented; method-return chaining, broader pointer/member conversions, writes, and complete comptime scope parity remain. |
 
 ### LSP-7 — reliability and performance
 
@@ -377,6 +377,7 @@ The adapters are not a substitute for reliability or release evidence.
 - CI run `36607942388` passed all four parser hosts, editor bundles, and benchmarks, but the aggregate CLI test job reported one `servesSymbolsCompletionHoverDefinitionDiagnosticsAndShutdownOverStdio` completion assertion failure at line 54. The same exact `./gradlew --offline --no-daemon test` command passes locally, so this is recorded as a hosted aggregate-run flake requiring replay before the release stage is promoted.
 - The pending host fix gives each asynchronous request an instance-specific cancellation token/future, preventing reused JSON-RPC IDs from canceling older work. LSP import discovery retains AST indexing and adds a recovery-node-only textual import fallback plus a canonical relative-path fallback for Windows/macOS URI normalization. Source-level Kotlin compilation passes; host CI remains the acceptance gate.
 - Direct runtime smoke using the rebuilt classes and `parser-tree-sitter/build/native-parser/libktreesitter-c.so` passed both repaired invariants: relative comptime-import workspace symbols and reused request-ID cancellation. This is local Linux evidence only; the supported-host gate remains open.
+- LSP-5.6b receiver-chain slice: `CPlusLspServer.receiverValue` recursively resolves `.` and `->` field chains and rejects operator/shape mismatches at each step. `CPlusLspServerTest.resolvesChainedValueAndPointerFieldReceivers` covers `outer.inner.` and `outer.ptr->`; the focused test and aggregate offline suite pass with 104/104 grammar parses. Method-return chains, write tracking, implicit conversions, and full comptime semantic parity remain outside this slice.
 
 Local verification command:
 

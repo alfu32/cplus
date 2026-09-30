@@ -920,37 +920,67 @@ class CPlusLspServer(
 
     private fun receiverAccess(document: LspDocument, offset: Int): ReceiverAccess? {
         val prefix = document.snapshot.text.substring(0, offset)
-        val match = Regex("([A-Za-z_][A-Za-z0-9_]*)\\s*(->|\\.)\\s*$").find(prefix) ?: return null
-        val receiver = match.groupValues[1]
+        val match = Regex(
+            "([A-Za-z_][A-Za-z0-9_]*(?:\\s*(?:->|\\.)\\s*[A-Za-z_][A-Za-z0-9_]*)*)\\s*(->|\\.)\\s*$"
+        ).find(prefix) ?: return null
+        val receiver = match.groupValues[1].trim()
         val operator = match.groupValues[2]
-        if (receiver == "self") {
-            return ReceiverAccess(document.symbols
+        val declared = receiverValue(document, receiver, offset)
+        val operatorMatches = when (operator) {
+            "->" -> declared?.pointerDepth ?: 0 > 0
+            "." -> declared?.pointerDepth == 0 && declared.arrayDepth == 0
+            else -> false
+        }
+        return ReceiverAccess(
+            declared?.typeName?.let(::resolveTypeAlias).takeIf { operatorMatches },
+            operator
+        )
+    }
+
+    /** Resolve the declared value type of an identifier or a previously selected field. */
+    private fun receiverValue(document: LspDocument, expression: String, offset: Int): DeclaredType? {
+        val value = expression.trim()
+        if (value == "self") {
+            val owner = document.symbols
                 .asSequence()
                 .filter { it.ownerName != null && it.scope.contains(offset) }
                 .minByOrNull { it.scope.size() }
-                ?.ownerName, operator)
+                ?.ownerName
+            return owner?.let { DeclaredType(it, 1, 0) }
         }
-        val variable = visibleSymbols(document)
+        if (value.matches(IDENTIFIER)) {
+            val variable = visibleSymbols(document)
+                .asSequence()
+                .filter { it.name == value && it.kind == 13 && it.selection.startOffset <= offset }
+                .sortedWith(compareBy<LspSymbol> { !it.scope.contains(offset) }
+                    .thenByDescending { it.selection.startOffset })
+                .firstOrNull()
+            if (variable != null) return declaredTypeInfo(variable)
+            return visibleSymbols(document)
+                .asSequence()
+                .firstOrNull { it.name == value && it.kind == 23 }
+                ?.let { DeclaredType(it.name, 0, 0) }
+        }
+
+        val member = Regex("(.+?)\\s*(->|\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)$").find(value)
+            ?: return null
+        val parent = receiverValue(document, member.groupValues[1], offset) ?: return null
+        val access = member.groupValues[2]
+        val accessMatches = when (access) {
+            "->" -> parent.pointerDepth > 0
+            "." -> parent.pointerDepth == 0 && parent.arrayDepth == 0
+            else -> false
+        }
+        if (!accessMatches) return null
+        val owner = resolveTypeAlias(parent.typeName)
+        return visibleSymbols(document)
             .asSequence()
-            .filter { it.name == receiver && it.kind == 13 && it.selection.startOffset <= offset }
-            .sortedWith(compareBy<LspSymbol> { !it.scope.contains(offset) }.thenByDescending { it.selection.startOffset })
-            .firstOrNull()
-        if (variable != null) {
-            val declared = declaredTypeInfo(variable)
-            val operatorMatches = when (operator) {
-                "->" -> declared?.pointerDepth ?: 0 > 0
-                "." -> declared?.pointerDepth == 0 && declared.arrayDepth == 0
-                else -> false
+            .filter {
+                it.kind == 8 && it.ownerName?.let(::resolveTypeAlias) == owner &&
+                    it.name == member.groupValues[3]
             }
-            return ReceiverAccess(
-                declared?.typeName?.let(::resolveTypeAlias).takeIf { operatorMatches },
-                operator
-            )
-        }
-        val type = visibleSymbols(document)
-            .asSequence()
-            .firstOrNull { it.name == receiver && it.kind == 23 }
-        return ReceiverAccess(type?.name?.takeIf { operator == "." }, operator)
+            .mapNotNull(::declaredTypeInfo)
+            .firstOrNull()
     }
 
     private fun resolveTypeAlias(typeName: String): String {
