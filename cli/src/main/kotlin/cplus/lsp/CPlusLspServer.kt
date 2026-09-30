@@ -979,6 +979,10 @@ class CPlusLspServer(
             if (pointed.pointerDepth == 0) return null
             return pointed.copy(pointerDepth = pointed.pointerDepth - 1)
         }
+        if (value.length > 1 && value.first() in setOf('+', '-', '~', '!')) {
+            val operand = expressionType(document, value.substring(1)) ?: return null
+            return if (value.first() == '!') TypeShape("int", 0, 0) else operand
+        }
         if (value.matches(Regex("[0-9]+"))) return TypeShape("int", 0, 0)
         if (value.matches(Regex("[0-9]+\\.[0-9]+"))) return TypeShape("double", 0, 0)
         if (value.startsWith("\"") && value.endsWith("\"")) return TypeShape("char", 0, 1)

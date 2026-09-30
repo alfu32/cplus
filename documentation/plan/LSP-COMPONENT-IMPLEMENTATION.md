@@ -224,6 +224,7 @@ status is only a summary; work is considered converged when every row below is
 | LSP-5  | 5.6c.7 receiver ambiguity diagnostics    | DONE        | Apply the same proven equal-score diagnostic to resolvable `.`/`->` method calls, using the current unsaved snapshot and receiver owner; unresolved receiver shapes remain fail-closed | 5.6c            |
 | LSP-5  | 5.6c.8 return-receiver ambiguity safety    | DONE        | Refuse chained member typing when equally ranked overloads return different receiver shapes instead of selecting by declaration order | 5.6c            |
 | LSP-5  | 5.6c.9 dereferenced-argument typing          | DONE        | Infer a known scalar shape through unary `*` and parenthesized expressions before bounded overload ranking | 5.6c            |
+| LSP-5  | 5.6c.10 unary numeric argument typing          | DONE        | Preserve known numeric shapes through unary `+`, `-`, `~`, and `!` before bounded overload ranking | 5.6c            |
 | LSP-5  | 5.6d write/reference effects           | DONE        | Distinguish reads, writes, declarations, and callback/function-pointer references; function names used as callback values are read references, while pointer variables retain write classification | 5.6e            |
 | LSP-5  | 5.6d.1 document highlight effects      | DONE        | Expose AST-resolved `textDocument/documentHighlight` results with LSP read/write kinds for declarations, assignments, increments, and uses | 5.6d–e         |
 | LSP-5  | 5.6e comptime parity                   | IN PROGRESS | Expose generated declarations, scopes, aliases, and source origins consistently in all semantic features                               | LSP-5 gate      |
@@ -402,6 +403,7 @@ The adapters are not a substitute for reliability or release evidence.
 - LSP-5.6c.8 return-receiver safety: chained completion now fails closed when equally ranked overloads have different return receiver shapes. `failsClosedForAmbiguousOverloadedFunctionReturnReceivers` prevents declaration-order selection for `make(1).`; the complete `CPlusLspServerTest` suite passes. This keeps ambiguous semantic inference conservative; user-facing ambiguity diagnostics for chained member completion remain a later slice.
 - LSP-5.6c.9 dereferenced arguments: bounded overload ranking now unwraps parenthesized expressions and resolves unary `*` against a known pointer declaration. `resolvesAnOverloadForDereferencedPointerArgument` selects the integer overload for `choose(*pointer)`; focused and aggregate Gradle gates pass.
 - LSP-5.6b.3 parenthesized receivers: receiver matching now understands explicit address/dereference forms used by C-plus receiver sugar, including `(&box).field` and `(*pointer).field`. `resolvesParenthesizedAddressAndDereferenceReceivers` verifies completion for both forms; the focused LSP suite passes.
+- LSP-5.6c.10 unary numeric arguments: bounded overload ranking now preserves scalar shapes through unary `+`, `-`, `~`, and `!`. `resolvesAnOverloadForUnaryNumericArgument` selects the integer overload for `choose(-1)`; focused and aggregate Gradle gates pass.
 
 Local verification command:
 
