@@ -1185,6 +1185,46 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun referencesGeneratedComptimeAliasThroughItsOriginalSourceLocation() {
+        val uri = "file:///generated-alias-references.cp"
+        val source = "comptime type @box(type T) {\n" +
+            "    return @code { struct box { T value; }; };\n" +
+            "}\n" +
+            "comptime typedef box(int) int_box_t;\n" +
+            "int read(int_box_t value) { return value.value; }\n" +
+            "int main(void) { int_box_t value = {42}; return read(value) == 42 ? 0 : 1; }\n"
+        fun encode(value: String): String = value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+        val usageLine = source.lines().indexOfLast { "int_box_t value =" in it }
+        val usageCharacter = source.lines()[usageLine].indexOf("int_box_t") + 2
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"${encode(source)}\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/references\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$usageLine,\"character\":$usageCharacter}," +
+                "\"context\":{\"includeDeclaration\":true}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/documentHighlight\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$usageLine,\"character\":$usageCharacter}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        val references = response.substringAfter("\"id\":2,\"result\":")
+            .substringBefore("Content-Length")
+        assertTrue(references.contains("\"uri\":\"$uri\""), response)
+        assertTrue(references.count { it == '{' } >= 2, response)
+        val highlights = response.substringAfter("\"id\":3,\"result\":")
+            .substringBefore("Content-Length")
+        assertTrue(highlights.contains("\"kind\":2"), response)
+    }
+
+    @Test
     fun ignoresStaleChangesAndClearsDiagnosticsOnClose() {
         val uri = "file:///stale.cp"
         val messages = listOf(
