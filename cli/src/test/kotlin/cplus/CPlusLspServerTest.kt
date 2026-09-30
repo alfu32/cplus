@@ -9,6 +9,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.random.Random
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
@@ -546,6 +547,39 @@ class CPlusLspServerTest {
         val response = output.toString(StandardCharsets.UTF_8)
         assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":1,"), response)
         assertTrue(response.contains("\"id\":3,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":2,"), response)
+    }
+
+    @Test
+    fun resolvesCIntegerPromotionsBeforeWiderOverloads() {
+        val uri = "file:///overload-integer-promotions.cp"
+        val source = "int choose(int value) { return value; }\n" +
+            "long choose(long value) { return value; }\n" +
+            "double choose(double value) { return value; }\n" +
+            "int main(void) { char c = 1; short s = 2; _Bool b = 1; return choose(c) + choose(s) + choose(b); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val line = source.lines()[3]
+        val charPosition = line.indexOf("choose(c")
+        val shortPosition = line.indexOf("choose(s")
+        val boolPosition = line.indexOf("choose(b")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":3,\"character\":$charPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":3,\"character\":$shortPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":3,\"character\":$boolPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        val expectedIntDefinition = "\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":0,"
+        assertEquals(3, response.split(expectedIntDefinition).size - 1, response)
     }
 
     @Test

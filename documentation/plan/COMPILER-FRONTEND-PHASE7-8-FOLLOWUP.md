@@ -45,7 +45,7 @@ projects:
 |--------------------------------------|-----------------------------------------------------------------------------------------------------------------------|------------------------------------------------------|
 | P7.1 AST emission                    | comma spacing, literal/preprocessor preservation, declarator and method-emission fixtures, unsupported-node rejection | IN PROGRESS; grammar-context coverage remains        |
 | P7.3 declaration handles             | declaration-kind matching, mapped-origin overlap, generated aggregate members, semantic type/ownership metadata, source-revision boundary tests | DONE-LOCAL; stable revision identity remains open |
-| P8.8 compiler-aligned LSP resolution | receiver forms, dereference/unary arguments, casts, literal suffixes, ambiguity diagnostics, generated aliases        | IN PROGRESS; promotions/conversions/writes remain    |
+| P8.8 compiler-aligned LSP resolution | receiver forms, dereference/unary arguments, casts, literal suffixes, ambiguity diagnostics, generated aliases, and bounded C integer promotions | IN PROGRESS; pointer/member conversions, writes, and ownership visibility remain |
 | P8.9 client recovery                 | VS Code/Vim restart and stale-revision fixtures                                                                       | IN PROGRESS; IntelliJ interactive evidence remains   |
 
 This prevents corrective commits from inflating the apparent amount of principal work
@@ -104,7 +104,7 @@ frontend promotion remain P7.6/P7.7 work rather than new P7.1 cases.
 | P8.5.c  | P8.5   | Recover from LSP exit and restart without stale diagnostics                            | OPEN       | Forced-exit/restart fixture                          |
 | P8.8.a  | P8.8   | Match receiver/value/pointer method lookup and overload ranking                        | DONE-LOCAL | LSP semantic fixture suite                           |
 | P8.8.b  | P8.8   | Match casts, unary/dereference forms, literal suffixes, and generated aliases          | DONE-LOCAL | Focused overload and comptime tests                  |
-| P8.8.c  | P8.8   | Implement C integer promotions and legal pointer/member conversions                    | OPEN       | Positive and negative conversion matrix              |
+| P8.8.c  | P8.8   | Implement C integer promotions and legal pointer/member conversions                    | IN PROGRESS | Integer-promotion matrix is local-green; pointer/member conversion matrix remains |
 | P8.8.d  | P8.8   | Resolve writes, callback effects, ownership/access annotations, and scope invalidation | OPEN       | Semantic-index/LSP consistency matrix                |
 | P8.8.e  | P8.8   | Reject unsupported or ambiguous resolution conservatively with mapped diagnostics      | DONE-LOCAL | Ambiguity and unsupported-form diagnostics           |
 | P8.9.a  | P8.9   | Verify VS Code child restart and stale-revision handling                               | DONE-LOCAL | Existing restart fixtures                            |
@@ -116,6 +116,22 @@ frontend promotion remain P7.6/P7.7 work rather than new P7.1 cases.
 `BLOCKED` here means dependency-gated, not an implementation failure. It prevents
 release/retirement work from being counted as active engineering before its inputs
 exist.
+
+### P8.8 semantic-parity matrix
+
+P8.8 is one principal task. The rows below are its bounded semantic contracts; fixes
+discovered while closing a row remain ancillary work under that row.
+
+| ID | Contract | Status | Exit evidence |
+|---|---|---|---|
+| P8.8.1 | Receiver/value/pointer lookup and method ownership | DONE-LOCAL | Receiver-chain and method fixtures |
+| P8.8.2 | Overload arity, exact types, literals, casts, unary/dereference, suffixes, and ambiguity | DONE-LOCAL | Focused LSP resolution and diagnostic fixtures |
+| P8.8.3 | C integer promotions and bounded scalar conversion ranking | DONE-LOCAL | `resolvesCIntegerPromotionsBeforeWiderOverloads`; focused LSP class and aggregate gate pass; host C remains authoritative |
+| P8.8.4 | Array/function decay and legal pointer/member conversions | OPEN | Positive/negative pointer conversion matrix |
+| P8.8.5 | Read/write classification and callback mutation effects | DONE-LOCAL | Document-highlight and callback fixtures; richer data-flow remains |
+| P8.8.6 | Generated comptime aliases, members, imports, and revision invalidation | DONE-LOCAL | Materialized-symbol and invalidation fixtures |
+| P8.8.7 | Ownership/access annotations remain advisory and visible to tooling | OPEN | Semantic metadata consistency fixture |
+| P8.8.8 | Unsupported/ambiguous conversions fail conservatively with mapped diagnostics | DONE-LOCAL | Ambiguity and unsupported-form diagnostics |
 
 ## Phase 7 — AST emission and promotion
 
@@ -141,7 +157,7 @@ exist.
 | P8.5  | Interactive IntelliJ LSP startup, features, and restart         | P8.1, P8.4      | OPEN        | Build a real IDE-client fixture for startup/sync, diagnostics, completion, navigation, test gutter, unexpected exit, and restart. This is the main editor evidence gap.                                                                                                                |
 | P8.6  | Supported-host packaged LSP protocol smoke                      | P8.1, packaging | DONE        | CI run `36647197070` passed framed LSP startup/shutdown for the supported bare/cross distributions and host matrix.                                                                                                                                                                    |
 | P8.7  | Bounded LSP scheduling, cancellation, and revision safety       | P8.1            | DONE-LOCAL  | Two workers, bounded queue, overload response, cancellation lifetime, malformed edit matrix, sustained benchmark, and protocol reliability gates pass; repeat host soak if the release matrix changes.                                                                                 |
-| P8.8  | Compiler-aligned semantic resolution                            | P5, P8.1        | IN PROGRESS | Receiver chains, methods, overload ranking, ambiguity diagnostics, casts, unary forms, literal suffixes, callback effects, and generated comptime aliases are covered. Remaining: C promotion legality, pointer/member conversions, richer writes, and complete comptime scope parity. |
+| P8.8  | Compiler-aligned semantic resolution                            | P5, P8.1        | IN PROGRESS | Receiver chains, methods, overload ranking, ambiguity diagnostics, casts, unary forms, literal suffixes, callback effects, generated comptime aliases, and bounded C integer promotions are covered. Remaining: pointer/member conversions, richer writes, ownership/access visibility, and complete comptime scope parity. |
 | P8.9  | Cross-client crash/restart behavior                             | P8.2–P8.5       | IN PROGRESS | VS Code and Vim restart fixtures pass, including bounded automatic recovery; IntelliJ unexpected-exit/restart evidence is still open.                                                                                                                                                  |
 | P8.10 | Two-release legacy soak and migration rollback                  | P7.7, P8.2–P8.9 | OPEN        | After promotion, publish mismatch reporting and rollback instructions, keep legacy selectable for two stable releases, then audit before removal.                                                                                                                                      |
 
@@ -166,6 +182,9 @@ atomic slices, each with focused and aggregate tests:
     and original source spans; the generic-struct fixture verifies `borrowed` propagation.
 12. Synthesized member handles now expose revision-stable IDs derived from source identity,
     owner, semantic kind, name, and callable signature rather than generated offsets.
+13. LSP overload ranking now models the bounded C integer-promotion path: `char`, `short`,
+    and `_Bool` arguments prefer an exact `int` overload before `long` or `double`, while
+    wider scalar conversions remain conservative tooling hints and host C remains authoritative.
 
 The latest aggregate result is green with 104/104 grammar parses. The current worktree
 also contains unrelated Raylib example changes; they are intentionally not part of this
@@ -173,10 +192,10 @@ frontend ledger or its commits.
 
 ## Immediate queue
 
-1. **P7.1:** replace the remaining AST-emitter spacing heuristics with grammar-context
-   formatting tests for declarators, attributes, comments, and nested expressions.
-2. **P8.8:** extend semantic resolution only where the compiler contract has an explicit
-   bounded rule; unsupported conversions must remain conservative and mapped.
+1. **P8.8.4:** define and implement the positive/negative matrix for array/function decay,
+   pointer compatibility, and member receiver conversions.
+2. **P8.8.7:** expose ownership/access annotations consistently through the semantic index
+   and LSP responses without turning advisory metadata into enforcement.
 4. **P8.5/P8.9:** add the real IntelliJ interactive startup/restart evidence.
 5. **P7.7/P8.10:** do not promote or delete legacy code until the above evidence and the
    two-release rollback policy are recorded.

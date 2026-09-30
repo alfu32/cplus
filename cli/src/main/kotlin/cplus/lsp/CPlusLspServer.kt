@@ -915,14 +915,8 @@ class CPlusLspServer(
         val expectedPointers = expected.pointerDepth + expected.arrayDepth
         val actualPointers = actual.pointerDepth + actual.arrayDepth
         if (expectedPointers == 0 && actualPointers == 0) {
-            val expectedNumeric = numericRank(expectedBase)
-            val actualNumeric = numericRank(actualBase)
-            if (expectedNumeric != null && actualNumeric != null) {
-                // Prefer the closest standard scalar conversion when no exact
-                // overload exists. This is deliberately only a ranking hint;
-                // the selected C compiler remains authoritative for legality.
-                return 5 + kotlin.math.abs(expectedNumeric - actualNumeric)
-            }
+            if (expectedBase == actualBase) return 0
+            numericConversionCost(expectedBase, actualBase)?.let { return 5 + it }
         }
         return when {
             expectedBase == actualBase && expectedPointers == actualPointers -> 0
@@ -932,15 +926,49 @@ class CPlusLspServer(
         }
     }
 
-    private fun numericRank(typeName: String): Int? = when (typeName) {
-        "bool" -> 0
-        "char", "signed", "unsigned" -> 1
-        "short" -> 2
-        "int" -> 3
-        "long" -> 4
-        "float" -> 5
-        "double" -> 6
+    private fun numericConversionCost(expected: String, actual: String): Int? {
+        val expectedRank = numericRank(expected) ?: return null
+        val actualRank = numericRank(actual) ?: return null
+        val actualPromotedRank = if (actualRank <= INTEGER_PROMOTION_MAX_RANK) INT_RANK else actualRank
+
+        // C's integer promotions happen before the usual arithmetic conversions.
+        // Keep this as a ranking hint for tooling; the host compiler remains
+        // authoritative for whether a particular conversion is legal.
+        if (actualRank <= INTEGER_PROMOTION_MAX_RANK) {
+            return when {
+                expectedRank == INT_RANK -> 1
+                expectedRank in INT_RANK..LONG_LONG_RANK -> 1 + expectedRank - INT_RANK
+                expectedRank > LONG_LONG_RANK -> 4 + expectedRank - LONG_LONG_RANK
+                else -> 20 + kotlin.math.abs(expectedRank - actualPromotedRank)
+            }
+        }
+        if (actualRank == FLOAT_RANK && expectedRank == DOUBLE_RANK) return 1
+        if (expectedRank >= actualRank) return 2 + expectedRank - actualRank
+        return 20 + actualRank - expectedRank
+    }
+
+    private fun numericRank(typeName: String): Int? = when (typeName
+        .lowercase()
+        .replace(Regex("\\s+"), " ")
+        .trim()) {
+        "bool", "_bool" -> 0
+        "char", "signed char", "unsigned char", "signed" -> 1
+        "short", "short int", "signed short", "signed short int", "unsigned short", "unsigned short int" -> 2
+        "int", "signed int", "unsigned", "unsigned int" -> INT_RANK
+        "long", "long int", "signed long", "signed long int", "unsigned long", "unsigned long int" -> 4
+        "long long", "long long int", "signed long long", "signed long long int",
+        "unsigned long long", "unsigned long long int" -> LONG_LONG_RANK
+        "float" -> FLOAT_RANK
+        "double", "long double" -> DOUBLE_RANK
         else -> null
+    }
+
+    private companion object {
+        const val INTEGER_PROMOTION_MAX_RANK = 2
+        const val INT_RANK = 3
+        const val LONG_LONG_RANK = 5
+        const val FLOAT_RANK = 6
+        const val DOUBLE_RANK = 7
     }
 
     private fun typeShape(declaration: String): TypeShape? {
@@ -962,8 +990,11 @@ class CPlusLspServer(
         }
         val pointerDepth = cleaned.count { it == '*' }
         val arrayDepth = Regex("\\[[^]]*\\]").findAll(cleaned).count()
-        val base = Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)")
-            .find(cleaned)?.groupValues?.get(1) ?: return null
+        val base = Regex("(?:(?:unsigned|signed)\\s+)?(?:char|short|int|long(?:\\s+long)?|float|double|bool|_Bool)")
+            .find(cleaned)?.value
+            ?: Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)")
+                .find(cleaned)?.groupValues?.get(1)
+            ?: return null
         return TypeShape(base, pointerDepth, arrayDepth)
     }
 
