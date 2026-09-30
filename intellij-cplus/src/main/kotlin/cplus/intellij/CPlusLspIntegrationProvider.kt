@@ -3,6 +3,7 @@ package cplus.intellij
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.platform.lsp.api.LspIntegrationProvider
 import com.intellij.platform.lsp.api.LspClient
 import com.intellij.platform.lsp.api.lsWidget.LspClientWidgetItem
@@ -11,12 +12,16 @@ import java.io.File
 
 /** Starts the repository's CLI language server for C-plus files opened in IntelliJ. */
 class CPlusLspIntegrationProvider : LspIntegrationProvider {
+    private val logger = Logger.getInstance(CPlusLspIntegrationProvider::class.java)
+
     override fun fileOpened(
         project: Project,
         file: VirtualFile,
         clientStarter: LspIntegrationProvider.LspClientStarter
     ) {
+        logger.info("C-plus LSP fileOpened: ${file.path} extension=${file.extension}")
         if (file.extension == "cp" || file.extension == "c+") {
+            logger.info("C-plus LSP starting project client: ${project.basePath}")
             clientStarter.ensureClientStarted(CPlusLspServerDescriptor(project))
         }
     }
@@ -33,14 +38,19 @@ class CPlusLspIntegrationProvider : LspIntegrationProvider {
 }
 
 private class CPlusLspServerDescriptor(project: Project) : ProjectWideLspClientDescriptor(project, "C-plus") {
+    private val logger = Logger.getInstance(CPlusLspServerDescriptor::class.java)
+
     override fun isSupportedFile(file: VirtualFile): Boolean =
-        file.extension == "cp" || file.extension == "c+"
+        (file.extension == "cp" || file.extension == "c+").also {
+            logger.info("C-plus LSP supported-file check: ${file.path} -> $it")
+        }
 
     override fun createCommandLine(): GeneralCommandLine {
         val configured = CPlusSettings.getInstance().current().languageServerCommand.trim()
-        val commandLine = GeneralCommandLine(CPlusLspCommand.arguments(
-            CPlusLspCommand.discover(configured, project.basePath)
-        ))
+        val executable = CPlusLspCommand.discover(configured, project.basePath)
+        val arguments = CPlusLspCommand.arguments(executable)
+        logger.info("C-plus LSP command: ${arguments.joinToString(" ")}")
+        val commandLine = GeneralCommandLine(arguments)
         CPlusLspCommand.ideJavaExecutable()?.let { commandLine.withEnvironment("CPLUS_JAVA", it) }
         return commandLine
     }

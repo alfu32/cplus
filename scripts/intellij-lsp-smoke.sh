@@ -81,6 +81,16 @@ if ! grep -Fq "Loaded custom plugins: C-plus" "$log_file"; then
     echo "C-plus plugin was not loaded (launcher status $launcher_status)" >&2
     exit 1
 fi
+if ! grep -Fq "C-plus LSP fileOpened:" "$log_file"; then
+    keep_dir=1
+    echo "C-plus file activation did not reach the LSP integration provider (launcher status $launcher_status)" >&2
+    exit 1
+fi
+if ! grep -Fq "C-plus LSP starting project client:" "$log_file"; then
+    keep_dir=1
+    echo "C-plus file activation was observed, but the provider did not request a client" >&2
+    exit 1
+fi
 if ! grep -Fq "LSP server initialized" "$log_file"; then
     keep_dir=1
     echo "C-plus LSP did not initialize (launcher status $launcher_status)" >&2

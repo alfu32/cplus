@@ -282,6 +282,14 @@ failed activation attempt, not as server-crash evidence. The retained log is
 `/tmp/cplus-intellij-smoke.cBRXfh/system/log/idea.log`; P8.5.b/c and P8.9.c
 remain open until the harness can observe file activation and server lifecycle.
 
+The provider now records bounded lifecycle markers for `fileOpened`, client
+request, supported-file checks, and command construction; the smoke harness
+checks those stages independently. A follow-up 45-second replay was blocked
+before IDE startup by IntelliJ's profile directory lock/X11 environment
+(`java.net.SocketException: Operation not permitted`, then `Can't connect to
+X11 window server using ':109'`). This is host-process evidence, not a change
+to the P8.5 status.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
