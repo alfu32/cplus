@@ -4,6 +4,8 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspIntegrationProvider
+import com.intellij.platform.lsp.api.LspClient
+import com.intellij.platform.lsp.api.lsWidget.LspClientWidgetItem
 import com.intellij.platform.lsp.api.ProjectWideLspClientDescriptor
 import java.io.File
 
@@ -18,6 +20,16 @@ class CPlusLspIntegrationProvider : LspIntegrationProvider {
             clientStarter.ensureClientStarted(CPlusLspServerDescriptor(project))
         }
     }
+
+    override fun createWidgetItem(
+        lspClient: LspClient,
+        currentFile: VirtualFile?
+    ): LspClientWidgetItem = LspClientWidgetItem(
+        lspClient,
+        currentFile,
+        CPlusFileType.INSTANCE.icon,
+        CPlusSettingsConfigurable::class.java
+    )
 }
 
 private class CPlusLspServerDescriptor(project: Project) : ProjectWideLspClientDescriptor(project, "C-plus") {

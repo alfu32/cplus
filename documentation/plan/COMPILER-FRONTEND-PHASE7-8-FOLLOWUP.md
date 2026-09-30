@@ -251,6 +251,12 @@ the build passed in 5m02s, including the CLI/compiler suites, all 104/104 Tree-s
 grammar parses, and the parser integration suite. This validates that the IntelliJ
 changes did not regress the migrated compiler path or its retained legacy fallback.
 
+The IntelliJ LSP provider now contributes a C-plus-specific Language Services
+widget item with the C-plus icon and a direct link to **Settings → Tools → C-plus**,
+using the platform's documented `createWidgetItem` integration point. The focused
+plugin test/package gate passes with registration coverage. This improves client
+visibility but does not close the real-document feature or restart acceptance rows.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
