@@ -257,6 +257,13 @@ using the platform's documented `createWidgetItem` integration point. The focuse
 plugin test/package gate passes with registration coverage. This improves client
 visibility but does not close the real-document feature or restart acceptance rows.
 
+The isolated IntelliJ smoke harness now enables `idea.log.debug.categories` for
+`com.intellij.platform.lsp`, using the platform-supported debug configuration,
+so subsequent real-client feature and restart checks can inspect LSP lifecycle
+records instead of relying only on startup text. The current host replay was
+unable to start IntelliJ because its X11 display was unavailable; no feature
+status was advanced from that attempted replay.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their

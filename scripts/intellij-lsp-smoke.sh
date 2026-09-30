@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Launch the installed IntelliJ IDEA against an isolated profile, install the
 # packaged C-plus plugin, and verify the real LSP client reaches Running state.
-# This is intentionally a startup/document-activation smoke test; feature and
-# crash/restart assertions remain separate acceptance tasks.
+# The isolated profile enables IntelliJ's LSP debug category so future feature
+# and crash/restart assertions can inspect client/server lifecycle records.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 plugin_zip="${1:-}"
@@ -46,6 +46,7 @@ trap cleanup EXIT
 
 mkdir -p "$smoke_dir/config/plugins"
 unzip -q -o "$plugin_zip" -d "$smoke_dir/config/plugins"
+printf '%s\n' 'idea.log.debug.categories=#com.intellij.platform.lsp' > "$smoke_dir/config/idea.properties"
 if [[ -z "$source_file" ]]; then
     smoke_project="$smoke_dir/project"
     mkdir -p "$smoke_project/.idea"
