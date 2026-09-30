@@ -7910,6 +7910,10 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
             result.synthesizedDeclarations.toString()
         )
         assertTrue(result.synthesizedDeclarations.all { it.sourceSpan.file == source.id.value })
+        assertEquals(
+            listOf(CPlusAstKind.FUNCTION_DECLARATION, CPlusAstKind.FUNCTION_DECLARATION),
+            result.synthesizedNodes.map { it.kind }
+        )
         val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
         } ?: return
@@ -9377,6 +9381,10 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
             result.synthesizedDeclarations.map { it.generatedName },
             generated.synthesizedDeclarations.map { it.generatedName }
         )
+        assertEquals(
+            listOf(CPlusAstKind.VARIABLE_DECLARATION),
+            result.synthesizedNodes.map { it.kind }
+        )
         val compiler = listOf("cc", "gcc", "clang").firstOrNull { candidate ->
             runCatching { ProcessBuilder(candidate, "--version").start().waitFor() == 0 }.getOrDefault(false)
         } ?: return
@@ -9422,6 +9430,11 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
         assertEquals(
             result.synthesizedDeclarations.map { it.generatedName },
             generated.synthesizedDeclarations.map { it.generatedName }
+        )
+        assertEquals(
+            listOf(CPlusAstKind.TYPE_ALIAS),
+            result.synthesizedNodes.map { it.kind },
+            result.synthesizedNodes.map { it.kind to it.syntaxKind to it.span }.toString()
         )
         val mappedText = result.cSource ?: error("successful comptime type materialization must retain mapped source")
         val structureOffset = mappedText.text.indexOf("struct box__int_box_t")

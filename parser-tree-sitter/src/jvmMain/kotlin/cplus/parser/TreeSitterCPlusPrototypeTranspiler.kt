@@ -4,6 +4,7 @@ import cplus.CPlusAstAdapter
 import cplus.CPlusAstLoweringPipeline
 import cplus.CPlusAstLoweringStep
 import cplus.CPlusAstCEmitter
+import cplus.synthesizedDeclarationNodes
 import cplus.CPlusComptimeIndexer
 import cplus.CPlusImportPaths
 import cplus.CPlusFrontendPassIds
@@ -820,8 +821,11 @@ class TreeSitterCPlusPrototypeTranspiler(
         // pipeline. Keep semantic nodes anchored to that successful, parsed
         // intermediate revision; their source origins remain available through
         // the corresponding mapped output and synthesized-declaration records.
-        val synthesizedNodes = runtimeLowering.synthesizedNodes
         val synthesizedDeclarations = comptimeSynthesizedDeclarations + runtimeLowering.synthesizedDeclarations
+        val synthesizedNodes = (
+            ast.synthesizedDeclarationNodes(comptimeSynthesizedDeclarations, mapped) +
+                runtimeLowering.synthesizedNodes
+            ).distinctBy { it.span.startOffset to it.span.endOffset }
         // Validate the emitter's C-plus-shaped intermediate with the C-plus
         // grammar; the hygienic macro names are applied only to final C output.
         val emittedParse = backend.parse(snapshotFor(generatedC.text))

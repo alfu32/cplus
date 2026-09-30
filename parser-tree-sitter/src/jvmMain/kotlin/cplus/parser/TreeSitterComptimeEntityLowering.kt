@@ -255,7 +255,8 @@ class TreeSitterComptimeEntityLowering(
                     generatedName = alias,
                     isStatic = false,
                     sourceSpan = invocation.span,
-                    mappedText = materializedType.text
+                    mappedText = materializedType.text,
+                    originSpans = originSpans(materializedType.text)
                 )
                 synthesizedDeclarations += CPlusSynthesizedDeclaration(
                     kind = CPlusAstKind.STRUCT_DECLARATION,
@@ -264,7 +265,8 @@ class TreeSitterComptimeEntityLowering(
                     generatedName = materializedType.structTag,
                     isStatic = false,
                     sourceSpan = invocation.span,
-                    mappedText = materializedType.text
+                    mappedText = materializedType.text,
+                    originSpans = originSpans(materializedType.text)
                 )
                 usedGenerators += wrapper.span.startOffset
                 continue
@@ -377,7 +379,8 @@ class TreeSitterComptimeEntityLowering(
                     generatedName = name,
                     isStatic = false,
                     sourceSpan = invocation.span,
-                    mappedText = materialized
+                    mappedText = materialized,
+                    originSpans = originSpans(materialized)
                 )
             }
             usedGenerators += wrapper.span.startOffset
@@ -583,6 +586,37 @@ class TreeSitterComptimeEntityLowering(
         }
         output.append(source, cursor, end)
         return output.build()
+    }
+
+    /** Compress copied template/invocation origins into spans for semantic-node matching. */
+    private fun originSpans(mapped: MappedText): List<cplus.SourceSpan> {
+        val spans = mutableListOf<cplus.SourceSpan>()
+        var file: cplus.SourceFile? = null
+        var start = -1
+        var end = -1
+        fun flush() {
+            val current = file ?: return
+            if (start >= 0) spans += current.span(start, end + 1)
+            file = null
+            start = -1
+            end = -1
+        }
+        for (index in mapped.text.indices) {
+            val origin = mapped.originAt(index)
+            val nextFile = origin?.file
+            val nextOffset = origin?.offset ?: -1
+            val contiguous = nextFile === file && nextOffset == end + 1
+            if (!contiguous) flush()
+            if (nextFile != null) {
+                if (file == null) {
+                    file = nextFile
+                    start = nextOffset
+                }
+                end = nextOffset
+            }
+        }
+        flush()
+        return spans
     }
 
     /** Do not erase an uninstantiated declaration unless its return shape is in this pass's subset. */

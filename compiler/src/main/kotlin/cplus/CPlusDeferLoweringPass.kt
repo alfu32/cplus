@@ -10,7 +10,9 @@ data class CPlusSynthesizedDeclaration(
     val generatedName: String,
     val isStatic: Boolean,
     val sourceSpan: SourceSpan,
-    val mappedText: MappedText
+    val mappedText: MappedText,
+    /** Additional original spans whose text was copied into a generated declaration. */
+    val originSpans: List<SourceSpan> = emptyList()
 )
 
 data class CPlusLoweringResult(

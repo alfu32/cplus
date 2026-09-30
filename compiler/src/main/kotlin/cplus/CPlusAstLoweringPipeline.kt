@@ -158,8 +158,10 @@ fun CPlusAst.synthesizedDeclarationNodes(
                 .any { identifier ->
                     source.substring(identifier.span.startOffset, identifier.span.endOffset) == declaration.generatedName &&
                         mappedSource.originAt(identifier.span.startOffset)?.let { origin ->
-                            origin.file.name == declaration.sourceSpan.file &&
-                                origin.offset in declaration.sourceSpan.startOffset until declaration.sourceSpan.endOffset
+                            (listOf(declaration.sourceSpan) + declaration.originSpans).any { originSpan ->
+                                origin.file.name == originSpan.file &&
+                                    origin.offset in originSpan.startOffset until originSpan.endOffset
+                            }
                         } == true
                 }
         }
