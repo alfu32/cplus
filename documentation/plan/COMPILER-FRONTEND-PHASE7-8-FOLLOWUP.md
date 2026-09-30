@@ -226,6 +226,6 @@ frontend ledger or its commits.
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
    compiler contracts are explicit; preserve conservative diagnostics otherwise.
-2. **P8.5/P8.9:** add the real IntelliJ interactive startup/restart evidence.
+2. **P8.5/P8.9:** extend the verified IntelliJ startup evidence with protocol-visible features and deterministic restart recovery.
 3. **P7.7/P8.10:** do not promote or delete legacy code until the above evidence and the
    two-release rollback policy are recorded.

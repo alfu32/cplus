@@ -246,9 +246,9 @@ status is only a summary; work is considered converged when every row below is
 | LSP-7  | 7.9a Vim restart                       | DONE        | Headless unexpected-exit/restart fixture passes                                                                                        | 7.9 gate        |
 | LSP-7  | 7.9b VS Code restart                   | DONE        | Real child-process fixture proves bounded auto-restart and explicit restart reset, including closed-pipe recovery                      | 7.9 gate        |
 | LSP-7  | 7.9c IntelliJ restart                  | OPEN        | Exercise unexpected server exit, restart action, document recovery, and diagnostics recovery                                           | 7.9 gate        |
-| LSP-8  | 8.1a discovery precedence              | DONE        | Configured command, project launcher, then PATH `cpc` order is implemented in all clients                                              | 8.1b            |
+| LSP-8  | 8.1a discovery precedence              | DONE        | Configured command, project `.cplus`, project `c-plus-bin`, project root, `CPLUS_HOME`, user-local launchers, then PATH `cpc` order is implemented consistently in all clients | 8.1b            |
 | LSP-8  | 8.1b packaged discovery                | DONE        | Shared fixture passes from extracted bare and six-host cross-runtime distributions through the project-local launcher                  | 8.1 gate        |
-| LSP-8  | 8.5a IntelliJ startup/sync             | OPEN        | Interactive IntelliJ client starts the server and synchronizes a document                                                              | 8.5b–c          |
+| LSP-8  | 8.5a IntelliJ startup/sync             | DONE-LOCAL  | Isolated IntelliJ IDEA 2026.2.2 loads the packaged plugin, opens `doom.cp`, discovers the project-local launcher, and reaches LSP initialization | 8.5b–c          |
 | LSP-8  | 8.5b IntelliJ features                 | OPEN        | Verify diagnostics, navigation, completion, and test discovery through the real client                                                 | 8.5c            |
 | LSP-8  | 8.5c IntelliJ restart                  | OPEN        | Verify restart and state recovery through the real client                                                                              | LSP-8.5 gate    |
 | LSP-8  | 8.6a bare release hosts                | DONE        | `release-host-matrix` validates the bare ZIP on Linux x86_64/arm64, macOS arm64, and Windows x86_64; CI run `36647197070` is green          | 8.6c            |
@@ -262,7 +262,7 @@ status is only a summary; work is considered converged when every row below is
 The next local work is not “finish LSP-5/7/8” as one task. It is:
 
 1. Add real IntelliJ unexpected-exit coverage for 7.9c.
-2. Build the IntelliJ interactive fixture (8.5a–c).
+2. Extend the IntelliJ interactive fixture with protocol-visible diagnostics/features (8.5b) and restart recovery (8.5c).
 3. Run host/release validation (7.7 and 8.6) only after the local gates are green.
 4. Finish the remaining semantic services in LSP-5.6 and close the parent gates.
 
