@@ -406,6 +406,7 @@ The adapters are not a substitute for reliability or release evidence.
 - LSP-5.6b.3 parenthesized receivers: receiver matching now understands explicit address/dereference forms used by C-plus receiver sugar, including `(&box).field` and `(*pointer).field`. `resolvesParenthesizedAddressAndDereferenceReceivers` verifies completion for both forms; the focused LSP suite passes.
 - LSP-5.6c.10 unary numeric arguments: bounded overload ranking now preserves scalar shapes through unary `+`, `-`, `~`, and `!`. `resolvesAnOverloadForUnaryNumericArgument` selects the integer overload for `choose(-1)`; focused and aggregate Gradle gates pass.
 - LSP-5.6c.11 explicit casts: bounded overload ranking now recognizes simple cast target shapes, including pointer casts. `resolvesAnOverloadForExplicitCastArgument` selects the `const char*` overload for `choose((const char*)text)`; focused and aggregate Gradle gates pass.
+- LSP-5.6c.12 literal suffixes: bounded overload ranking now recognizes common C integer suffixes (`L`, `LL`, `U`) and floating suffixes (`f`, `l`), preserving the inferred scalar family for navigation. `resolvesOverloadsForCIntegerAndFloatingLiteralSuffixes` selects the `long` and `float` overloads for `1L` and `1.0f`; focused and aggregate offline Gradle gates pass with 104/104 grammar parses. Full C literal typing and conversion legality remain delegated to the selected compiler.
 
 Local verification command:
 

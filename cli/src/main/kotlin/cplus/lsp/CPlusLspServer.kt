@@ -987,8 +987,19 @@ class CPlusLspServer(
             val operand = expressionType(document, value.substring(1)) ?: return null
             return if (value.first() == '!') TypeShape("int", 0, 0) else operand
         }
-        if (value.matches(Regex("[0-9]+"))) return TypeShape("int", 0, 0)
-        if (value.matches(Regex("[0-9]+\\.[0-9]+"))) return TypeShape("double", 0, 0)
+        if (value.matches(Regex("(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:[uU]?[lL]{0,2}|[lL]{1,2}[uU])?"))) {
+            val suffix = value.takeLastWhile { it == 'u' || it == 'U' || it == 'l' || it == 'L' }
+            val base = when {
+                suffix.count { it == 'l' || it == 'L' } >= 2 -> "long"
+                suffix.any { it == 'l' || it == 'L' } -> "long"
+                else -> "int"
+            }
+            return TypeShape(base, 0, 0)
+        }
+        if (value.matches(Regex("(?:[0-9]+\\.[0-9]*|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?[fFlL]?"))) {
+            val suffix = value.lastOrNull()
+            return TypeShape(if (suffix == 'f' || suffix == 'F') "float" else "double", 0, 0)
+        }
         if (value.startsWith("\"") && value.endsWith("\"")) return TypeShape("char", 0, 1)
         if (value.startsWith("'") && value.endsWith("'")) return TypeShape("int", 0, 0)
         val address = value.removePrefix("&").takeIf { value.startsWith("&") }

@@ -519,6 +519,36 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesOverloadsForCIntegerAndFloatingLiteralSuffixes() {
+        val uri = "file:///overload-literal-suffixes.cp"
+        val source = "int choose(int value) { return value; }\n" +
+            "int choose(long value) { return (int)value; }\n" +
+            "int choose(float value) { return (int)value; }\n" +
+            "int main(void) { return choose(1L) + choose(1.0f); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val line = source.lines()[3]
+        val longPosition = line.indexOf("choose(1L")
+        val floatPosition = line.indexOf("choose(1.0f")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":3,\"character\":$longPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":3,\"character\":$floatPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":1,"), response)
+        assertTrue(response.contains("\"id\":3,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":2,"), response)
+    }
+
+    @Test
     fun ranksClosestNumericConversionWhenNoExactOverloadExists() {
         val uri = "file:///overload-numeric.cp"
         val source = "long choose(long value) { return value; }\n" +
