@@ -12,7 +12,11 @@ import kotlin.system.exitProcess
 private val sourceExtensions = listOf(".cp", ".c+")
 
 fun main(args: Array<String>) {
-    val verbosity = args.firstOrNull { it.matches(Regex("-v[012]")) }?.substring(2)?.toInt() ?: 1
+    val commandIndex = args.indexOfFirst {
+        it in setOf("help", "--help", "-h", "parse", "lsp", "graph", "transcode", "compile", "run", "test", "new", "version")
+    }
+    val globalPrefix = args.take(if (commandIndex >= 0) commandIndex else args.size)
+    val verbosity = globalPrefix.firstOrNull { it.matches(Regex("-v[012]")) }?.substring(2)?.toInt() ?: 1
     val exitCode = try {
         CPlusCli().run(args.toList())
     } catch (error: CPlusSyntaxException) {
@@ -41,31 +45,26 @@ class CPlusCli(
     private val stdinText: () -> String = { System.`in`.bufferedReader().readText() }
 ) {
     private var cliStdlibRoot: Path? = null
+    private var cliParserBackend: ParserBackendId = ParserBackendId.TREE_SITTER
+    private var cliFrontend: CompilationFrontend? = null
+    private var cliCompilerFlags: List<String> = emptyList()
     private var verbosity: Int = 1
     private var activeLogger: CompilationLogger = logger
 
     fun run(arguments: List<String>): Int {
         cliStdlibRoot = null
+        cliParserBackend = ParserBackendId.TREE_SITTER
+        cliFrontend = null
+        cliCompilerFlags = emptyList()
         verbosity = 1
         activeLogger = SilentCompilationLogger
-        val commandArguments = mutableListOf<String>()
-        var index = 0
-        while (index < arguments.size) {
-            val argument = arguments[index]
-            if (argument.matches(Regex("-v[012]"))) {
-                verbosity = argument.substring(2).toInt()
-                activeLogger = if (verbosity >= 2) logger else SilentCompilationLogger
-                index++
-            } else if (argument == "--stdlib") {
-                if (index + 1 >= arguments.size) throw IllegalArgumentException("--stdlib requires a directory")
-                val directory = Path(arguments[index + 1]).toAbsolutePath().normalize()
-                if (!Files.isDirectory(directory)) throw IllegalArgumentException("standard-library directory does not exist: $directory")
-                cliStdlibRoot = directory
-                index += 2
-            } else {
-                commandArguments += arguments[index++]
-            }
-        }
+        val (global, commandArguments) = parseGlobalOptions(arguments)
+        cliStdlibRoot = global.stdlib
+        cliParserBackend = global.backend ?: ParserBackendId.TREE_SITTER
+        cliFrontend = global.frontend
+        cliCompilerFlags = global.compilerFlags
+        verbosity = global.verbosity
+        activeLogger = if (verbosity >= 2) logger else SilentCompilationLogger
         if (commandArguments.isEmpty() || commandArguments.first() in setOf("help", "--help", "-h")) {
             printHelp()
             return 0
@@ -88,6 +87,91 @@ class CPlusCli(
         }
     }
 
+    private fun parseGlobalOptions(arguments: List<String>): Pair<GlobalOptions, List<String>> {
+        var backend: ParserBackendId? = null
+        var frontend: CompilationFrontend? = null
+        var stdlib: Path? = null
+        var selectedVerbosity = 1
+        var index = 0
+        while (index < arguments.size) {
+            val argument = arguments[index]
+            when {
+                argument.matches(Regex("-v[012]")) -> {
+                    selectedVerbosity = argument.substring(2).toInt()
+                    index++
+                }
+                argument == "--stdlib" -> {
+                    if (index + 1 >= arguments.size) throw IllegalArgumentException("--stdlib requires a directory")
+                    stdlib = validateStdlibDirectory(arguments[index + 1])
+                    index += 2
+                }
+                argument.startsWith("--stdlib=") -> {
+                    stdlib = validateStdlibDirectory(argument.substringAfter('='))
+                    index++
+                }
+                argument == "--backend" -> {
+                    if (index + 1 >= arguments.size) throw IllegalArgumentException("--backend requires 'legacy' or 'tree-sitter'")
+                    backend = parseBackend(arguments[index + 1])
+                    index += 2
+                }
+                argument.startsWith("--backend=") -> {
+                    backend = parseBackend(argument.substringAfter('='))
+                    index++
+                }
+                argument == "--frontend" -> {
+                    if (index + 1 >= arguments.size) throw IllegalArgumentException("--frontend requires auto, legacy, or tree-sitter")
+                    frontend = parseFrontend(arguments[index + 1])
+                    index += 2
+                }
+                argument.startsWith("--frontend=") -> {
+                    frontend = parseFrontend(argument.substringAfter('='))
+                    index++
+                }
+                argument == "-o" -> throw IllegalArgumentException("-o is command-specific and must follow the command")
+                else -> break
+            }
+        }
+        val compilerFlags = mutableListOf<String>()
+        while (index < arguments.size && arguments[index].startsWith("-") && arguments[index] != "-o") {
+            val flag = arguments[index]
+            compilerFlags += flag
+            if (flag in globalPairedCompilerFlags) {
+                if (index + 1 >= arguments.size) throw IllegalArgumentException("$flag requires a value")
+                compilerFlags += arguments[index + 1]
+                index += 2
+            } else {
+                index++
+            }
+        }
+        return GlobalOptions(backend, frontend, stdlib, selectedVerbosity, compilerFlags) to arguments.drop(index)
+    }
+
+    private fun validateStdlibDirectory(value: String): Path {
+        if (value.isBlank()) throw IllegalArgumentException("--stdlib requires a directory")
+        val directory = Path(value).toAbsolutePath().normalize()
+        if (!Files.isDirectory(directory)) throw IllegalArgumentException("standard-library directory does not exist: $directory")
+        return directory
+    }
+
+    private fun rejectGlobalOptionAfterCommand(argument: String): Nothing =
+        throw IllegalArgumentException("$argument is a global option and must appear before the command")
+
+    private fun rejectGlobalOptionAfterCommandIfNeeded(argument: String) {
+        when {
+            argument.matches(Regex("-v[012]")) -> rejectGlobalOptionAfterCommand(argument)
+            argument == "--stdlib" || argument.startsWith("--stdlib=") -> rejectGlobalOptionAfterCommand(argument)
+            argument == "--backend" || argument.startsWith("--backend=") -> rejectGlobalOptionAfterCommand(argument)
+            argument == "--frontend" || argument.startsWith("--frontend=") -> rejectGlobalOptionAfterCommand(argument)
+            argument.startsWith("-") && argument != "-o" ->
+                throw IllegalArgumentException("$argument is a global compiler option and must appear before the command")
+        }
+    }
+
+    private val globalPairedCompilerFlags = setOf(
+        "-l", "-L", "-F", "-I", "-D", "-U", "-include", "-isystem", "-iquote", "-isysroot",
+        "--sysroot", "-sysroot", "--target", "-target", "-arch", "-framework", "-Xlinker", "-Xclang"
+    )
+
     private fun lsp(): Int {
         CPlusLspServer().serve()
         return 0
@@ -99,7 +183,7 @@ class CPlusCli(
         var sourceHint: Path? = null
         var readStdin = false
         var destination: Path? = null
-        var parserBackend = ParserBackendId.TREE_SITTER
+        var parserBackend = cliParserBackend
         var index = 0
         while (index < arguments.size) {
             when (val argument = arguments[index]) {
@@ -128,6 +212,7 @@ class CPlusCli(
                     parserBackend = parseBackend(argument.substringAfter('='))
                     index++
                 } else {
+                    rejectGlobalOptionAfterCommandIfNeeded(argument)
                     if (source != null) throw IllegalArgumentException("parse accepts one source file, got '$argument'")
                     source = Path(argument).toAbsolutePath().normalize()
                     index++
@@ -201,7 +286,7 @@ class CPlusCli(
     }
 
     private fun transcode(arguments: List<String>): Int {
-        val parsed = parseFileCommand(arguments, allowTccOptions = true)
+        val parsed = parseFileCommand(arguments)
         validateTranscodeTargetOptions(parsed.passthrough)
         printTranscoderVersion()
         val destination = parsed.output ?: defaultTranscodedPath(parsed.source)
@@ -222,7 +307,7 @@ class CPlusCli(
     }
 
     private fun compile(arguments: List<String>, runAfter: Boolean): Int {
-        val parsed = parseFileCommand(arguments, allowTccOptions = true)
+        val parsed = parseFileCommand(arguments)
         printTranscoderVersion()
         val destination = parsed.output ?: defaultExecutablePath(parsed.source)
         val sourcePath = parsed.source.toAbsolutePath().normalize()
@@ -583,22 +668,18 @@ class CPlusCli(
         val start = if (arguments.firstOrNull() in modes) 1 else 0
         val sources = mutableListOf<String>()
         val testNames = mutableListOf<String>()
-        val flags = mutableListOf<String>()
-        var frontend = defaultCompilationFrontend()
+        val flags = cliCompilerFlags.toMutableList()
+        val frontend = cliFrontend ?: defaultCompilationFrontend()
         var outputPath: Path? = null
-        val paired = setOf("-l", "-L", "-F", "-I", "-D", "-U", "-include", "-isystem", "-iquote", "-isysroot", "--sysroot", "-sysroot", "--target", "-target", "-arch", "-framework", "-Xlinker", "-Xclang")
         var index = start
         while (index < arguments.size) {
             val value = arguments[index]
             when {
                 value == "--frontend" -> {
-                    if (index + 1 >= arguments.size) throw IllegalArgumentException("--frontend requires auto, legacy, or tree-sitter")
-                    frontend = parseFrontend(arguments[index + 1])
-                    index += 2
+                    rejectGlobalOptionAfterCommand(value)
                 }
                 value.startsWith("--frontend=") -> {
-                    frontend = parseFrontend(value.substringAfter('='))
-                    index++
+                    rejectGlobalOptionAfterCommand(value)
                 }
                 value == "-o" -> {
                     if (index + 1 >= arguments.size) throw IllegalArgumentException("-o requires an output path")
@@ -606,9 +687,7 @@ class CPlusCli(
                 }
                 isCPlusSource(value) -> { sources += value; index++ }
                 value.startsWith("-") -> {
-                    flags += value
-                    if (value in paired && index + 1 < arguments.size) flags += arguments[++index]
-                    index++
+                    rejectGlobalOptionAfterCommand(value)
                 }
                 else -> { testNames += value; index++ }
             }
@@ -649,12 +728,12 @@ class CPlusCli(
     private fun isCPlusSource(argument: String): Boolean =
         sourceExtensions.any(argument::endsWith)
 
-    private fun parseFileCommand(arguments: List<String>, allowTccOptions: Boolean): ParsedCommand {
+    private fun parseFileCommand(arguments: List<String>): ParsedCommand {
         val source = arguments.firstOrNull()?.let(::Path)
             ?: throw IllegalArgumentException("missing input filename")
         var outputPath: Path? = null
-        var frontend = defaultCompilationFrontend()
-        val passthrough = mutableListOf<String>()
+        val frontend = cliFrontend ?: defaultCompilationFrontend()
+        val passthrough = cliCompilerFlags.toMutableList()
         var index = 1
         while (index < arguments.size) {
             when (val argument = arguments[index]) {
@@ -664,22 +743,14 @@ class CPlusCli(
                     index += 2
                 }
                 "--frontend" -> {
-                    if (index + 1 >= arguments.size) {
-                        throw IllegalArgumentException("--frontend requires 'auto', 'legacy', or 'tree-sitter'")
-                    }
-                    frontend = parseFrontend(arguments[index + 1])
-                    index += 2
+                    rejectGlobalOptionAfterCommand("--frontend")
                 }
                 else -> {
                     if (argument.startsWith("--frontend=")) {
-                        frontend = parseFrontend(argument.substringAfter('='))
-                        index++
+                        rejectGlobalOptionAfterCommand(argument)
                     } else {
-                        if (!allowTccOptions) {
-                            throw IllegalArgumentException("unexpected argument '$argument' for transcode")
-                        }
-                        passthrough += argument
-                        index++
+                        rejectGlobalOptionAfterCommandIfNeeded(argument)
+                        throw IllegalArgumentException("unexpected argument '$argument'; compiler options must precede the command")
                     }
                 }
             }
@@ -802,23 +873,25 @@ class CPlusCli(
             """C-plus processor
 
 usage:
-  cplus help
-  cplus version
-  cplus parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
-  cplus parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
-  cplus lsp
-  cplus graph filename.cp [-o imports.json]
-  cplus transcode filename.cp [-o some_file_name.c] [--frontend auto|legacy|tree-sitter] [--target=TRIPLE]
-  cplus compile filename.cp [-o executable] [--frontend auto|legacy|tree-sitter] [passthrough tcc parameters]
-  cplus run filename.cp [-o executable] [--frontend auto|legacy|tree-sitter] [passthrough tcc parameters]
-  cplus test filename.cp [filename2.cp ...] [test name ...]
-  cplus test [run] [--frontend auto|legacy|tree-sitter] [compiler flags] filename.cp ... [test name ...]
-  cplus test transcode [-o output.c] [--frontend auto|legacy|tree-sitter] filename.cp
-  cplus test compile [-o executable] [--frontend auto|legacy|tree-sitter] [compiler flags] filename.cp
-  cplus new project_name|.
+  cplus [global options] help
+  cplus [global options] version
+  cplus [global options] parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
+  cplus [global options] parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
+  cplus [global options] lsp
+  cplus [global options] graph filename.cp [-o imports.json]
+  cplus [global options] transcode filename.cp [-o some_file_name.c]
+  cplus [global options] compile filename.cp [-o executable]
+  cplus [global options] run filename.cp [-o executable]
+  cplus [global options] test filename.cp [filename2.cp ...] [test name ...]
+  cplus [global options] test [run|compile|transcode] [-o output] filename.cp ... [test name ...]
+  cplus [global options] new project_name|.
 
 global options:
   --stdlib directory    use this standard-library root (also settable with CPLUS_STDLIB)
+  --frontend auto|legacy|tree-sitter
+                        select the compilation frontend
+  --target TRIPLE       select the compiler target (forwarded to the host compiler)
+  compiler flags        compiler/linker flags such as -I, -D, -l, -L, and --sysroot
   -v0                   silence all C-plus messages
   -v1                   show errors only (default)
   -v2                   show passes, compiler details, and test output
@@ -853,6 +926,14 @@ empty macros: pub, priv, mut, borrowed, owned, and stat.
         val output: Path?,
         val passthrough: List<String>,
         val frontend: CompilationFrontend
+    )
+
+    private data class GlobalOptions(
+        val backend: ParserBackendId?,
+        val frontend: CompilationFrontend?,
+        val stdlib: Path?,
+        val verbosity: Int,
+        val compilerFlags: List<String>
     )
 
     private enum class CompilationFrontend { AUTO, LEGACY, TREE_SITTER }

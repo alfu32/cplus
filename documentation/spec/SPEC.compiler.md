@@ -7,20 +7,26 @@ Status: living specification. Update this document whenever the CLI, module layo
 The executable is named `cplus` and accepts these subcommands:
 
 ```text
-cplus help
-cplus parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
-cplus parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
-cplus graph filename.cp [-o imports.json]
-cplus transcode filename.cp [-o some_file_name.c] [--frontend auto|legacy|tree-sitter] [--target=TRIPLE]
-cplus compile filename.cp [-o executable] [--frontend auto|legacy|tree-sitter] [passthrough tcc parameters]
-cplus run filename.cp [-o executable] [--frontend auto|legacy|tree-sitter] [passthrough tcc parameters]
-cplus test [run] [compiler flags] filename.cp [filename2.cp ...] [exact test name ...]
-cplus test transcode [-o test.c] filename.cp
-cplus test compile [-o executable] [compiler flags] filename.cp
-cplus new project_name|.
-cplus --stdlib directory <subcommand> ...
-cplus -v0|-v1|-v2 <subcommand> ...
+cplus [global options] help
+cplus [global options] parse filename.cp [--backend legacy|tree-sitter] [-o ast.json]
+cplus [global options] parse --stdin [--source filename.cp] [--backend legacy|tree-sitter] [-o ast.json]
+cplus [global options] graph filename.cp [-o imports.json]
+cplus [global options] transcode filename.cp [-o some_file_name.c]
+cplus [global options] compile filename.cp [-o executable]
+cplus [global options] run filename.cp [-o executable]
+cplus [global options] test [run|compile|transcode] [-o output] filename.cp [filename2.cp ...] [exact test name ...]
+cplus [global options] new project_name|.
 ```
+
+Global options must precede the subcommand. They are `--frontend
+auto|legacy|tree-sitter`, `--stdlib directory`, `--target TRIPLE` (also accepted
+as `--target=TRIPLE`), `-v0`, `-v1`, `-v2`, and compiler/linker flags such as
+`-D`, `-I`, `-L`, `-l`, `-framework`, and `--sysroot`. The output selector `-o`
+remains command-specific. `parse` retains its parser-specific `--backend
+legacy|tree-sitter` option after `parse`; it may also be supplied before the
+subcommand for compatibility. `lsp` reserves its options after the `lsp`
+subcommand. Other global options after a subcommand are rejected instead of
+being forwarded accidentally to the host compiler.
 
 `parse` emits the recovered normalized syntax tree and diagnostics as JSON using schema `cplus.parse.v1`. All offsets are UTF-16 code units. Its default backend is `tree-sitter`; `--backend legacy` selects the legacy scanner adapter, whose ordinary C/C-plus regions are explicitly opaque. This option is for parser comparison and does not change the production transpilation backend. Its default output is stdout; `-o` writes the JSON to a file. Syntax errors still produce the partial tree and diagnostic list, then return status `1`; command or file errors return `2`.
 
@@ -28,7 +34,7 @@ Use `parse --stdin` to parse unsaved editor text. The source is read from stdin;
 
 `graph` resolves the input through the normal C-plus comptime importer and emits `cplus.imports.v1` JSON. `dependencyOrder` lists canonical C-plus source identities in dependency-first order, ending with the requested root; `imports` contains directed `{importer, imported, location}` edges with source-mapped UTF-16 spans. It shares project, module, and standard-library resolution with compilation. The command performs normal transpilation to obtain the resolved graph, so syntax/import/materialization errors fail the command rather than returning a partial graph. Ordinary C `#include` and C `@import` directives remain compiler-managed and are not C-plus dependency edges. The default output is stdout; `-o` writes the JSON file.
 
-`transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. `transcode` accepts only `--target` among compiler options; it uses the option to choose comptime branches but does not compile. Additional arguments for `compile` and `run` are passed to the selected C compiler; for example, `-DFLAG=1` or `-Iinclude`. Code-processing commands print the C-plus transcoder version. Before each C compilation, the CLI reports whether the compiler is bundled or external and its payload/JAR or executable location.
+`transcode` defaults to `filename.c`. `compile` and `run` default to an executable named `filename`. The `-o` option selects the output path. Global compiler options are collected before the command and forwarded to the selected C compiler where applicable; for example, `cplus -DFLAG=1 -Iinclude compile filename.cp`. `--target` also selects comptime branches during transcoding but does not itself compile. Code-processing commands print the C-plus transcoder version. Before each C compilation, the CLI reports whether the compiler is bundled or external and its payload/JAR or executable location.
 
 ## Diagnostics do not suppress emission
 
@@ -61,7 +67,7 @@ The warning is advisory: it does not suppress source emission. An implicitly
 fatal failure, such as a crashed transcoder or unusable source pass, may still
 terminate generation.
 
-`test` uses the AST-first `AUTO` frontend by default for compatibility-aware migration. Tree-sitter runs first; lowering or host-compiler rejection retries the retained legacy frontend. Its `run`, `compile`, and `transcode` forms accept `--frontend=auto|legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). Explicit `auto` is equivalent to the default; explicit Tree-sitter is strict; explicit legacy is the rollback path. At `-v2`, a fallback emits the requested mode, selected backend, failure stage, source location, and up to three host diagnostics. The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate.
+`test` uses the AST-first `AUTO` frontend by default for compatibility-aware migration. Tree-sitter runs first; lowering or host-compiler rejection retries the retained legacy frontend. Select the frontend globally, before `test`, with `--frontend=auto|legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). Explicit `auto` is equivalent to the default; explicit Tree-sitter is strict; explicit legacy is the rollback path. At `-v2`, a fallback emits the requested mode, selected backend, failure stage, source location, and up to three host diagnostics. The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate.
 
 For migration tests, fixture extraction is an independent frontend concern. The
 internal `CPlusLegacyPassSelection.extractTests` and
@@ -202,7 +208,7 @@ errors and retain C-plus source mapping. Six-host/architecture compiler evidence
 tracked separately from the language/parser contract; a local MinGW result does not
 claim Windows arm64 support.
 
-`test` runs all `@test` blocks by default; `test run` is equivalent. Compiler flags may appear before or after source paths, and `-v0`, `-v1`, or `-v2` may be placed before or after the command. Flags from all input files and CLI arguments are logically deduplicated and passed to each test compilation. Generated test C carries one consolidated `cplus compiler flags` comment, matching ordinary transpilation. `test compile` and `test transcode` currently accept one source file because each generated test harness owns a `main` function. Test-name filters remain exact and case-sensitive:
+`test` runs all `@test` blocks by default; `test run` is equivalent. Compiler flags and verbosity options must precede `test`; flags from all input files and CLI arguments are logically deduplicated and passed to each test compilation. Generated test C carries one consolidated `cplus compiler flags` comment, matching ordinary transpilation. `test compile` and `test transcode` currently accept one source file because each generated test harness owns a `main` function. Test-name filters remain exact and case-sensitive:
 
 ```sh
 java -jar c-plus.jar test test/folder/some_file.cp

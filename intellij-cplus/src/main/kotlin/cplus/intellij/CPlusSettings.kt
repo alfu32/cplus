@@ -19,9 +19,9 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
         var compilerCommand: String = "cpc compile",
         var runnerCommand: String = "cpc run",
         var testProgram: String = "cpc test",
-        var parserCommand: String = "",
+        var parserCommand: String = "cpc parse",
         var importGraphCommand: String = "cpc graph",
-        var languageServerCommand: String = ""
+        var languageServerCommand: String = "cpc lsp"
     )
 
     private var state = State()
@@ -49,11 +49,15 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
         compilerCommand = compilerCommand.replaceLegacy("compile"),
         runnerCommand = runnerCommand.replaceLegacy("run"),
         testProgram = testProgram.replaceLegacy("test"),
-        importGraphCommand = importGraphCommand.replaceLegacy("graph")
+        parserCommand = parserCommand.replaceLegacy("parse"),
+        importGraphCommand = importGraphCommand.replaceLegacy("graph"),
+        languageServerCommand = languageServerCommand.replaceLegacy("lsp")
     )
 
     private fun String.replaceLegacy(subcommand: String): String =
-        if (trim() == "cplus $subcommand") "cpc $subcommand" else this
+        if (trim().split(Regex("\\s+")).filter(String::isNotEmpty) == listOf("cplus", subcommand)) {
+            "cpc $subcommand"
+        } else this
 }
 
 class CPlusSettingsConfigurable : Configurable {

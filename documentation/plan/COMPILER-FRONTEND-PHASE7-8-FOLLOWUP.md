@@ -313,6 +313,19 @@ VS Code packaging, IntelliJ 2026.2.2 plugin tests/package, and Vim archive
 packaging all passed. This refreshes P8.4/P8.5.a evidence; it does not claim
 interactive IntelliJ feature or restart coverage.
 
+The IntelliJ settings/configuration correction is now covered locally: legacy
+`cplus` built-ins are migrated even with irregular whitespace, parser and LSP
+defaults use `cpc`, and every gutter run/test receives its own disposable
+closeable content tab. The focused `intellij-cplus` test plus `buildPlugin` gate
+passes; reinstall the rebuilt plugin before collecting interactive UI evidence.
+
+The CLI option boundary is now explicit: `--frontend`, `--stdlib`, `--target`,
+verbosity, and compiler/linker flags precede the command; `parse` alone retains
+its `--backend` option after the command, and `-o` remains command-specific.
+The complete `:cli:test` suite passes after migrating its fixtures to this
+grammar. This closes the operator-contract slice but does not close the
+interactive IntelliJ lifecycle gates.
+
 The IntelliJ smoke harness now has an opt-in protocol trace: setting
 `CPLUS_LSP_TRACE` records inbound method names and outbound notifications while
 leaving JSON-RPC stdout untouched. It selects the isolated profile through

@@ -8,6 +8,7 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.util.Key
+import com.intellij.openapi.util.Disposer
 import com.intellij.ui.content.ContentFactory
 
 class CPlusOutputToolWindowFactory : ToolWindowFactory {
@@ -25,21 +26,21 @@ internal object CPlusOutputConsole {
 
     fun content(console: ConsoleView, title: String) = ContentFactory.getInstance()
         .createContent(console.component, title, true)
-        .also { it.putUserData(consoleKey, console) }
+        .also {
+            it.putUserData(consoleKey, console)
+            Disposer.register(it, console)
+        }
 
     fun open(project: Project, title: String, command: List<String>): ConsoleView? {
         val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("C-plus") ?: return null
         val contentManager = toolWindow.contentManager
-        val content = contentManager.contents.firstOrNull { it.getUserData(consoleKey) != null }
-        val console = content?.getUserData(consoleKey) ?: create(project)
-        content?.let {
-            it.displayName = title
-            contentManager.setSelectedContent(it)
-        } ?: run {
-            val newContent = content(console, title)
-            contentManager.addContent(newContent)
-            contentManager.setSelectedContent(newContent)
-        }
+        // Keep the persistent Output tab as a welcome/diagnostic console, but
+        // give every run its own closeable content. Reusing the first content
+        // hid the close handle and made completed runs impossible to dismiss.
+        val console = create(project)
+        val newContent = content(console, title)
+        contentManager.addContent(newContent)
+        contentManager.setSelectedContent(newContent)
         console.clear()
         val commandText = command.joinToString(" ")
         console.print("> $commandText\n\n", ConsoleViewContentType.SYSTEM_OUTPUT)

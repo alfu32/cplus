@@ -12,18 +12,18 @@ class CPlusSettingsTest {
                 compilerCommand = "cplus compile",
                 runnerCommand = "cplus run",
                 testProgram = "cplus test",
-                parserCommand = "cplus",
+                parserCommand = "cplus parse",
                 importGraphCommand = "cplus graph",
-                languageServerCommand = "java -jar custom-lsp.jar"
+                languageServerCommand = "cplus lsp"
             )
         )
 
         assertEquals("cpc compile", settings.current().compilerCommand)
         assertEquals("cpc run", settings.current().runnerCommand)
         assertEquals("cpc test", settings.current().testProgram)
-        assertEquals("cplus", settings.current().parserCommand)
+        assertEquals("cpc parse", settings.current().parserCommand)
         assertEquals("cpc graph", settings.current().importGraphCommand)
-        assertEquals("java -jar custom-lsp.jar", settings.current().languageServerCommand)
+        assertEquals("cpc lsp", settings.current().languageServerCommand)
     }
 
     @Test
@@ -77,6 +77,22 @@ class CPlusSettingsTest {
 
         assertEquals(custom, settings.current())
         assertEquals(custom, settings.current())
+    }
+
+    @Test
+    fun migratesLegacyCommandsWithIrregularWhitespace() {
+        val settings = CPlusSettings()
+        settings.loadState(
+            CPlusSettings.State(
+                testProgram = "cplus  test",
+                parserCommand = "  cplus\tparse ",
+                languageServerCommand = "cplus   lsp"
+            )
+        )
+
+        assertEquals("cpc test", settings.current().testProgram)
+        assertEquals("cpc parse", settings.current().parserCommand)
+        assertEquals("cpc lsp", settings.current().languageServerCommand)
     }
 
     @Test

@@ -117,7 +117,7 @@ class TranspilerTest {
 
             val treeErrors = StringBuilder()
             val treeStatus = CPlusCli(output = StringBuilder(), errors = treeErrors).run(
-                listOf("transcode", source.toString(), "--frontend=tree-sitter", "-o", treeOutput.toString())
+                listOf("--frontend=tree-sitter", "transcode", source.toString(), "-o", treeOutput.toString())
             )
             assertEquals(0, treeStatus, treeErrors.toString())
             val treeGenerated = Files.readString(treeOutput)
@@ -125,7 +125,7 @@ class TranspilerTest {
 
             val legacyOutput = directory.resolve("counter.legacy.c")
             val legacyStatus = CPlusCli(output = StringBuilder(), errors = StringBuilder()).run(
-                listOf("transcode", source.toString(), "--frontend=legacy", "-o", legacyOutput.toString())
+                listOf("--frontend=legacy", "transcode", source.toString(), "-o", legacyOutput.toString())
             )
             assertEquals(0, legacyStatus)
             assertTrue("counter__get(&counter)" in Files.readString(legacyOutput))
@@ -133,7 +133,7 @@ class TranspilerTest {
             val autoOutput = directory.resolve("counter.auto.c")
             val autoErrors = StringBuilder()
             val autoStatus = CPlusCli(output = StringBuilder(), errors = autoErrors).run(
-                listOf("transcode", source.toString(), "--frontend=auto", "-o", autoOutput.toString())
+                listOf("--frontend=auto", "transcode", source.toString(), "-o", autoOutput.toString())
             )
             assertEquals(0, autoStatus, autoErrors.toString())
             assertTrue("counter__get(&counter)" in Files.readString(autoOutput))
@@ -167,7 +167,7 @@ class TranspilerTest {
 
             val errors = StringBuilder()
             val status = CPlusCli(output = StringBuilder(), errors = errors).run(
-                listOf("test", "transcode", "--frontend=tree-sitter", source.toString(), "-o", output.toString())
+                listOf("--frontend=tree-sitter", "test", "transcode", source.toString(), "-o", output.toString())
             )
             assertEquals(0, status, errors.toString())
             val generated = Files.readString(output)
@@ -237,7 +237,7 @@ class TranspilerTest {
             val output = StringBuilder()
             val errors = StringBuilder()
             val status = CPlusCli(output = output, errors = errors).run(
-                listOf("test", "run", "--frontend=tree-sitter", source.toString())
+                listOf("--frontend=tree-sitter", "test", "run", source.toString())
             )
             assertEquals(0, status, "${errors}\n${output}")
             assertTrue("tree runtime fixture" in output, output.toString())
@@ -265,7 +265,7 @@ class TranspilerTest {
 
             val legacyOutput = StringBuilder()
             val legacyStatus = CPlusCli(output = legacyOutput, errors = StringBuilder()).run(
-                listOf("parse", "--backend", "legacy", valid.toString())
+                listOf("--backend", "legacy", "parse", valid.toString())
             )
             assertEquals(0, legacyStatus)
             assertTrue(legacyOutput.toString().contains("\"backend\":\"legacy\""), legacyOutput.toString())
@@ -274,7 +274,7 @@ class TranspilerTest {
 
             val explicitTreeOutput = StringBuilder()
             val explicitTreeStatus = CPlusCli(output = explicitTreeOutput, errors = StringBuilder()).run(
-                listOf("parse", "--backend=tree-sitter", valid.toString())
+                listOf("--backend=tree-sitter", "parse", valid.toString())
             )
             assertEquals(0, explicitTreeStatus)
             assertTrue(explicitTreeOutput.toString().contains("\"backend\":\"tree_sitter\""), explicitTreeOutput.toString())
@@ -293,6 +293,44 @@ class TranspilerTest {
             Files.deleteIfExists(directory.resolve("valid.cp"))
             Files.deleteIfExists(directory.resolve("malformed.cp"))
             Files.deleteIfExists(directory)
+        }
+    }
+
+    @Test
+    fun globalCliOptionsAreParsedBeforeTheCommandOnly() {
+        val directory = Files.createTempDirectory("cplus-global-options")
+        try {
+            val source = directory.resolve("main.cp")
+            Files.writeString(source, "int main(void) { return 0; }\n")
+            val stdlib = directory.resolve("stdlib").also(Files::createDirectory)
+
+            val errors = StringBuilder()
+            assertEquals(
+                0,
+                CPlusCli(output = StringBuilder(), errors = errors).run(
+                    listOf("--backend=legacy", "--frontend=legacy", "--stdlib", stdlib.toString(), "-v2", "--target=linux-x86_64", "transcode", source.toString())
+                ),
+                errors.toString()
+            )
+
+            assertThrows(IllegalArgumentException::class.java) {
+                CPlusCli().run(listOf("transcode", source.toString(), "--frontend=legacy"))
+            }
+            val parseOutput = StringBuilder()
+            assertEquals(
+                0,
+                CPlusCli(output = parseOutput, errors = errors).run(listOf("parse", "--backend=legacy", source.toString())),
+                errors.toString()
+            )
+            assertTrue("\"backend\":\"legacy\"" in parseOutput.toString(), parseOutput.toString())
+            assertThrows(IllegalArgumentException::class.java) {
+                CPlusCli().run(listOf("transcode", source.toString(), "-v2"))
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                CPlusCli().run(listOf("transcode", source.toString(), "--target=linux-x86_64"))
+            }
+        } finally {
+            Files.walk(directory).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
     }
 
@@ -862,7 +900,7 @@ class TranspilerTest {
         val sourcePath = findRepositoryFile("stdlib/tests/thread_pool.cp")
         val output = StringBuilder()
         val errors = StringBuilder()
-        val status = CPlusCli(output = output, errors = errors).run(listOf("test", "-v2", sourcePath.toString()))
+        val status = CPlusCli(output = output, errors = errors).run(listOf("-v2", "test", sourcePath.toString()))
 
         assertEquals(0, status, "${errors}\n${output}")
         assertTrue("thread_pool.cp | 8 |" in output, output.toString())
@@ -874,7 +912,7 @@ class TranspilerTest {
         val sourcePath = findRepositoryFile("stdlib/tests/http.cp")
         val output = StringBuilder()
         val errors = StringBuilder()
-        val status = CPlusCli(output = output, errors = errors).run(listOf("test", "-v2", sourcePath.toString()))
+        val status = CPlusCli(output = output, errors = errors).run(listOf("-v2", "test", sourcePath.toString()))
 
         assertEquals(0, status, "${errors}\n${output}")
         assertTrue("http.cp | 4 |" in output, output.toString())
@@ -919,7 +957,7 @@ class TranspilerTest {
             val output = StringBuilder()
             val errors = StringBuilder()
             val status = CPlusCli(output = output, errors = errors).run(
-                listOf("test", "-v2", first.toString(), second.toString(), "alpha", "beta")
+                listOf("-v2", "test", first.toString(), second.toString(), "alpha", "beta")
             )
 
             assertEquals(0, status, errors.toString())
@@ -1054,14 +1092,14 @@ class TranspilerTest {
             assertEquals(
                 0,
                 CPlusCli(output = StringBuilder(), errors = errors)
-                    .run(listOf("test", "-DCLI_FLAG=7", source.toString())),
+                    .run(listOf("-DCLI_FLAG=7", "test", source.toString())),
                 errors.toString()
             )
 
             assertEquals(
                 0,
                 CPlusCli(output = StringBuilder(), errors = errors)
-                    .run(listOf("test", "compile", "-o", executable.toString(), "-DCLI_FLAG=7", source.toString())),
+                    .run(listOf("-DCLI_FLAG=7", "test", "compile", "-o", executable.toString(), source.toString())),
                 errors.toString()
             )
             assertTrue(Files.isExecutable(executable))
@@ -1069,7 +1107,7 @@ class TranspilerTest {
             assertEquals(
                 0,
                 CPlusCli(output = StringBuilder(), errors = errors)
-                    .run(listOf("test", "transcode", "-o", generated.toString(), "-DCLI_FLAG=7", source.toString())),
+                    .run(listOf("-DCLI_FLAG=7", "test", "transcode", "-o", generated.toString(), source.toString())),
                 errors.toString()
             )
             val generatedText = Files.readString(generated)
@@ -1105,7 +1143,7 @@ class TranspilerTest {
             val fixtureErrors = StringBuilder()
             assertEquals(
                 0,
-                CPlusCli(output = fixtureOutput, errors = fixtureErrors).run(listOf("test", "-v0", fixtureSource.toString())),
+                CPlusCli(output = fixtureOutput, errors = fixtureErrors).run(listOf("-v0", "test", fixtureSource.toString())),
                 fixtureErrors.toString()
             )
             assertTrue("fixture printf remains visible" in fixtureOutput.toString(), fixtureOutput.toString())
@@ -1175,7 +1213,7 @@ class TranspilerTest {
             Files.writeString(source, sourceText)
             val errors = StringBuilder()
             val status = CPlusCli(output = StringBuilder(), errors = errors).run(
-                listOf("transcode", source.toString(), "-o", output.toString(), "--target=windows-x86_64")
+                listOf("--target=windows-x86_64", "transcode", source.toString(), "-o", output.toString())
             )
             assertEquals(0, status, errors.toString())
             assertTrue(
@@ -1462,9 +1500,9 @@ class TranspilerTest {
             val errors = StringBuilder()
             val status = CPlusCli(output = StringBuilder(), errors = errors).run(
                 listOf(
+                    "--target=linux-aarch64",
                     "compile",
                     sourcePath.toString(),
-                    "--target=linux-aarch64",
                     "-o",
                     executable.toString()
                 )
@@ -1497,10 +1535,10 @@ class TranspilerTest {
             val errors = StringBuilder()
             val status = CPlusCli(output = StringBuilder(), errors = errors).run(
                 listOf(
-                    "compile",
-                    sourcePath.toString(),
                     "--target=macos-x86_64",
                     "-c",
+                    "compile",
+                    sourcePath.toString(),
                     "-o",
                     outputPath.toString()
                 )
@@ -1805,7 +1843,7 @@ class TranspilerTest {
             )
             val errors = StringBuilder()
             val status = CPlusCli(output = StringBuilder(), errors = errors).run(
-                listOf("transcode", "-v2", source.toString(), "-o", generated.toString())
+                listOf("-v2", "transcode", source.toString(), "-o", generated.toString())
             )
 
             assertEquals(0, status)
@@ -2402,7 +2440,7 @@ class TranspilerTest {
                 output = StringBuilder(),
                 errors = errors,
                 logger = ConsoleCompilationLogger(errors)
-            ).run(listOf("compile", "-v2", source.toString(), "-o", executable.toString()))
+            ).run(listOf("-v2", "compile", source.toString(), "-o", executable.toString()))
             assertTrue(result != 0, "invalid C-plus unexpectedly compiled")
             assertTrue(source.toString() in errors.toString(), errors.toString())
             // Compiler versions may point at the malformed statement or at a
@@ -2461,7 +2499,7 @@ class TranspilerTest {
             )
             assertTrue(
                 CPlusCli().run(
-                    listOf("run", source.toString(), "-o", executable.toString(), "-DFLAG=1", "--target=$hostTarget")
+                    listOf("-DFLAG=1", "--target=$hostTarget", "run", source.toString(), "-o", executable.toString())
                 ) == 0
             )
             assertTrue(Files.isExecutable(executable), "TCC did not produce an executable")

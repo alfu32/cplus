@@ -348,6 +348,11 @@ The focused server test and IntelliJ plugin test/package gate pass. A fresh Inte
 profile still requires host-level Unix-domain socket support; until that replay is
 run outside the restricted sandbox, LSP-8.5.b/c and LSP-7.9.d remain open.
 
+The IntelliJ command settings migration is whitespace-tolerant for legacy built-ins,
+including `cplus test`, `cplus parse`, and `cplus lsp`; current built-in defaults use
+the `cpc` launcher. Gutter run/test actions now create separate disposable closeable
+content tabs, while the permanent Output tab remains available for the welcome text.
+
 ## Dependency graph and execution order
 
 ```text
