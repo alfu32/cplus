@@ -299,7 +299,19 @@ class CPlusLspServer(
         val parserDiagnostics = (result.diagnostics + astDiagnosticProvider(ast)).distinctBy {
             listOf(it.code, it.span.startOffset, it.span.endOffset, it.message)
         }
-        val diagnostics = parserDiagnostics.map { diagnostic ->
+        val provisional = LspDocument(
+            uri = uri,
+            version = version,
+            snapshot = parsedSnapshot,
+            parsedText = parsedSnapshot.text,
+            mappedSource = materialized?.mapping,
+            ast = ast,
+            diagnostics = parserDiagnostics
+        )
+        val semanticDiagnostics = ambiguousCallableDiagnostics(provisional)
+        val diagnostics = (parserDiagnostics + semanticDiagnostics).distinctBy {
+            listOf(it.code, it.span.startOffset, it.span.endOffset, it.message)
+        }.map { diagnostic ->
             if (materialized == null) diagnostic else diagnostic.copy(
                 span = materialized.mapping.toOriginalSpan(diagnostic.span)
             )
@@ -313,6 +325,36 @@ class CPlusLspServer(
             ast = ast,
             diagnostics = diagnostics
         )
+    }
+
+    /**
+     * Report only ambiguity that is proven by the bounded callable scorer.
+     * Unresolved calls and calls whose candidates have a unique score remain
+     * compiler/delegation territory; the LSP must not invent errors for them.
+     */
+    private fun ambiguousCallableDiagnostics(document: LspDocument): List<ParserDiagnostic> {
+        val symbols = document.symbols
+            .filter { it.kind in setOf(6, 12) && it.ownerName == null }
+        return document.ast.root.descendantsAndSelf()
+            .filter { it.kind == CPlusAstKind.CALL_EXPRESSION }
+            .mapNotNull { call ->
+                if (call.span.endOffset <= call.span.startOffset ||
+                    call.span.endOffset > document.parsedText.length
+                ) return@mapNotNull null
+                val expression = document.parsedText.substring(call.span.startOffset, call.span.endOffset)
+                val (callee, arguments) = callParts(expression) ?: return@mapNotNull null
+                if (!callee.matches(IDENTIFIER)) return@mapNotNull null
+                val candidates = symbols.filter { it.name == callee }
+                if (!isAmbiguousCallable(document, candidates, arguments)) return@mapNotNull null
+                ParserDiagnostic(
+                    code = "CPLUS_AMBIGUOUS_CALL",
+                    message = "ambiguous call to '$callee'; overload candidates have equal bounded match scores",
+                    severity = ParserDiagnosticSeverity.ERROR,
+                    span = call.span
+                )
+            }
+            .toList()
+            .distinctBy { listOf(it.span.startOffset, it.span.endOffset, it.message) }
     }
 
     private fun refreshImports(uri: String) {
@@ -1512,6 +1554,9 @@ private fun CPlusAstNode.identifierOccurrences(
     val nextAncestors = ancestors + syntaxKind
     children.forEach { child -> yieldAll(child.identifierOccurrences(nextAncestors)) }
 }
+
+private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =
+    sequenceOf(this) + children.asSequence().flatMap { it.descendantsAndSelf() }
 
 private fun Char.isIdentifierPart(): Boolean = isLetterOrDigit() || this == '_'
 

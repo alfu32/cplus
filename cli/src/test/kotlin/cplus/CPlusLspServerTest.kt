@@ -85,6 +85,35 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun publishesAnErrorForProvenAmbiguousCallableCalls() {
+        val uri = "file:///ambiguous-call.cp"
+        val source = """
+            int choose(int value);
+            int choose(int value);
+            int main(void) { return choose(1); }
+        """.trimIndent() + "\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(
+            ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)),
+            output
+        ).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"code\":\"CPLUS_AMBIGUOUS_CALL\""), response)
+        assertTrue(response.contains("\"severity\":1"), response)
+        assertTrue(response.contains("ambiguous call to 'choose'"), response)
+        assertTrue(response.contains("\"id\":2,\"result\":null"), response)
+    }
+
+    @Test
     fun servesSymbolsCompletionHoverDefinitionDiagnosticsAndShutdownOverStdio() {
         val uri = "file:///fixture.cp"
         val validSource = "typedef struct counter_t { int value; } counter_t;\n" +
