@@ -97,7 +97,8 @@ class CPlusLspServer(
                         "\"completionProvider\":{\"triggerCharacters\":[\".\",\"->\"]}," +
                         "\"hoverProvider\":true," +
                         "\"definitionProvider\":true," +
-                        "\"referencesProvider\":true}}")
+                        "\"referencesProvider\":true," +
+                        "\"documentHighlightProvider\":true}}")
                 }
                 "initialized" -> Unit
                 "$/cancelRequest" -> request.cancelledRequestId()?.let { cancelRequest(it) }
@@ -146,6 +147,9 @@ class CPlusLspServer(
                 }
                 "textDocument/references" -> dispatchReadRequest(id, request) { state ->
                     respondForDocument(id, request, state) { references(request) }
+                }
+                "textDocument/documentHighlight" -> dispatchReadRequest(id, request) { state ->
+                    respondForDocument(id, request, state) { documentHighlights(request) }
                 }
                 else -> if (id != null) respondError(id, -32601, "method not supported: $method")
             }
@@ -258,7 +262,8 @@ class CPlusLspServer(
 
     private fun hasInvalidParameters(method: String, request: Json.Object): Boolean = when (method) {
         "textDocument/documentSymbol" -> request.uri() == null
-        "textDocument/completion", "textDocument/hover", "textDocument/definition", "textDocument/references" ->
+        "textDocument/completion", "textDocument/hover", "textDocument/definition",
+        "textDocument/references", "textDocument/documentHighlight" ->
             request.uri() == null || request.position() == null
         else -> false
     }
@@ -553,6 +558,36 @@ class CPlusLspServer(
             ?.values?.get("context") as? Json.Object)
             ?.values?.get("includeDeclaration") as? Json.BooleanValue
         val visible = visibleSymbols(document).toList()
+        return referenceLocations(document, selected, target, visible)
+            .filter { reference ->
+                includeDeclaration?.value != false || selected == null ||
+                    (reference.uri to reference.span.startOffset) !=
+                        (selected.uri to selected.selection.startOffset)
+            }
+            .sortedWith(compareBy<LspReference> { it.uri }.thenBy { it.span.startOffset })
+            .joinToString(",", "[", "]") { reference ->
+                "{\"uri\":${Json.string(reference.uri)},\"range\":${reference.span.toRangeJson()}}"
+            }
+    }
+
+    /** Return read/write occurrences for the symbol under the requested position. */
+    private fun documentHighlights(request: Json.Object): String {
+        val document = request.uri()?.let(readDocuments()::get) ?: return "[]"
+        val selected = symbolAt(request) ?: return "[]"
+        val visible = visibleSymbols(document).toList()
+        return referenceLocations(document, selected, selected.name, visible)
+            .sortedWith(compareBy<LspReference> { it.uri }.thenBy { it.span.startOffset })
+            .joinToString(",", "[", "]") { reference ->
+                "{\"range\":${reference.span.toRangeJson()},\"kind\":${referenceHighlightKind(reference, selected)}}"
+            }
+    }
+
+    private fun referenceLocations(
+        document: LspDocument,
+        selected: LspSymbol?,
+        target: String,
+        visible: List<LspSymbol>
+    ): Sequence<LspReference> {
         return reachableDocuments(document.uri).asSequence()
             .mapNotNull(readDocuments()::get)
             .flatMap { candidate ->
@@ -580,15 +615,25 @@ class CPlusLspServer(
             .filter { reference ->
                 selected == null || referenceMatches(selected, target, visible, reference)
             }
-            .filter { reference ->
-                includeDeclaration?.value != false || selected == null ||
-                    (reference.uri to reference.span.startOffset) !=
-                        (selected.uri to selected.selection.startOffset)
-            }
-            .sortedWith(compareBy<LspReference> { it.uri }.thenBy { it.span.startOffset })
-            .joinToString(",", "[", "]") { reference ->
-                "{\"uri\":${Json.string(reference.uri)},\"range\":${reference.span.toRangeJson()}}"
-            }
+    }
+
+    private fun referenceHighlightKind(reference: LspReference, selected: LspSymbol): Int {
+        if (reference.uri == selected.uri &&
+            reference.span.startOffset == selected.selection.startOffset
+        ) return 3 // LSP DocumentHighlightKind.Write: declaration
+
+        val text = reference.document.snapshot.text
+        val start = reference.span.startOffset.coerceIn(0, text.length)
+        val end = reference.span.endOffset.coerceIn(start, text.length)
+        val before = text.substring(0, start).takeLast(3)
+        val after = text.substring(end).dropWhile { it.isWhitespace() }
+        val compoundAssignment = before.trimEnd().endsWithAny(
+            "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="
+        )
+        val increment = before.trimEnd().endsWith("++") || before.trimEnd().endsWith("--") ||
+            after.trimStart().startsWith("++") || after.trimStart().startsWith("--")
+        val assignment = after.startsWith("=") && !after.startsWith("==")
+        return if (compoundAssignment && !before.trimEnd().endsWith("==") || increment || assignment) 3 else 2
     }
 
     private fun referenceMatches(
@@ -1357,6 +1402,8 @@ private fun CPlusAstNode.identifierOccurrences(
 }
 
 private fun Char.isIdentifierPart(): Boolean = isLetterOrDigit() || this == '_'
+
+private fun String.endsWithAny(vararg suffixes: String): Boolean = suffixes.any(::endsWith)
 
 private val IDENTIFIER = Regex("[A-Za-z_][A-Za-z0-9_]*")
 private val IMPORT_LITERAL = Regex("\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"")

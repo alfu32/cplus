@@ -496,6 +496,36 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun classifiesDocumentHighlightsAsReadsAndWrites() {
+        val uri = "file:///highlight-effects.cp"
+        val source = "int counter = 0;\n" +
+            "int bump(int value) { return value + 1; }\n" +
+            "int main(void) {\n" +
+            "    counter = bump(counter);\n" +
+            "    counter++;\n" +
+            "    return counter;\n" +
+            "}\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/documentHighlight\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":0,\"character\":5}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"documentHighlightProvider\":true"), response)
+        assertTrue(response.contains("\"id\":2,\"result\":["), response)
+        assertTrue(response.contains("\"kind\":3"), response)
+        assertTrue(response.contains("\"kind\":2"), response)
+    }
+
+    @Test
     fun resolvesReferencesToTheReceiverMethodOwner() {
         val uri = "file:///method-references.cp"
         val source = "typedef struct left_t { pub int get(borrowed *self) { return 1; } } left_t;\n" +
