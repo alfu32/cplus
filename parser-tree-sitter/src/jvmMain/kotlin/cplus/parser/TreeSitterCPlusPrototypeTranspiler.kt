@@ -5,6 +5,7 @@ import cplus.CPlusAstLoweringPipeline
 import cplus.CPlusAstLoweringStep
 import cplus.CPlusAstCEmitter
 import cplus.synthesizedDeclarationNodes
+import cplus.synthesizedMemberNodes
 import cplus.CPlusComptimeIndexer
 import cplus.CPlusImportPaths
 import cplus.CPlusFrontendPassIds
@@ -51,6 +52,8 @@ data class TreeSitterPrototypeResult(
     val synthesizedDeclarations: List<cplus.CPlusSynthesizedDeclaration> = emptyList(),
     /** Normalized declaration nodes from the successful pre-hygiene lowering revision. */
     val synthesizedNodes: List<cplus.CPlusAstNode> = emptyList(),
+    /** Normalized aggregate-member nodes owned by [synthesizedNodes]. */
+    val synthesizedMemberNodes: List<cplus.CPlusAstNode> = emptyList(),
     /** Mapped source revision whose offsets are used by [synthesizedNodes]. */
     val synthesizedSource: MappedText? = null
 ) {
@@ -826,6 +829,7 @@ class TreeSitterCPlusPrototypeTranspiler(
             ast.synthesizedDeclarationNodes(comptimeSynthesizedDeclarations, mapped) +
                 runtimeLowering.synthesizedNodes
             ).distinctBy { it.span.startOffset to it.span.endOffset }
+        val synthesizedMemberNodes = ast.synthesizedMemberNodes(synthesizedNodes)
         // Validate the emitter's C-plus-shaped intermediate with the C-plus
         // grammar; the hygienic macro names are applied only to final C output.
         val emittedParse = backend.parse(snapshotFor(generatedC.text))
@@ -851,6 +855,7 @@ class TreeSitterCPlusPrototypeTranspiler(
                     .toSet(),
                 synthesizedDeclarations = synthesizedDeclarations,
                 synthesizedNodes = synthesizedNodes,
+                synthesizedMemberNodes = synthesizedMemberNodes,
                 synthesizedSource = runtimeLowering.source
             )
         return TreeSitterPrototypeResult(
@@ -872,6 +877,7 @@ class TreeSitterCPlusPrototypeTranspiler(
                 .toSet(),
             synthesizedDeclarations,
             synthesizedNodes,
+            synthesizedMemberNodes,
             runtimeLowering.source
         )
     }

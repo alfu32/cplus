@@ -233,6 +233,8 @@ data class TranscodedSource(
     val synthesizedDeclarations: List<CPlusSynthesizedDeclaration> = emptyList(),
     /** Normalized AST declaration nodes from the successful pre-hygiene lowering revision. */
     val synthesizedNodes: List<CPlusAstNode> = emptyList(),
+    /** Normalized aggregate-member nodes owned by [synthesizedNodes]. */
+    val synthesizedMemberNodes: List<CPlusAstNode> = emptyList(),
     /** The mapped source revision whose offsets are used by [synthesizedNodes]. */
     val synthesizedSource: MappedText? = null
 )

@@ -165,8 +165,22 @@ fun CPlusAst.synthesizedDeclarationNodes(
                         )
                 }
         }
-    }.distinctBy { it.span.startOffset to it.span.endOffset }
+}.distinctBy { it.span.startOffset to it.span.endOffset }
 }
+
+/**
+ * Return normalized aggregate-member nodes owned by synthesized struct/union declarations.
+ * These handles use the same successful pre-hygiene AST revision as declaration handles.
+ */
+fun CPlusAst.synthesizedMemberNodes(synthesizedDeclarations: List<CPlusAstNode>): List<CPlusAstNode> =
+    synthesizedDeclarations
+        .filter { it.kind in setOf(CPlusAstKind.STRUCT_DECLARATION, CPlusAstKind.UNION_DECLARATION) }
+        .flatMap { aggregate ->
+            aggregate.descendantsAndSelf()
+                .filter { it.kind in setOf(CPlusAstKind.FIELD_DECLARATION, CPlusAstKind.METHOD_DECLARATION) }
+                .toList()
+        }
+        .distinctBy { it.span.startOffset to it.span.endOffset }
 
 /**
  * Generated identifiers may combine copied template text with generated text.  Looking only at

@@ -9470,6 +9470,14 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
             result.synthesizedNodes.map { it.kind },
             result.synthesizedNodes.map { it.kind to it.syntaxKind to it.span }.toString()
         )
+        assertEquals(listOf(CPlusAstKind.FIELD_DECLARATION), result.synthesizedMemberNodes.map { it.kind })
+        val memberName = result.synthesizedMemberNodes.single().descendantsAndSelf()
+            .first { it.kind == CPlusAstKind.IDENTIFIER }
+        val synthesizedSource = result.synthesizedSource ?: error("synthesized source is required for member handles")
+        val synthesizedStruct = result.synthesizedNodes.first { it.kind == CPlusAstKind.STRUCT_DECLARATION }
+        assertTrue(memberName.span.startOffset >= synthesizedStruct.span.startOffset)
+        assertTrue(memberName.span.endOffset <= synthesizedStruct.span.endOffset)
+        assertTrue(synthesizedSource.text.substring(synthesizedStruct.span.startOffset, synthesizedStruct.span.endOffset).contains("value"))
         val mappedText = result.cSource ?: error("successful comptime type materialization must retain mapped source")
         val structureOffset = mappedText.text.indexOf("struct box__int_box_t")
         assertEquals(text.indexOf("struct box"), mappedText.originAt(structureOffset)?.offset)
