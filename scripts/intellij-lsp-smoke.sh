@@ -46,11 +46,9 @@ trap cleanup EXIT
 
 mkdir -p "$smoke_dir/config/plugins"
 unzip -q -o "$plugin_zip" -d "$smoke_dir/config/plugins"
-# The installed launcher is IntelliJ Ultimate, but its default disabled-plugin
-# list can disable the Ultimate module in a fresh isolated profile.  The C-plus
-# descriptor intentionally requires that module because the real LSP client is
-# an Ultimate platform service.  Preserve the smoke profile's lightweight UI
-# choice while explicitly keeping Ultimate enabled.
+# Keep the smoke profile lightweight. C-plus depends on the LSP platform module,
+# not the optional Ultimate module, so the same plugin can load when that module
+# is unavailable or disabled.
 printf '%s\n' 'com.intellij.classic.ui' > "$smoke_dir/config/disabled_plugins.txt"
 # Mark the isolated profile as having its own bundled-plugin inventory.  This
 # prevents the installed user's migration inventory from re-importing its

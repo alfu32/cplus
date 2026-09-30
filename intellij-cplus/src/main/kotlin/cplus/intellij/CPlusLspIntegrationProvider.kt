@@ -51,6 +51,8 @@ private class CPlusLspServerDescriptor(project: Project) : ProjectWideLspClientD
         val arguments = CPlusLspCommand.arguments(executable)
         logger.info("C-plus LSP command: ${arguments.joinToString(" ")}")
         val commandLine = GeneralCommandLine(arguments)
+        CPlusCommand.parseEnvironment(CPlusSettings.getInstance().current().environment)
+            .forEach { (name, value) -> commandLine.withEnvironment(name, value) }
         CPlusLspCommand.ideJavaExecutable()?.let { commandLine.withEnvironment("CPLUS_JAVA", it) }
         return commandLine
     }

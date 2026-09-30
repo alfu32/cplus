@@ -253,7 +253,9 @@ class CPlusParserExternalAnnotator : ExternalAnnotator<CPlusParserInput, CPlusPa
             Files.writeString(path, collectedInfo.text)
             val command = CPlusCommand.resolve(collectedInfo.command, collectedInfo.projectBasePath) +
                 listOf("parse", path.toString(), "-o", output.toString())
-            val process = CPlusCommand.configureJava(ProcessBuilder(command)).start()
+            val process = CPlusCommand.configureJava(
+                CPlusCommand.configureEnvironment(ProcessBuilder(command), CPlusSettings.getInstance().current().environment)
+            ).start()
             if (!process.waitFor(15, TimeUnit.SECONDS)) {
                 process.destroyForcibly()
                 return null

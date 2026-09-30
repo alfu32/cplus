@@ -68,6 +68,18 @@ class CPlusLexerTest {
         assertToken(tokens, "static", CPlusTokenTypes.KEYWORD)
     }
 
+    @Test
+    fun `restarts lexing from a nonzero incremental edit offset`() {
+        val source = "int first; comptime type second;"
+        val restart = source.indexOf("comptime")
+        val lexer = CPlusLexer()
+        lexer.start(source, restart, source.length, 0)
+
+        assertEquals(restart, lexer.tokenStart)
+        assertEquals("comptime", source.substring(lexer.tokenStart, lexer.tokenEnd))
+        assertEquals(CPlusTokenTypes.COMPTIME_KEYWORD, lexer.tokenType)
+    }
+
     private fun assertToken(tokens: List<Pair<String, com.intellij.psi.tree.IElementType>>, text: String, expected: com.intellij.psi.tree.IElementType) {
         assertTrue(tokens.any { it.first == text && it.second == expected }, "token '$text' should use $expected")
     }

@@ -55,7 +55,12 @@ class CPlusShowImportGraphAction : AnAction("Show Import Graph", "Resolve and na
     }
 
     private fun execute(source: VirtualFile, command: List<String>): CPlusImportGraph {
-        val process = CPlusCommand.configureJava(ProcessBuilder(command + source.path))
+        val process = CPlusCommand.configureJava(
+            CPlusCommand.configureEnvironment(
+                ProcessBuilder(command + source.path),
+                CPlusSettings.getInstance().current().environment
+            )
+        )
             .directory(source.parent?.path?.let(::File))
             .redirectErrorStream(true)
             .start()

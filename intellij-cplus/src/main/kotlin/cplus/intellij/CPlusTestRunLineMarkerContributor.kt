@@ -41,8 +41,12 @@ class CPlusTestRunLineMarkerContributor : RunLineMarkerContributor() {
                 object : Task.Backgroundable(project, "C-plus: $title", true) {
                     override fun run(indicator: ProgressIndicator) {
                         val process = try {
-                            val builder = CPlusCommand.configureJava(ProcessBuilder(command)
-                                .redirectErrorStream(true))
+                            val builder = CPlusCommand.configureJava(
+                                CPlusCommand.configureEnvironment(
+                                    ProcessBuilder(command).redirectErrorStream(true),
+                                    settings.environment
+                                )
+                            )
                             virtualFile.parent?.path?.let { builder.directory(java.io.File(it)) }
                             builder.start()
                         } catch (error: Exception) {

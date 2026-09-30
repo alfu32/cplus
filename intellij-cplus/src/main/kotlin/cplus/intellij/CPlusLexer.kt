@@ -14,6 +14,10 @@ class CPlusLexer : LexerBase() {
         this.buffer = buffer
         bufferEnd = endOffset
         position = startOffset
+        // IntelliJ restarts lexing at arbitrary document offsets after an
+        // incremental edit. advance() begins from tokenEnd, so seed it with
+        // the requested restart offset instead of the previous/default zero.
+        tokenEnd = startOffset
         advance()
     }
 

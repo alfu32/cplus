@@ -1,6 +1,8 @@
 package cplus.intellij
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 
 class CPlusSettingsTest {
@@ -101,5 +103,33 @@ class CPlusSettingsTest {
 
         assertEquals("cpc test", CPlusTestRunLineMarkerContributor.commandText(settings, CPlusTestFixture("fixture", 0, 1)))
         assertEquals("cpc run", CPlusTestRunLineMarkerContributor.commandText(settings, null))
+    }
+
+    @Test
+    fun persistsEnvironmentOverridesAlongsideCommands() {
+        val settings = CPlusSettings()
+        settings.update("cc", "run", "test", "parse", "graph", "lsp", "CC=gcc\nCPLUS_TRACE=1")
+
+        assertEquals("CC=gcc\nCPLUS_TRACE=1", settings.current().environment)
+        assertEquals(settings.current(), settings.getState())
+    }
+
+    @Test
+    fun parsesEnvironmentOverridesAndRejectsMalformedEntries() {
+        assertEquals(
+            mapOf("CC" to "gcc", "EMPTY" to "", "CPLUS_TRACE" to "1=2"),
+            CPlusCommand.parseEnvironment("# comment\nCC=gcc\nEMPTY=\nCPLUS_TRACE=1=2")
+        )
+        assertThrows(IllegalArgumentException::class.java) { CPlusCommand.parseEnvironment("not-an-assignment") }
+        assertThrows(IllegalArgumentException::class.java) { CPlusCommand.parseEnvironment("1BAD=value") }
+    }
+
+    @Test
+    fun commandProbeReportsExitCodeAndOutput() {
+        val result = CPlusCommand.probe("sh -c 'printf probe; exit 7'", "PROBE_ENV=ok", timeoutSeconds = 2)
+
+        assertEquals(7, result.exitCode)
+        assertTrue(result.output.contains("probe"))
+        assertEquals("ok", result.environment["PROBE_ENV"])
     }
 }

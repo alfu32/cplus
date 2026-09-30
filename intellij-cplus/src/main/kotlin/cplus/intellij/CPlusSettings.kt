@@ -9,9 +9,13 @@ import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
 import javax.swing.JComponent
+import javax.swing.JButton
 import javax.swing.JLabel
+import javax.swing.JScrollPane
 import javax.swing.JPanel
+import javax.swing.JTextArea
 import javax.swing.JTextField
+import javax.swing.SwingUtilities
 
 @State(name = "CPlusSettings", storages = [Storage("cplus.xml")])
 class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
@@ -21,7 +25,8 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
         var testProgram: String = "cpc test",
         var parserCommand: String = "cpc parse",
         var importGraphCommand: String = "cpc graph",
-        var languageServerCommand: String = "cpc lsp"
+        var languageServerCommand: String = "cpc lsp",
+        var environment: String = ""
     )
 
     private var state = State()
@@ -37,8 +42,8 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
         if (migrated != state) state = migrated
         return state
     }
-    fun update(compiler: String, runner: String, program: String, parser: String, importGraph: String, languageServer: String) {
-        state = State(compiler, runner, program, parser, importGraph, languageServer).migrateLegacyDefaults()
+    fun update(compiler: String, runner: String, program: String, parser: String, importGraph: String, languageServer: String, environment: String = state.environment) {
+        state = State(compiler, runner, program, parser, importGraph, languageServer, environment).migrateLegacyDefaults()
     }
 
     companion object {
@@ -68,16 +73,29 @@ class CPlusSettingsConfigurable : Configurable {
     private var parser = JTextField()
     private var importGraph = JTextField()
     private var languageServer = JTextField()
+    private var environment = JTextArea()
+    private var diagnostics = JTextArea()
 
     override fun getDisplayName(): String = "C-plus"
 
     override fun createComponent(): JComponent {
-        compiler = JTextField(CPlusSettings.getInstance().current().compilerCommand)
-        runner = JTextField(CPlusSettings.getInstance().current().runnerCommand)
-        testProgram = JTextField(CPlusSettings.getInstance().current().testProgram)
-        parser = JTextField(CPlusSettings.getInstance().current().parserCommand)
-        importGraph = JTextField(CPlusSettings.getInstance().current().importGraphCommand)
-        languageServer = JTextField(CPlusSettings.getInstance().current().languageServerCommand)
+        val state = CPlusSettings.getInstance().current()
+        compiler = JTextField(state.compilerCommand)
+        runner = JTextField(state.runnerCommand)
+        testProgram = JTextField(state.testProgram)
+        parser = JTextField(state.parserCommand)
+        importGraph = JTextField(state.importGraphCommand)
+        languageServer = JTextField(state.languageServerCommand)
+        environment = JTextArea(state.environment, 4, 60).apply {
+            lineWrap = false
+            toolTipText = "One NAME=VALUE entry per line; values override the environment used by C-plus commands"
+        }
+        diagnostics = JTextArea(10, 60).apply {
+            isEditable = false
+            lineWrap = false
+            wrapStyleWord = false
+            toolTipText = "Results from the command test buttons"
+        }
         return JPanel(GridBagLayout()).apply {
             val fields = listOf(
                 "Compiler command" to compiler,
@@ -93,14 +111,36 @@ class CPlusSettingsConfigurable : Configurable {
                     insets = Insets(if (row == 0) 0 else 12, 0, 4, 0)
                 }
                 add(JLabel(label), labelConstraints)
+                val test = JButton("Test").apply {
+                    toolTipText = "Run this command and show its result below"
+                    addActionListener { testCommand(label, field.text) }
+                }
+                add(test, GridBagConstraints().apply {
+                    gridx = 1; gridy = row * 2; anchor = GridBagConstraints.EAST
+                    insets = Insets(if (row == 0) 0 else 12, 8, 4, 0)
+                })
                 val fieldConstraints = GridBagConstraints().apply {
                     gridx = 0; gridy = row * 2 + 1; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL
+                    gridwidth = 2
                     insets = Insets(0, 0, 0, 0)
                 }
                 add(field, fieldConstraints)
             }
-            add(JPanel(), GridBagConstraints().apply {
-                gridx = 0; gridy = fields.size * 2; weighty = 1.0; fill = GridBagConstraints.VERTICAL
+            val environmentRow = fields.size * 2
+            add(JLabel("Environment (optional, one NAME=VALUE per line)"), GridBagConstraints().apply {
+                gridx = 0; gridy = environmentRow; gridwidth = 2; anchor = GridBagConstraints.WEST
+                insets = Insets(12, 0, 4, 0)
+            })
+            add(JScrollPane(environment), GridBagConstraints().apply {
+                gridx = 0; gridy = environmentRow + 1; gridwidth = 2; weightx = 1.0; fill = GridBagConstraints.BOTH
+            })
+            val diagnosticsRow = environmentRow + 2
+            add(JLabel("Command diagnostics"), GridBagConstraints().apply {
+                gridx = 0; gridy = diagnosticsRow; gridwidth = 2; anchor = GridBagConstraints.WEST
+                insets = Insets(12, 0, 4, 0)
+            })
+            add(JScrollPane(diagnostics), GridBagConstraints().apply {
+                gridx = 0; gridy = diagnosticsRow + 1; gridwidth = 2; weightx = 1.0; weighty = 1.0; fill = GridBagConstraints.BOTH
             })
             panel = this
         }
@@ -110,13 +150,14 @@ class CPlusSettingsConfigurable : Configurable {
         val state = CPlusSettings.getInstance().current()
         return compiler.text != state.compilerCommand || runner.text != state.runnerCommand ||
             testProgram.text != state.testProgram || parser.text != state.parserCommand ||
-            importGraph.text != state.importGraphCommand || languageServer.text != state.languageServerCommand
+            importGraph.text != state.importGraphCommand || languageServer.text != state.languageServerCommand ||
+            environment.text != state.environment
     }
 
     override fun apply() {
         CPlusSettings.getInstance().update(
             compiler.text.trim(), runner.text.trim(), testProgram.text.trim(), parser.text.trim(), importGraph.text.trim(),
-            languageServer.text.trim()
+            languageServer.text.trim(), environment.text
         )
     }
 
@@ -128,7 +169,44 @@ class CPlusSettingsConfigurable : Configurable {
         parser.text = state.parserCommand
         importGraph.text = state.importGraphCommand
         languageServer.text = state.languageServerCommand
+        environment.text = state.environment
     }
 
     override fun disposeUIResources() { panel = null }
+
+    private fun testCommand(label: String, commandText: String) {
+        diagnostics.append("\n[$label] testing: ${commandText.ifBlank { "<empty>" }}\n")
+        diagnostics.caretPosition = diagnostics.document.length
+        if (commandText.isBlank()) {
+            diagnostics.append("ERROR: command is empty\n")
+            return
+        }
+        val envText = environment.text
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = CPlusCommand.probe(commandText, envText)
+            SwingUtilities.invokeLater {
+                diagnostics.append(result.format())
+                diagnostics.caretPosition = diagnostics.document.length
+            }
+        }
+    }
+}
+
+internal data class CPlusCommandProbeResult(
+    val command: List<String>?,
+    val workingDirectory: String,
+    val environment: Map<String, String>,
+    val output: String,
+    val exitCode: Int?,
+    val error: String?
+) {
+    fun format(): String = buildString {
+        if (command == null) append("resolved command: <not resolved>\n")
+        else append("resolved command: ${command.joinToString(" ")}\n")
+        append("working directory: $workingDirectory\n")
+        if (environment.isNotEmpty()) append("environment overrides: ${environment.keys.sorted().joinToString(", ")}\n")
+        if (error != null) append("ERROR: $error\n")
+        if (output.isNotBlank()) append("output:\n$output\n")
+        if (exitCode != null) append("exit code: $exitCode\n")
+    }
 }
