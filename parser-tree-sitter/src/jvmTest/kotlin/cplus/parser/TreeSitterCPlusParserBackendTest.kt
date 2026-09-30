@@ -6899,6 +6899,40 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
     }
 
     @Test
+    fun astCEmitterPreservesUnevaluatedAndGenericExpressionContexts() {
+        val text = """
+            #include <stddef.h>
+            typedef struct sample_t { int first; long second; } sample_t;
+            int main(void) {
+                sample_t value = (sample_t){ .first = 41, .second = 1 };
+                int selected = _Generic((value.first), int: 1, default: 0);
+                size_t size = sizeof(value) + _Alignof(sample_t) + offsetof(sample_t, second);
+                return selected == 1 && value.first + value.second == 42 && size > 0 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-c-emitter-expression-contexts.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val emission = CPlusAstCEmitter().emit(
+            CPlusAstAdapter().adapt(parsed),
+            MappedText.identity(source.sourceFile)
+        )
+
+        assertTrue(emission.diagnostics.isEmpty(), emission.diagnostics.toString())
+        val generated = emission.source ?: error("expression-context AST should emit C")
+        assertTrue("_Generic((value.first), int: 1, default: 0)" in generated.text, generated.text)
+        assertTrue("sizeof (value)" in generated.text, generated.text)
+        assertTrue("_Alignof (sample_t)" in generated.text, generated.text)
+        assertTrue("offsetof(sample_t, second)" in generated.text, generated.text)
+        assertTrue("sample_t value = (sample_t) {" in generated.text, generated.text)
+        assertTrue(".first = 41, .second = 1" in generated.text, generated.text)
+        val reparsed = backend.parse(sources.open(SourceId.named("ast-c-emitter-expression-contexts.c"), generated.text))
+        assertTrue(reparsed.diagnostics.isEmpty(), reparsed.diagnostics.toString())
+        compileAndRunC(generated.text)
+    }
+
+    @Test
     fun extractsMethodsAndCompilesTheResultingPlainCWithSystemCcWhenAvailable() {
         val text = """
             typedef struct counter_t {

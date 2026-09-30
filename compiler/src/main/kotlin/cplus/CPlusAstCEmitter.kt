@@ -284,7 +284,9 @@ class CPlusAstCEmitter {
         if (currentIsComment) return before !in setOf("(", "[", ".", "->")
         if (now == ":") return "conditional_expression" in current.ancestors
         if (now == "(" && before in setOf("if", "for", "while", "switch", "sizeof", "_Alignof", "return")) return true
-        if (now in setOf("[", ")", "]", ",", ";", ".", "->", ":")) return false
+        if (now == ",") return false
+        if (before == ",") return now !in setOf(")", "]", "}")
+        if (now in setOf("[", ")", "]", ";", ".", "->", ":")) return false
         if (now in setOf("++", "--") && canEndExpression(previous)) return false
         if (before in setOf("++", "--")) return false
         if (before in setOf("(", "[", ".", "->")) return false
