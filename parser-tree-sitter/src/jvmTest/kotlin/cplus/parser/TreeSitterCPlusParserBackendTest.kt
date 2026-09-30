@@ -6702,6 +6702,46 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
     }
 
     @Test
+    fun astCEmitterSynthesizesStaticMethodsWithoutInjectingAReceiver() {
+        val text = """
+            #define pub
+            #define stat
+            typedef struct factory_t {
+                static pub int answer(void) { return 42; }
+                static pub factory_t *create(int value) { (void) value; return 0; }
+            } factory_t;
+            int main(void) {
+                return factory__answer() == 42 && factory__create(1) == 0 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-c-emitter-static-method.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+        val ast = CPlusAstAdapter().adapt(parsed)
+        val mapped = MappedText.identity(source.sourceFile)
+
+        val emission = CPlusAstCEmitter().emit(ast, mapped) { lowered ->
+            CPlusAstAdapter().adapt(
+                backend.parse(sources.open(SourceId.named("ast-c-emitter-static-method-lowered.c"), lowered.text))
+            )
+        }
+
+        assertTrue(emission.diagnostics.isEmpty(), emission.diagnostics.toString())
+        assertEquals(
+            listOf("factory__answer", "factory__create"),
+            emission.synthesizedDeclarations.map { it.generatedName }
+        )
+        assertTrue(emission.synthesizedDeclarations.all { it.isStatic })
+        val generated = emission.source ?: error("static structured methods should emit C")
+        assertTrue("int factory__answer(void)" in generated.text, generated.text)
+        assertTrue("factory_t *factory__create(int value)" in generated.text, generated.text)
+        assertFalse("factory_t *self" in generated.text, generated.text)
+        val reparsed = backend.parse(sources.open(SourceId.named("ast-c-emitter-static-method-output.c"), generated.text))
+        assertTrue(reparsed.diagnostics.isEmpty(), reparsed.diagnostics.toString())
+        compileAndRunC("#define pub\n#define stat\n${generated.text}")
+    }
+
+    @Test
     fun astCEmitterRejectsRecoveredSyntaxInsteadOfEmittingPartialC() {
         val source = sources.open(SourceId.named("incomplete-ast-emitter.cp"), "int main( {")
         val parsed = backend.parse(source)
