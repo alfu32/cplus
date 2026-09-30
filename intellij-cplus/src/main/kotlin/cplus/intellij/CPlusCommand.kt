@@ -109,9 +109,20 @@ internal object CPlusCommand {
             require(separator > 0) { "environment line ${index + 1} must use NAME=VALUE" }
             val name = line.substring(0, separator).trim()
             require(name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) { "invalid environment name '$name' on line ${index + 1}" }
-            result[name] = expandEnvironmentValue(line.substring(separator + 1), result, base)
+            result[name] = expandEnvironmentValue(unquoteEnvironmentValue(line.substring(separator + 1).trim()), result, base)
         }
         return result
+    }
+
+    private fun unquoteEnvironmentValue(value: String): String {
+        if (value.length < 2) return value
+        val first = value.first()
+        val last = value.last()
+        return if ((first == '\'' && last == '\'') || (first == '"' && last == '"')) {
+            value.substring(1, value.length - 1)
+        } else {
+            value
+        }
     }
 
     private fun expandEnvironmentValue(value: String, overrides: Map<String, String>, base: Map<String, String>): String {

@@ -47,16 +47,15 @@ trap cleanup EXIT
 mkdir -p "$smoke_dir/config/plugins"
 unzip -q -o "$plugin_zip" -d "$smoke_dir/config/plugins"
 # Keep the smoke profile lightweight. C-plus depends on the LSP platform module.
-# The installed IDEA distribution records the Ultimate module in its bundled
-# inventory; retaining that inventory entry is necessary for the bundled LSP
-# implementation to activate, even though C-plus itself has no Ultimate
-# dependency.
+# Ignore inherited disabled-plugin state so an Ultimate installation does not
+# silently disable its own LSP platform in the isolated profile.
 printf '%s\n' 'com.intellij.classic.ui' > "$smoke_dir/config/disabled_plugins.txt"
-printf '%s\n' 'com.intellij.modules.ultimate|null' > "$smoke_dir/config/bundled_plugins.txt"
+: > "$smoke_dir/config/bundled_plugins.txt"
 cat > "$smoke_dir/idea.properties" <<EOF
 idea.config.path=$smoke_dir/config
 idea.system.path=$smoke_dir/system
 idea.log.debug.categories=#com.intellij.platform.lsp
+idea.ignore.disabled.plugins=true
 EOF
 if [[ -z "$source_file" ]]; then
     smoke_project="$smoke_dir/project"

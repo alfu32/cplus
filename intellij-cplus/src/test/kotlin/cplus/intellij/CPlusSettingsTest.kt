@@ -148,7 +148,7 @@ class CPlusSettingsTest {
     @Test
     fun expandsInheritedEnvironmentReferencesForPathConfiguration() {
         val parsed = CPlusCommand.parseEnvironment(
-            "PATH=\$PATH:/opt/c-plus/bin\nCPLUS_HOME=\$PATH/home",
+            "PATH=\"\$PATH:/opt/c-plus/bin\"\nCPLUS_HOME=\$PATH/home",
             mapOf("PATH" to "/usr/bin")
         )
 
