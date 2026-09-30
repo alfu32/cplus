@@ -6846,6 +6846,45 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
     }
 
     @Test
+    fun astCEmitterPreservesCommentsAttributesAndNestedDeclaratorBoundaries() {
+        val text = """
+            #include <stddef.h>
+            typedef int (*callback_t)(int /* callback argument */);
+            typedef struct __attribute__((packed)) packed_value_t {
+                int /* field comment */ value;
+            } packed_value_t;
+            static int add_one(int value) { return value + 1; }
+            int main(void) {
+                packed_value_t value = { .value = 41 };
+                callback_t callback = add_one;
+                /* call-site comment */
+                return callback(value.value) == 42 ? 0 : 1;
+            }
+        """.trimIndent()
+        val source = sources.open(SourceId.named("ast-c-emitter-trivia-declarators.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.isEmpty(), parsed.diagnostics.toString())
+
+        val emission = CPlusAstCEmitter().emit(
+            CPlusAstAdapter().adapt(parsed),
+            MappedText.identity(source.sourceFile)
+        )
+
+        assertTrue(emission.diagnostics.isEmpty(), emission.diagnostics.toString())
+        val generated = emission.source ?: error("comment/attribute emission is missing")
+        assertTrue("/* callback argument */" in generated.text, generated.text)
+        assertTrue("/* field comment */" in generated.text, generated.text)
+        assertTrue("/* call-site comment */" in generated.text, generated.text)
+        assertTrue("__attribute__((packed))" in generated.text, generated.text)
+        assertTrue("typedef int (*callback_t)(int" in generated.text, generated.text)
+        assertTrue("callback(value.value) == 42 ? 0 : 1" in generated.text, generated.text)
+
+        val reparsed = backend.parse(sources.open(SourceId.named("ast-c-emitter-trivia-declarators.c"), generated.text))
+        assertTrue(reparsed.diagnostics.isEmpty(), reparsed.diagnostics.toString())
+        compileAndRunC(generated.text)
+    }
+
+    @Test
     fun astCEmitterPreservesStructuredControlFlowAndLabels() {
         val text = """
             #include <stdio.h>
