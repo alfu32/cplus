@@ -974,6 +974,10 @@ class CPlusLspServer(
         ) {
             return expressionType(document, value.substring(1, value.length - 1))
         }
+        val cast = Regex("^\\(([^()]*)\\)(.+)$").matchEntire(value)
+        if (cast != null) {
+            typeShape(cast.groupValues[1])?.let { return it }
+        }
         if (value.startsWith("*")) {
             val pointed = expressionType(document, value.substring(1)) ?: return null
             if (pointed.pointerDepth == 0) return null
