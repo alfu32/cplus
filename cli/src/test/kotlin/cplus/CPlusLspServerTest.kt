@@ -441,6 +441,34 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesOverloadedMethodReturnReceiverByExplicitArgumentType() {
+        val uri = "file:///overload-method-return.cp"
+        val source = "typedef struct int_box_t { int value; } int_box_t;\n" +
+            "typedef struct text_box_t { int value; } text_box_t;\n" +
+            "typedef struct maker_t {\n" +
+            "    pub int_box_t make(borrowed *self, int value) { int_box_t box; return box; }\n" +
+            "    pub text_box_t make(borrowed *self, const char* value) { text_box_t box; return box; }\n" +
+            "} maker_t;\n" +
+            "int main(void) { maker_t maker; return maker.make(\"x\").value; }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val callPosition = source.lines()[6].lastIndexOf("make")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":6,\"character\":$callPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":4"), response)
+    }
+
+    @Test
     fun resolvesAnArrayArgumentAgainstAPointerOverload() {
         val uri = "file:///overload-arrays.cp"
         val source = "int choose(int* values) { return values[0]; }\n" +
