@@ -47,7 +47,11 @@ data class TreeSitterPrototypeResult(
     /** Runtime AST passes that changed mapped source; semantic-only passes are absent. */
     val runtimePassesChanged: Set<String> = emptySet(),
     /** Structured declarations synthesized by runtime AST passes. */
-    val synthesizedDeclarations: List<cplus.CPlusSynthesizedDeclaration> = emptyList()
+    val synthesizedDeclarations: List<cplus.CPlusSynthesizedDeclaration> = emptyList(),
+    /** Normalized declaration nodes from the successful pre-hygiene lowering revision. */
+    val synthesizedNodes: List<cplus.CPlusAstNode> = emptyList(),
+    /** Mapped source revision whose offsets are used by [synthesizedNodes]. */
+    val synthesizedSource: MappedText? = null
 ) {
     val successful: Boolean
         get() = cSource != null && parserDiagnostics.isEmpty() && loweringDiagnostics.isEmpty() && unsupportedNodes.isEmpty()
@@ -807,6 +811,11 @@ class TreeSitterCPlusPrototypeTranspiler(
         }
         val generatedC = cEmission.source ?: error("successful AST C emission must contain output")
         val hygienicGeneratedC = rewriteCPlusAnnotationMacros(generatedC)
+        // Annotation-macro hygiene intentionally happens after the runtime AST
+        // pipeline. Keep semantic nodes anchored to that successful, parsed
+        // intermediate revision; their source origins remain available through
+        // the corresponding mapped output and synthesized-declaration records.
+        val synthesizedNodes = runtimeLowering.synthesizedNodes
         // Validate the emitter's C-plus-shaped intermediate with the C-plus
         // grammar; the hygienic macro names are applied only to final C output.
         val emittedParse = backend.parse(snapshotFor(generatedC.text))
@@ -830,7 +839,9 @@ class TreeSitterCPlusPrototypeTranspiler(
                     .filter { it.sourceChanged }
                     .map { it.stepId }
                     .toSet(),
-                synthesizedDeclarations = runtimeLowering.synthesizedDeclarations
+                synthesizedDeclarations = runtimeLowering.synthesizedDeclarations,
+                synthesizedNodes = synthesizedNodes,
+                synthesizedSource = runtimeLowering.source
             )
         return TreeSitterPrototypeResult(
             hygienicGeneratedC,
@@ -849,7 +860,9 @@ class TreeSitterCPlusPrototypeTranspiler(
                 .filter { it.sourceChanged }
                 .map { it.stepId }
                 .toSet(),
-            runtimeLowering.synthesizedDeclarations
+            runtimeLowering.synthesizedDeclarations,
+            synthesizedNodes,
+            runtimeLowering.source
         )
     }
 

@@ -146,6 +146,8 @@ Each entry records the task ID, exact evidence, result, and next dependency. Imp
 | 2026-09-30 | LSP-5 / Phase 8 | The LSP now emits a mapped severity-1 `CPLUS_AMBIGUOUS_CALL` error when receiver-free callable candidates share the best bounded score; `publishesAnErrorForProvenAmbiguousCallableCalls` passes alongside the complete LSP class and aggregate 104/104 grammar gate | The bounded diagnostic slice is complete; receiver-call ambiguity, full C conversion legality, callback mutation, comptime parity, canonical emitter promotion, and interactive IntelliJ coverage remain open |
 | 2026-09-30 | LSP-5 / Phase 8 | Ambiguity diagnostics now also resolve `.`/`->` receiver owners and use the current unsaved document snapshot before imported symbols. `publishesAnErrorForProvenAmbiguousReceiverCalls` passes with the complete LSP class; the aggregate gate remains green | Receiver-call ambiguity is closed for the bounded resolvable slice; full C conversion legality, callback mutation, comptime parity, canonical emitter promotion, and interactive IntelliJ coverage remain open |
 
+| 2026-09-30 | CF-19 / Phase 7 | Synthesized method declarations now have normalized AST node handles anchored to an explicitly exposed mapped pre-hygiene source revision. The qualified-method regression validates four generated nodes, and focused plus aggregate offline Gradle gates pass | Semantic-node observability is complete for this bounded slice; canonical emission, final hygienic-node reparsing, and textual-lowerer retirement remain open |
+
 ## Update protocol
 
 After each implementation batch:

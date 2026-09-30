@@ -21,7 +21,14 @@ data class CPlusAstLoweringPipelineResult(
     val parserDiagnostics: List<ParserDiagnostic>,
     val trace: List<CPlusAstLoweringTrace>,
     /** Declarations synthesized by structured passes, retained across reparses. */
-    val synthesizedDeclarations: List<CPlusSynthesizedDeclaration> = emptyList()
+    val synthesizedDeclarations: List<CPlusSynthesizedDeclaration> = emptyList(),
+    /**
+     * Normalized declaration nodes corresponding to [synthesizedDeclarations]
+     * in the latest successfully reparsed AST. These nodes are semantic
+     * handles for downstream consumers; callers must use the mapped source
+     * when translating their generated spans back to the original source.
+     */
+    val synthesizedNodes: List<CPlusAstNode> = emptyList()
 ) {
     val successful: Boolean
         get() = loweringDiagnostics.isEmpty() && parserDiagnostics.isEmpty()
@@ -51,6 +58,11 @@ class CPlusAstLoweringPipeline {
         val trace = mutableListOf<CPlusAstLoweringTrace>()
         val synthesizedDeclarations = mutableListOf<CPlusSynthesizedDeclaration>()
 
+        fun synthesizedNodesIn(currentAst: CPlusAst): List<CPlusAstNode> {
+            val names = synthesizedDeclarations.map { it.generatedName }.toSet()
+            return currentAst.synthesizedDeclarationNodes(names)
+        }
+
         for (step in steps) {
             val inputLength = source.text.length
             val lowered = step.transform(ast, source)
@@ -67,7 +79,8 @@ class CPlusAstLoweringPipeline {
                     lowered.diagnostics,
                     emptyList(),
                     trace,
-                    synthesizedDeclarations
+                    synthesizedDeclarations,
+                    synthesizedNodesIn(ast)
                 )
             }
             synthesizedDeclarations += lowered.synthesizedDeclarations.map { declaration ->
@@ -86,7 +99,8 @@ class CPlusAstLoweringPipeline {
                             diagnostic.copy(span = source.toOriginalSpan(diagnostic.span))
                         },
                         trace,
-                        synthesizedDeclarations
+                        synthesizedDeclarations,
+                        synthesizedNodesIn(ast)
                     )
                 }
                 ast = CPlusAstAdapter().adapt(parsed)
@@ -101,7 +115,47 @@ class CPlusAstLoweringPipeline {
             emptyList(),
             emptyList(),
             trace,
-            synthesizedDeclarations
+            synthesizedDeclarations,
+            synthesizedNodesIn(ast)
+        )
+    }
+
+    internal companion object {
+        val SYNTHESIZED_DECLARATION_KINDS = setOf(
+            CPlusAstKind.STRUCT_DECLARATION,
+            CPlusAstKind.UNION_DECLARATION,
+            CPlusAstKind.ENUM_DECLARATION,
+            CPlusAstKind.TYPE_ALIAS,
+            CPlusAstKind.FUNCTION_DECLARATION,
+            CPlusAstKind.VARIABLE_DECLARATION
         )
     }
 }
+
+/**
+ * Return normalized declaration nodes whose declaration header names one of the generated
+ * symbols. The header boundary is important: a function body may call a generated function,
+ * but that does not make the enclosing function a synthesized declaration.
+ */
+fun CPlusAst.synthesizedDeclarationNodes(generatedNames: Set<String>): List<CPlusAstNode> {
+    if (generatedNames.isEmpty()) return emptyList()
+    val source = source.text
+    return root.descendantsAndSelf()
+        .filter { node ->
+            if (node.kind !in CPlusAstLoweringPipeline.SYNTHESIZED_DECLARATION_KINDS) return@filter false
+            val declarationBodyStart = node.descendantsAndSelf()
+                .firstOrNull { it.syntaxKind in setOf("compound_statement", "cplus_block") }
+                ?.span?.startOffset
+                ?: node.span.endOffset
+            node.descendantsAndSelf()
+                .filter { it.kind == CPlusAstKind.IDENTIFIER && it.span.startOffset < declarationBodyStart }
+                .any { identifier ->
+                    source.substring(identifier.span.startOffset, identifier.span.endOffset) in generatedNames
+                }
+        }
+        .distinctBy { it.span.startOffset to it.span.endOffset }
+        .toList()
+}
+
+private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =
+    sequenceOf(this) + children.asSequence().flatMap { it.descendantsAndSelf() }

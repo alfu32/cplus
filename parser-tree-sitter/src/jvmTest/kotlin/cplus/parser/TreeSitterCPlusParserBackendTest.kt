@@ -4521,13 +4521,19 @@ class TreeSitterCPlusParserBackendTest {
             structuredLowering.synthesizedDeclarations.map { it.isStatic }
         )
         assertTrue(structuredLowering.synthesizedDeclarations.all { it.ownerType == "widget_t" })
-
         val transpiled = TreeSitterCPlusPrototypeTranspiler(backend, sources).transpile(source)
         assertTrue(
             transpiled.successful,
             "parser=${transpiled.parserDiagnostics}; lowering=${transpiled.loweringDiagnostics}"
         )
         val generated = transpiled.cSource?.text ?: error("qualified method output is missing")
+        assertEquals(
+            transpiled.synthesizedDeclarations.size,
+            transpiled.synthesizedNodes.size,
+            message = transpiled.synthesizedNodes.map { node ->
+                node.kind to node.span
+            }.toString()
+        )
         assertEquals(
             listOf("widget__transform", "widget__inspect", "widget__inspect_gnu", "widget__identity"),
             transpiled.synthesizedDeclarations.map { it.generatedName }
@@ -4539,6 +4545,22 @@ class TreeSitterCPlusParserBackendTest {
         assertEquals(
             transpiled.synthesizedDeclarations.map { it.generatedName },
             transpiled.transcodedSource?.synthesizedDeclarations?.map { it.generatedName }
+        )
+        assertEquals(
+            transpiled.synthesizedDeclarations.map { it.generatedName }.toSet(),
+            transpiled.synthesizedNodes.mapNotNull { node ->
+                node.descendantsAndSelf().firstOrNull {
+                    it.kind == CPlusAstKind.IDENTIFIER &&
+                        transpiled.synthesizedSource!!.text.substring(it.span.startOffset, it.span.endOffset) in
+                        transpiled.synthesizedDeclarations.map { declaration -> declaration.generatedName }
+                }
+                    ?.let { transpiled.synthesizedSource!!.text.substring(it.span.startOffset, it.span.endOffset) }
+            }.toSet(),
+            transpiled.synthesizedNodes.map { node -> node.kind to node.syntaxKind to node.span }.toString()
+        )
+        assertEquals(
+            transpiled.synthesizedNodes.map { it.kind }.distinct(),
+            listOf(CPlusAstKind.FUNCTION_DECLARATION)
         )
         assertTrue("const widget_t *self" in generated, generated)
         assertTrue("volatile widget_t *restrict self" in generated, generated)

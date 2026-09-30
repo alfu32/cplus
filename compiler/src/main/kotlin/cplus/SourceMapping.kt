@@ -230,7 +230,11 @@ data class TranscodedSource(
     /** Transformation passes that changed the mapped source; semantic-only passes are absent. */
     val frontendPassesChanged: Set<String> = emptySet(),
     /** Structured declarations synthesized by AST lowering, when the selected frontend provides them. */
-    val synthesizedDeclarations: List<CPlusSynthesizedDeclaration> = emptyList()
+    val synthesizedDeclarations: List<CPlusSynthesizedDeclaration> = emptyList(),
+    /** Normalized AST declaration nodes from the successful pre-hygiene lowering revision. */
+    val synthesizedNodes: List<CPlusAstNode> = emptyList(),
+    /** The mapped source revision whose offsets are used by [synthesizedNodes]. */
+    val synthesizedSource: MappedText? = null
 )
 
 /** Emits C-plus text and inserts compiler-visible source locations at mapped line boundaries. */
