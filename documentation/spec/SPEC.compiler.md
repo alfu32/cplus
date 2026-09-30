@@ -61,7 +61,7 @@ The warning is advisory: it does not suppress source emission. An implicitly
 fatal failure, such as a crashed transcoder or unusable source pass, may still
 terminate generation.
 
-`test` runs with the legacy frontend by default for compatibility. Its `run`, `compile`, and `transcode` forms also accept `--frontend=legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate. This boundary is explicit and does not silently claim full test-front-end parity.
+`test` uses the AST-first `AUTO` frontend by default for compatibility-aware migration. Tree-sitter runs first; lowering or host-compiler rejection retries the retained legacy frontend. Its `run`, `compile`, and `transcode` forms accept `--frontend=legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). Explicit Tree-sitter is strict; explicit legacy is the rollback path. The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate.
 
 For migration tests, fixture extraction is an independent frontend concern. The
 internal `CPlusLegacyPassSelection.extractTests` and
@@ -145,14 +145,15 @@ line numbers, columns, and additional AST-generated mapping entries are not requ
 to be identical. This protects diagnostic reachability without pretending that two
 different emitters have the same layout.
 
-The compilation frontend defaults to `legacy`, preserving the established production
-transcoder. `--frontend=tree-sitter` selects the AST prototype for ordinary
-`transcode`, `compile`, `run`, and explicitly selected `test` commands; it performs comptime fixed-point
-materialization, semantic/runtime lowering, and mapped C emission through the
-Tree-sitter pipeline. A Tree-sitter parser, lowering, or unsupported-construct
-diagnostic fails the command before invoking the C compiler. The selector is a
-migration and rollback switch, not permission to remove the legacy path: retirement
-requires the finite overlap corpus and per-lowerer gates in
+The compilation frontend defaults to `AUTO`, which attempts Tree-sitter first and
+falls back to the retained legacy frontend when lowering or host compilation rejects
+the result. `--frontend=tree-sitter` selects the strict AST prototype for ordinary
+`transcode`, `compile`, `run`, and explicitly selected `test` commands; it performs
+comptime fixed-point materialization, semantic/runtime lowering, and mapped C
+emission through the Tree-sitter pipeline. `--frontend=legacy` and the documented
+environment/JVM-property switches provide rollback. The selector is a migration
+boundary, not permission to remove the legacy path: retirement requires the finite
+overlap corpus and per-lowerer gates in
 [`COMPILER-FRONTEND-MIGRATION-INVENTORY.md`](../plan/COMPILER-FRONTEND-MIGRATION-INVENTORY.md).
 
 Compiler selection is: a usable bundled TinyCC route for the requested target; an explicit executable from `TCC`; system `tcc` found on `PATH`; then the command in `CC` (including simple quoted paths and arguments such as `CC='ccache gcc'`). `CC` is a fallback, not an override for an installed TinyCC; set `TCC` to choose an explicit TinyCC. When no compiler is usable, `compile`, `run`, and `test` print OS-specific setup commands. The external compiler must have the host C runtime development headers and libraries; optional libraries such as Raylib are installed separately.
