@@ -6732,6 +6732,23 @@ int main ( void ) { int values[3]={40,1,1}; int *pointer = values; int value=val
             emission.synthesizedDeclarations.map { it.generatedName }
         )
         assertTrue(emission.synthesizedDeclarations.all { it.isStatic })
+        assertEquals(2, emission.synthesizedNodes.size)
+        assertTrue(emission.synthesizedNodes.all { it.kind == CPlusAstKind.FUNCTION_DECLARATION })
+        val synthesizedSource = emission.synthesizedSource ?: error("static synthesized source is missing")
+        val normalizedFile = emission.synthesizedNodes.first().span.file
+        assertTrue(
+            emission.synthesizedNodes.all { it.span.file == normalizedFile },
+            emission.synthesizedNodes.toString()
+        )
+        assertTrue(
+            emission.synthesizedDeclarations.all { it.sourceSpan.file == source.id.value },
+            emission.synthesizedDeclarations.toString()
+        )
+        emission.synthesizedNodes.forEach { node ->
+            assertTrue(node.span.startOffset < node.span.endOffset, node.toString())
+            assertTrue(node.span.endOffset <= synthesizedSource.text.length, node.toString())
+            assertEquals(source.id.value, synthesizedSource.originAt(node.span.startOffset)?.file?.name)
+        }
         val generated = emission.source ?: error("static structured methods should emit C")
         assertTrue("int factory__answer(void)" in generated.text, generated.text)
         assertTrue("factory_t *factory__create(int value)" in generated.text, generated.text)
