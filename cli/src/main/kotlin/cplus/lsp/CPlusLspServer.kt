@@ -388,7 +388,14 @@ class CPlusLspServer(
             val document = documents[currentUri] ?: return@repeat
             for (requested in importRequests(document)) {
                 val resolved = resolveImport(document, requested) ?: continue
-                val importedUri = resolved.toUri().toString()
+                // Keep the URI spelling supplied by the editor for protocol
+                // locations.  The shared resolver may canonicalize through a
+                // symlink (notably macOS' /var -> /private/var mapping), which
+                // is correct for filesystem identity but undesirable for an
+                // editor-facing document identity.
+                val lexical = lexicalImportPath(pathFromUri(document.uri), requested)
+                val importedPath = lexical ?: resolved
+                val importedUri = importedPath.toUri().toString()
                 importsByDocument.getOrPut(currentUri) { LinkedHashSet() }.add(importedUri)
                 importersByDocument.getOrPut(importedUri) { LinkedHashSet() }.add(currentUri)
                 if (documents.containsKey(importedUri)) {
@@ -396,7 +403,12 @@ class CPlusLspServer(
                     continue
                 }
                 val text = runCatching { Files.readString(resolved, StandardCharsets.UTF_8) }.getOrNull() ?: continue
-                val snapshot = sources.open(SourceId.fromPath(resolved), text)
+                // Do not pass the path through SourceId.named/fromPath here:
+                // those constructors intentionally canonicalize existing
+                // files for compiler graph identity.  LSP snapshots need the
+                // lexical URI so mapped definitions can be returned to the
+                // client using the same path it opened/imported.
+                val snapshot = sources.open(SourceId(importedUri), text)
                 documents[importedUri] = parseDocument(importedUri, 0, snapshot)
                 pending += importedUri
             }
