@@ -46,7 +46,11 @@ export function resolveLanguageServerCommand(options: LspDiscoveryOptions = {}):
     }
     const userHome = options.userHome ?? environment.HOME ?? environment.USERPROFILE;
     if (userHome) {
-        for (const directory of [pathModule.join(userHome, ".local", "bin"), pathModule.join(userHome, ".local", "share", "c-plus")]) {
+        for (const directory of [
+            pathModule.join(userHome, ".local", "bin"),
+            pathModule.join(userHome, ".local", "bin", "c-plus"),
+            pathModule.join(userHome, ".local", "share", "c-plus")
+        ]) {
             for (const candidate of candidates) {
                 const path = pathModule.join(directory, candidate);
                 if (exists(path)) return [path];

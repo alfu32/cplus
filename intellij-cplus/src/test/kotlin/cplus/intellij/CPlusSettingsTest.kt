@@ -146,6 +146,17 @@ class CPlusSettingsTest {
     }
 
     @Test
+    fun expandsInheritedEnvironmentReferencesForPathConfiguration() {
+        val parsed = CPlusCommand.parseEnvironment(
+            "PATH=\$PATH:/opt/c-plus/bin\nCPLUS_HOME=\$PATH/home",
+            mapOf("PATH" to "/usr/bin")
+        )
+
+        assertEquals("/usr/bin:/opt/c-plus/bin", parsed["PATH"])
+        assertEquals("/usr/bin:/opt/c-plus/bin/home", parsed["CPLUS_HOME"])
+    }
+
+    @Test
     fun commandProbeReportsExitCodeAndOutput() {
         val result = CPlusCommand.probe("sh -c 'printf probe; exit 7'", "PROBE_ENV=ok", timeoutSeconds = 2)
 

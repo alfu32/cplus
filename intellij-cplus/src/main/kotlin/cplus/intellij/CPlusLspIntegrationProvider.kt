@@ -50,7 +50,7 @@ private class CPlusLspServerDescriptor(project: Project) : ProjectWideLspClientD
         val arguments = CPlusCommand.execution(configured, project.basePath, listOf("lsp"))
         logger.info("C-plus LSP command: ${arguments.joinToString(" ")}")
         val commandLine = GeneralCommandLine(arguments)
-        CPlusCommand.parseEnvironment(CPlusSettings.getInstance().current().environment)
+        CPlusCommand.parseEnvironment(CPlusSettings.getInstance().current().environment, System.getenv())
             .forEach { (name, value) -> commandLine.withEnvironment(name, value) }
         CPlusLspCommand.ideJavaExecutable()?.let { commandLine.withEnvironment("CPLUS_JAVA", it) }
         return commandLine
@@ -67,8 +67,13 @@ internal object CPlusLspCommand {
         return File(File(javaHome, "bin"), executable).takeIf(exists)?.path
     }
 
-    fun discover(configured: String, projectBasePath: String?, isWindows: Boolean = System.getProperty("os.name")
-        .orEmpty().contains("win", ignoreCase = true), exists: (String) -> Boolean = { File(it).isFile }): String {
+    fun discover(
+        configured: String,
+        projectBasePath: String?,
+        isWindows: Boolean = System.getProperty("os.name").orEmpty().contains("win", ignoreCase = true),
+        userHome: String? = System.getProperty("user.home"),
+        exists: (String) -> Boolean = { File(it).isFile }
+    ): String {
         if (configured.isNotBlank()) return configured.trim()
         val root = projectBasePath?.takeIf { it.isNotBlank() }
         val names = if (isWindows) listOf("cpc.cmd", "cpc.exe", "cpc") else listOf("cpc.sh", "cpc")
@@ -81,10 +86,15 @@ internal object CPlusLspCommand {
             System.getenv("CPLUS_HOME")?.takeIf { it.isNotBlank() }?.let { home ->
                 addAll(names.map { File(home, it).path })
             }
-            val userHome = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
-            if (userHome != null) {
-                addAll(names.map { File(File(userHome, ".local/bin"), it).path })
-                addAll(names.map { File(File(userHome, ".local/share/c-plus"), it).path })
+            val localHome = userHome?.takeIf { it.isNotBlank() }
+            if (localHome != null) {
+                addAll(names.flatMap { name ->
+                    listOf(
+                        File(File(localHome, ".local/bin"), name).path,
+                        File(File(File(localHome, ".local/bin"), "c-plus"), name).path,
+                        File(File(localHome, ".local/share/c-plus"), name).path
+                    )
+                })
             }
         }
         candidates.firstOrNull(exists)?.let { return it }

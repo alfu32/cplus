@@ -73,6 +73,16 @@ class CPlusParserExternalAnnotatorTest {
     }
 
     @Test
+    fun discoversLauncherInstalledInTheUserCPlusDirectory() {
+        assertEquals(
+            "/home/tester/.local/bin/c-plus/cpc.sh",
+            CPlusLspCommand.discover("", "/project", isWindows = false, userHome = "/home/tester") {
+                it == "/home/tester/.local/bin/c-plus/cpc.sh"
+            }
+        )
+    }
+
+    @Test
     fun resolvesBareActionsThroughTheRepositoryLauncher() {
         assertEquals(
             listOf("/project/c-plus-bin/cpc.sh", "test"),

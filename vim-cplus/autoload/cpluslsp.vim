@@ -77,8 +77,8 @@ function! cpluslsp#DiscoverCommand() abort
     endfor
   endfor
   let cplus_home = exists('$CPLUS_HOME') ? $CPLUS_HOME : ''
-  for root in [cplus_home, expand('$HOME') . '/.local/bin', expand('$HOME') . '/.local/share/c-plus']
-    if empty(root) || root ==# '/.local/bin' || root ==# '/.local/share/c-plus'
+  for root in [cplus_home, expand('$HOME') . '/.local/bin', expand('$HOME') . '/.local/bin/c-plus', expand('$HOME') . '/.local/share/c-plus']
+    if empty(root) || root ==# '/.local/bin' || root ==# '/.local/bin/c-plus' || root ==# '/.local/share/c-plus'
       continue
     endif
     for name in names

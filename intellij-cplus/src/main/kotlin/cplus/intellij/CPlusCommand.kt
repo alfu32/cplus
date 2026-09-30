@@ -56,12 +56,12 @@ internal object CPlusCommand {
     }
 
     fun configureEnvironment(processBuilder: ProcessBuilder, environmentText: String): ProcessBuilder {
-        processBuilder.environment().putAll(parseEnvironment(environmentText))
+        processBuilder.environment().putAll(parseEnvironment(environmentText, processBuilder.environment()))
         return processBuilder
     }
 
     fun probe(command: String, environmentText: String, timeoutSeconds: Long = 10): CPlusCommandProbeResult {
-        val overrides = parseEnvironment(environmentText)
+        val overrides = parseEnvironment(environmentText, System.getenv())
         val workingDirectory = File(System.getProperty("user.dir").orEmpty().ifBlank { "." }).absoluteFile
         val resolved = try {
             execution(command, workingDirectory.path)
@@ -100,7 +100,7 @@ internal object CPlusCommand {
         return CPlusCommandProbeResult(resolved, workingDirectory.path, overrides, outputBuffer.toString(), process.exitValue(), null)
     }
 
-    internal fun parseEnvironment(text: String): Map<String, String> {
+    internal fun parseEnvironment(text: String, base: Map<String, String> = System.getenv()): Map<String, String> {
         val result = linkedMapOf<String, String>()
         text.lineSequence().forEachIndexed { index, raw ->
             val line = raw.trim()
@@ -109,9 +109,19 @@ internal object CPlusCommand {
             require(separator > 0) { "environment line ${index + 1} must use NAME=VALUE" }
             val name = line.substring(0, separator).trim()
             require(name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) { "invalid environment name '$name' on line ${index + 1}" }
-            result[name] = line.substring(separator + 1)
+            result[name] = expandEnvironmentValue(line.substring(separator + 1), result, base)
         }
         return result
+    }
+
+    private fun expandEnvironmentValue(value: String, overrides: Map<String, String>, base: Map<String, String>): String {
+        fun lookup(name: String): String = overrides[name] ?: base[name] ?: ""
+        var expanded = value.replace(Regex("\\$\\{([A-Za-z_][A-Za-z0-9_]*)}")) { lookup(it.groupValues[1]) }
+        expanded = expanded.replace(Regex("\\$([A-Za-z_][A-Za-z0-9_]*)")) { lookup(it.groupValues[1]) }
+        if (System.getProperty("os.name").orEmpty().contains("win", ignoreCase = true)) {
+            expanded = expanded.replace(Regex("%([A-Za-z_][A-Za-z0-9_]*)%")) { lookup(it.groupValues[1]) }
+        }
+        return expanded
     }
 
     internal fun splitStatements(command: String): List<String> {

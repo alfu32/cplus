@@ -88,7 +88,7 @@ class CPlusSettingsConfigurable : Configurable {
         languageServer = JTextField(state.languageServerCommand)
         environment = JTextArea(state.environment, 4, 60).apply {
             lineWrap = false
-            toolTipText = "One NAME=VALUE entry per line; values override the environment used by C-plus commands"
+            toolTipText = "One NAME=VALUE per line; PATH=\$PATH:/path/to/bin extends PATH"
         }
         diagnostics = JTextArea(10, 60).apply {
             isEditable = false
@@ -127,7 +127,7 @@ class CPlusSettingsConfigurable : Configurable {
                 add(field, fieldConstraints)
             }
             val environmentRow = fields.size * 2
-            add(JLabel("Environment (optional, one NAME=VALUE per line)"), GridBagConstraints().apply {
+            add(JLabel("Environment (optional; e.g. PATH=\$PATH:/path/to/bin)"), GridBagConstraints().apply {
                 gridx = 0; gridy = environmentRow; gridwidth = 2; anchor = GridBagConstraints.WEST
                 insets = Insets(12, 0, 4, 0)
             })
