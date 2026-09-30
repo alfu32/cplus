@@ -245,6 +245,12 @@ The IntelliJ command contract now has focused coverage for legacy-default migrat
 custom-command preservation, project-local launcher discovery, quoted command parsing,
 and Windows launcher selection. The plugin test/package gate passes with these cases.
 
+The full aggregate frontend gate was rerun after the IntelliJ changes with
+`./gradlew --offline --no-daemon test --max-workers=1 -Dorg.gradle.native=false --console=plain`:
+the build passed in 5m02s, including the CLI/compiler suites, all 104/104 Tree-sitter
+grammar parses, and the parser integration suite. This validates that the IntelliJ
+changes did not regress the migrated compiler path or its retained legacy fallback.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
