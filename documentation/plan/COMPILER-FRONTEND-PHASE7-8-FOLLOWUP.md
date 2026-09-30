@@ -290,6 +290,11 @@ before IDE startup by IntelliJ's profile directory lock/X11 environment
 X11 window server using ':109'`). This is host-process evidence, not a change
 to the P8.5 status.
 
+The repository-wide gate was revalidated after the instrumentation:
+`./gradlew --offline --no-daemon test --max-workers=1
+-Dorg.gradle.native=false --console=plain` passed in 4m24s, with 307 tests and
+104/104 Tree-sitter grammar parses successful.
+
 ## Immediate queue
 
 1. **P8.8:** cover richer writes, callbacks, and comptime scope parity only where their
