@@ -1162,6 +1162,23 @@ class CPlusLspServer(
         if (cast != null) {
             typeShape(cast.groupValues[1])?.let { return it }
         }
+        val call = callParts(value)
+        if (call != null) {
+            functionCallReturnType(
+                document,
+                call.first,
+                document.snapshot.text.indexOf(value).coerceAtLeast(0),
+                call.second
+            )?.let { returned ->
+                return TypeShape(
+                    resolveTypeAlias(returned.typeName),
+                    returned.pointerDepth,
+                    returned.arrayDepth,
+                    pointeeConst = returned.pointeeConst,
+                    pointeeVolatile = returned.pointeeVolatile
+                )
+            }
+        }
         splitTopLevelNumericBinary(value)?.let { (left, right) ->
             val leftType = expressionType(document, left)
             val rightType = expressionType(document, right)
