@@ -137,6 +137,7 @@ jobs:
           CXX: clang++
           TCC: clang
           CPLUS_TEST_COMPILER: clang
+          CPLUS_LSP_TRACE: ${{ github.workspace }}/parser-tree-sitter/build/parser-host-report/lsp-trace.log
         run: |
           set -o pipefail
           set +e

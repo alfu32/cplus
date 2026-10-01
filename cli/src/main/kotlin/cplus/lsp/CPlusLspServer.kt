@@ -408,6 +408,7 @@ class CPlusLspServer(
                     ?: importedPath.toUri().toString()
                 importsByDocument.getOrPut(currentUri) { LinkedHashSet() }.add(importedUri)
                 importersByDocument.getOrPut(importedUri) { LinkedHashSet() }.add(currentUri)
+                trace("import current=$currentUri requested=$requested resolved=$resolved imported=$importedUri")
                 if (documents.containsKey(importedUri)) {
                     pending += importedUri
                     continue
@@ -633,6 +634,10 @@ class CPlusLspServer(
         }
         val receiver = receiverAccess?.typeName
         val visible = visibleSymbols(document).toList()
+        trace(
+            "completion uri=${document.uri} prefix=$prefix visible=" +
+                visible.joinToString(",") { it.name + "@" + it.uri }
+        )
         val receiverScopes = receiver?.let { typeName ->
             visible.filter { it.name == typeName && it.kind == 23 }.map { it.scope }
         }.orEmpty()
