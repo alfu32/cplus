@@ -1224,7 +1224,13 @@ class CPlusLspServer(
     /** Symbols visible from a document are local symbols plus its resolved import closure. */
     private fun visibleSymbols(document: LspDocument): Sequence<LspSymbol> {
         val reachable = reachableDocuments(document.uri)
-        return sequenceOf(document.symbols.asSequence())
+        // The root snapshot may contain declarations materialized from its
+        // imports.  Those symbols carry compiler-origin paths (which may be
+        // canonical, such as macOS /private/var, while the editor opened
+        // /var).  Apply the same live-document URI projection to local and
+        // imported symbols; otherwise the materialized copy leaks a second
+        // platform-specific URI into definition/completion results.
+        return sequenceOf(document.symbols.asSequence().map { displaySymbol(it, document.uri) })
             .flatten()
             .plus(reachable.asSequence().filter { it != document.uri }
             .mapNotNull(readDocuments()::get)
