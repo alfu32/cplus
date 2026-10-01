@@ -395,7 +395,14 @@ class CPlusLspServer(
                 // editor-facing document identity.
                 val lexical = lexicalImportPath(pathFromUri(document.uri), requested)
                 val importedPath = lexical ?: resolved
-                val importedUri = importedPath.toUri().toString()
+                // Relative imports retain the exact URI namespace supplied by
+                // the editor.  Converting the source URI to a host Path and
+                // back can change drive-letter, symlink, or separator spelling
+                // on Windows and macOS even though it identifies the same
+                // file.  The resolved Path remains authoritative for reading;
+                // this URI is only the LSP document identity.
+                val importedUri = lexicalImportUri(document.uri, requested)
+                    ?: importedPath.toUri().toString()
                 importsByDocument.getOrPut(currentUri) { LinkedHashSet() }.add(importedUri)
                 importersByDocument.getOrPut(importedUri) { LinkedHashSet() }.add(currentUri)
                 if (documents.containsKey(importedUri)) {
@@ -523,6 +530,17 @@ class CPlusLspServer(
             }
         }
         return null
+    }
+
+    private fun lexicalImportUri(documentUri: String, requested: String): String? {
+        if (requested.startsWith("stdlib:/") ||
+            requested.startsWith("module:/") ||
+            requested.startsWith("project:/") ||
+            !documentUri.startsWith("file:", ignoreCase = true)
+        ) return null
+        return runCatching {
+            URI(documentUri).resolve(requested).normalize().toString()
+        }.getOrNull()
     }
 
     private fun importPath(text: String): String? = IMPORT_LITERAL.find(text)?.groupValues?.get(1)?.let(::unescapeImport)

@@ -474,3 +474,10 @@ target-specific compiler/ABI support remain out of scope for this roadmap.
   lexical recovery scan instead of skipping recovery whenever the AST returns
   a partial import list. The focused three-test regression and the complete
   `CPlusLspServerTest` class pass locally; hosted replay is required.
+- The follow-up run `36798702065` confirmed the parser, host-compiler,
+  benchmark, and complete LSP gates on both Linux hosts, but reproduced the
+  three import-closure failures on macOS arm64 and Windows x86_64. Relative
+  import identities now resolve from the original file URI string instead of
+  converting through a host `Path`; the resolved `Path` remains authoritative
+  for filesystem reads. The focused import-closure suite passes locally after
+  this correction.
