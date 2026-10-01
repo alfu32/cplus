@@ -1022,22 +1022,35 @@ class CPlusLspServer(
         val expectedArray = expected.arrayDepth > 0
         val actualArray = actual.arrayDepth > 0
         if (expectedPointer || expectedArray || actualPointer || actualArray) {
-            val qualificationCompatible = !actual.pointeeConst || expected.pointeeConst
+            val qualificationCompatible =
+                (!actual.pointeeConst || expected.pointeeConst) &&
+                    (!actual.pointeeVolatile || expected.pointeeVolatile)
             if (expectedBase == actualBase && expected.pointerDepth == actual.pointerDepth &&
                 expected.arrayDepth == actual.arrayDepth && qualificationCompatible
             ) {
-                return TypeMatch(if (!expected.pointeeConst && actual.pointeeConst) 0 else
-                    if (expected.pointeeConst && !actual.pointeeConst) 1 else 0, true)
+                val qualificationCost =
+                    if (expected.pointeeConst && !actual.pointeeConst) 1 else 0
+                val volatileCost =
+                    if (expected.pointeeVolatile && !actual.pointeeVolatile) 1 else 0
+                return TypeMatch(qualificationCost + volatileCost, true)
             }
             if (expected.pointerDepth == 1 && expected.arrayDepth == 0 &&
                 actual.pointerDepth == 0 && actual.arrayDepth == 1 && expectedBase == actualBase
-                && (!actual.pointeeConst || expected.pointeeConst)
-            ) return TypeMatch(if (expected.pointeeConst && !actual.pointeeConst) 3 else 2, true)
+                && qualificationCompatible
+            ) return TypeMatch(
+                2 + (if (expected.pointeeConst && !actual.pointeeConst) 1 else 0) +
+                    (if (expected.pointeeVolatile && !actual.pointeeVolatile) 1 else 0),
+                true
+            )
             if (expected.pointerDepth == 1 && expected.arrayDepth == 0 &&
                 actual.pointerDepth == 1 && actual.arrayDepth == 0 &&
                 (expectedBase == "void" || actualBase == "void") &&
-                (!actual.pointeeConst || expected.pointeeConst)
-            ) return TypeMatch(if (expected.pointeeConst && !actual.pointeeConst) 9 else 8, true)
+                qualificationCompatible
+            ) return TypeMatch(
+                8 + (if (expected.pointeeConst && !actual.pointeeConst) 1 else 0) +
+                    (if (expected.pointeeVolatile && !actual.pointeeVolatile) 1 else 0),
+                true
+            )
             return TypeMatch(0, false)
         }
         if (expectedBase == actualBase) return TypeMatch(0, true)
@@ -1094,6 +1107,8 @@ class CPlusLspServer(
         val firstPointer = declaration.indexOf('*')
         val pointeeConst = firstPointer >= 0 &&
             Regex("\\bconst\\b").containsMatchIn(declaration.substring(0, firstPointer))
+        val pointeeVolatile = firstPointer >= 0 &&
+            Regex("\\bvolatile\\b").containsMatchIn(declaration.substring(0, firstPointer))
         val cleaned = declaration
             .replace(Regex("\\b(borrowed|owned|mut|const|volatile|restrict)\\b"), " ")
             .trim()
@@ -1108,7 +1123,8 @@ class CPlusLspServer(
                 arrayDepth = 0,
                 callableArity = parameterCount(parameters),
                 callableReturnBase = callable.groupValues[1],
-                pointeeConst = pointeeConst
+                pointeeConst = pointeeConst,
+                pointeeVolatile = pointeeVolatile
             )
         }
         val pointerDepth = cleaned.count { it == '*' }
@@ -1118,7 +1134,13 @@ class CPlusLspServer(
             ?: Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)")
                 .find(cleaned)?.groupValues?.get(1)
             ?: return null
-        return TypeShape(base, pointerDepth, arrayDepth, pointeeConst = pointeeConst)
+        return TypeShape(
+            base,
+            pointerDepth,
+            arrayDepth,
+            pointeeConst = pointeeConst,
+            pointeeVolatile = pointeeVolatile
+        )
     }
 
     private fun expressionType(document: LspDocument, expression: String): TypeShape? {
@@ -1172,7 +1194,8 @@ class CPlusLspServer(
             resolveTypeAlias(declared.typeName),
             declared.pointerDepth + if (address != null) 1 else 0,
             declared.arrayDepth,
-            pointeeConst = declared.pointeeConst
+            pointeeConst = declared.pointeeConst,
+            pointeeVolatile = declared.pointeeVolatile
         )
     }
 
@@ -1202,7 +1225,8 @@ class CPlusLspServer(
             arrayDepth = 0,
             callableArity = parameterCount(symbol.detail.substring(open + 1, close)),
             callableReturnBase = returnBase,
-            pointeeConst = typeShape(symbol.detail.substring(0, nameOffset))?.pointeeConst == true
+            pointeeConst = typeShape(symbol.detail.substring(0, nameOffset))?.pointeeConst == true,
+            pointeeVolatile = typeShape(symbol.detail.substring(0, nameOffset))?.pointeeVolatile == true
         )
     }
 
@@ -1489,8 +1513,9 @@ class CPlusLspServer(
         return DeclaredType(
             resolveTypeAlias(shape.base),
             shape.pointerDepth,
-            shape.arrayDepth,
-            shape.pointeeConst
+                shape.arrayDepth,
+                shape.pointeeConst,
+                shape.pointeeVolatile
         )
     }
 
@@ -1527,6 +1552,11 @@ class CPlusLspServer(
             // taken (`const int value; &value`).
             Regex("\\bconst\\b").containsMatchIn(rawBeforeName)
         }
+        val pointeeVolatile = if (firstPointer >= 0) {
+            Regex("\\bvolatile\\b").containsMatchIn(rawBeforeName.substring(0, firstPointer))
+        } else {
+            Regex("\\bvolatile\\b").containsMatchIn(rawBeforeName)
+        }
         val beforeName = rawBeforeName
             .replace(Regex("\\b(const|volatile|restrict)\\b"), " ")
             .trim()
@@ -1537,7 +1567,8 @@ class CPlusLspServer(
             match.groupValues[1],
             match.groupValues[2].length,
             arrayDepth,
-            pointeeConst
+            pointeeConst,
+            pointeeVolatile
         )
     }
 
@@ -1679,7 +1710,8 @@ private data class DeclaredType(
     val typeName: String,
     val pointerDepth: Int,
     val arrayDepth: Int,
-    val pointeeConst: Boolean = false
+    val pointeeConst: Boolean = false,
+    val pointeeVolatile: Boolean = false
 )
 
 private data class TypeShape(
@@ -1688,7 +1720,8 @@ private data class TypeShape(
     val arrayDepth: Int,
     val callableArity: Int? = null,
     val callableReturnBase: String? = null,
-    val pointeeConst: Boolean = false
+    val pointeeConst: Boolean = false,
+    val pointeeVolatile: Boolean = false
 )
 
 private data class TypeMatch(val score: Int, val compatible: Boolean)
