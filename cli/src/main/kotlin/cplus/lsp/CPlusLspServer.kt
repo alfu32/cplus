@@ -539,7 +539,17 @@ class CPlusLspServer(
             !documentUri.startsWith("file:", ignoreCase = true)
         ) return null
         return runCatching {
-            URI(documentUri).resolve(requested).normalize().toString()
+            val resolved = URI(documentUri).resolve(requested).normalize()
+            if (resolved.scheme.equals("file", ignoreCase = true) &&
+                resolved.rawAuthority == null &&
+                resolved.rawPath.startsWith("/")
+            ) {
+                // Keep the canonical Path.toUri() spelling (file:///path) while
+                // retaining the lexical path from the original document URI.
+                "file://${resolved.rawPath}"
+            } else {
+                resolved.toString()
+            }
         }.getOrNull()
     }
 
