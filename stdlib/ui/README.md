@@ -1,269 +1,177 @@
 # Device-independent React-like UI core for C+
 
-## 1. Scope
+## Modules
 
-This module implements a renderer-independent retained virtual UI runtime in C/C+.
-It contains no Raylib, terminal, POSIX, Win32, Cocoa, Android, browser, socket, or HTTP implementation.
-Platform/device behavior enters only through `ui_driver_t` callbacks.
+The UI framework is intentionally split so rendering and layout do not depend on the React runtime:
 
-Import:
+- `ui/vdom.cp` — virtual nodes, typed attributes, events, styles, child ownership, element/text/image/fragment/component/provider constructors and construction macros.
+- `ui/react.cp` — components, hooks, context, futures, reconciliation, event dispatch, timers and the host driver/event-loop contract. Imports only `vdom.cp` from the UI layer.
+- `ui/layout.cp` — device-independent box layout and flattening to drawables. Imports only `vdom.cp`; React is not required.
+- `ui/renderer.cp` — graphics-renderer interface consuming layout emissions.
+- `ui/printf_renderer.cp` — reference renderer that prints emitted boxes/images to a `FILE*`.
 
-```c
-comptime import "stdlib:/ui/react.cp";
-```
+All framework/layout logic is ordinary device-independent C after C+ transcoding. There is no Raylib, terminal, POSIX, Win32, Cocoa, socket or HTTP dependency in these modules.
 
-The source is C+ for integration with the standard library generics; the transcoded implementation is ordinary C.
+## VDOM
 
-## 2. Architecture
+A `ui_vnode_t` owns:
 
-The runtime is split into five logical layers:
+- kind and runtime id
+- optional reconciliation key
+- optional tag / text
+- typed attributes
+- generic dynamic-list children (`dynamic_list(ui_vnode_t*)`)
+- layout and graphics style
+- kind-specific component/provider/image data
 
-1. **Virtual DOM** — `ui_vnode_t`, attributes, text, fragments, components, context providers, keys and children.
-2. **Component runtime** — component instances, hook slots, dirty scheduling and component-local reconciliation.
-3. **Reconciler** — compares retained trees and emits backend-neutral patches.
-4. **Event/async runtime** — driver event polling, event handler dispatch, timers and generic futures.
-5. **Driver boundary** — host integration for drawing/presentation, input polling, time and optional blocking wait.
-
-Raylib and terminal backends should implement `ui_driver_t`; they must not be imported by this module.
-
-## 3. Virtual DOM
-
-A node has:
-
-- `kind`: element, text, fragment, component or context provider
-- `id`: runtime-assigned stable identity
-- `key`: optional reconciliation key
-- `tag`: renderer-defined element type such as `box`, `text`, `button`, `row`, etc.
-- `text`: text-node payload
-- `attrs`: `dynamic_list(ui_attr_t)`
-- `children`: `dynamic_list(ui_vnode_t*)`
-
-Children are pointers because recursive by-value storage is not representable in C without an indirection. The child list itself is still the generic dynamic list. Children are created before insertion and ownership transfers to the parent.
-
-Typical construction:
+Nodes are created before insertion and child ownership transfers to the parent:
 
 ```c
-UI_ELEMENT(root, "row");
+UI_ELEMENT(root, "panel");
 UI_TEXT(label, "hello");
-UI_ATTR(root, "role", ui_value_string("toolbar"));
 UI_CHILD(root, label);
 ```
 
-The generic dynamic list has also been extended with:
+The generic dynamic list also provides value-semantic `add(T value)`, equivalent to `push(&value)`.
 
-```c
-pub int add(borrowed mut *self, const T value);
+## Vnode style
+
+Every vnode starts with:
+
+```text
+position = relative-parent
+top      = 0
+left     = 0
+width    = 0
+height   = 0
 ```
 
-`add(value)` is value-semantic and equivalent to `push(&value)`.
-
-## 4. Attribute values
-
-`ui_value_t` supports:
-
-- none
-- bool
-- signed integer
-- double
-- owned string
-- borrowed pointer
-- event handler
-
-A backend receives the same typed value in `UI_PATCH_SET_ATTRIBUTE` and decides which attributes it understands.
-Unknown attributes may be ignored by a backend.
-
-## 5. Components
-
-A component is:
+Layout accessors:
 
 ```c
-typedef ui_vnode_t* (*ui_component_fn)(ui_render_context_t* context, const void* props);
+ui_vnode_position(node, UI_POSITION_FIXED);
+ui_vnode_top(node, 10);
+ui_vnode_left(node, 20);
+ui_vnode_width(node, 300);
+ui_vnode_height(node, 100);
+
+// or atomically:
+ui_vnode_layout(node, UI_POSITION_RELATIVE_PARENT, 10, 20, 300, 100);
 ```
 
-Props are copied into the component vnode when it is created.
-The vnode returned by the component becomes owned by the component instance.
+Position modes are deliberately smaller than CSS:
 
-Component identity is `(component function, key, position)` for unkeyed children and `(component function, key)` for keyed children.
+- `UI_POSITION_RELATIVE_PARENT` — default; `(left, top)` is relative to the parent box top-left.
+- `UI_POSITION_FIXED` — `(left, top)` is relative to the layout viewport top-left.
+- `UI_POSITION_RELATIVE_SIBLING` — `(left, top)` is relative to the previous sibling's resolved top-left; if no prior sibling exists, it falls back to the parent top-left.
 
-## 6. Hooks
+The anchor is always top-left. The layout engine never implements block flow, inline flow, flexbox, intrinsic sizing or automatic sibling advancement. Components/parents are responsible for computing and assigning sizes/positions when they want those behaviors.
 
-Hooks are stored in a stable ordered slot list per component instance. Hook order and hook type must remain identical between renders. A mismatch is a runtime error.
-
-### State
+Graphics style fields are renderer-neutral:
 
 ```c
-ui_state_t* count = use_state(context, int, 0);
-int current = state_value(int, count);
-state_set(int, count, current + 1);
+ui_vnode_background(node, "#202020");
+ui_vnode_color(node, "white");
+ui_vnode_border(node, "1 solid gray");
+ui_vnode_font_family(node, "mono");
+ui_vnode_font_size(node, 14);
+ui_vnode_font_weight(node, 700);
+ui_vnode_font_decoration(node, UI_FONT_DECORATION_UNDERLINE);
 ```
 
-A state update marks only the owning component dirty, and the next runtime tick reconciles that component subtree.
+The strings are copied and owned by the vnode.
 
-### Effect
+## Images
+
+Images are explicit VDOM nodes with an opaque borrowed bitmap handle:
 
 ```c
-ui_cleanup_fn effect(void* user) { ... }
-use_effect(context, effect, user, &deps, sizeof(deps));
+UI_IMAGE(image, bitmap);
+ui_vnode_layout(image, UI_POSITION_RELATIVE_PARENT, 10, 20, 64, 64);
 ```
 
-Effects run after the patch frame is committed. On dependency change, the previous cleanup runs before the next effect. Cleanup also runs on unmount.
+The core does not prescribe pixel format or GPU representation. A concrete renderer interprets the bitmap handle it is given.
 
-`deps_size == 0` means a stable empty dependency set (mount/unmount behavior).
+## Layout engine
 
-### Context
+`layout.cp` walks VDOM directly and produces a flat `ui_layout_result_t` containing `ui_drawable_t` entries.
+
+Drawable kinds:
+
+- `UI_DRAWABLE_BOX` — resolved `(x,y,width,height)`, graphics style, optional text, and indices of direct drawable children.
+- `UI_DRAWABLE_IMAGE` — resolved `(x,y,width,height)` and opaque bitmap handle.
+
+Fragments, context providers and React component nodes are transparent to graphics layout. A mounted component's `rendered` vnode is traversed instead. Therefore VDOM can be built and laid out without using React at all.
+
+Typical use:
 
 ```c
-ui_context_t theme;
-ui_context_init(&theme, "theme", &default_theme, sizeof(default_theme));
-const theme_t* value = use_context(context, theme_t, &theme);
+ui_layout_result_t layout = {0};
+ui_layout_result_init(&layout);
+ui_layout_run(root, 1280, 720, &layout);
+// consume layout.drawables
+ui_layout_result_destroy(&layout);
 ```
 
-A provider is a transparent virtual node:
+## Graphics renderer interface
+
+`renderer.cp` defines:
 
 ```c
-UI_PROVIDER(provider, &theme, &dark_theme, sizeof(dark_theme));
-UI_CHILD(provider, child_component);
-```
-
-Providers are lexically scoped during traversal and do not require global mutable state.
-
-### Future
-
-```c
-ui_future_t future;
-ui_future_init(&future);
-ui_future_t* current = use_future(context, &future);
-```
-
-A future can be resolved, rejected or cancelled. Completion wakes subscribed components.
-The core deliberately does not perform HTTP or thread creation. An HTTP library, worker pool or backend can resolve the future when work completes.
-A future must outlive components currently subscribed to it.
-
-## 7. Reconciliation and patch protocol
-
-The reconciler emits:
-
-- `UI_PATCH_MOUNT`
-- `UI_PATCH_UNMOUNT`
-- `UI_PATCH_MOVE`
-- `UI_PATCH_SET_ATTRIBUTE`
-- `UI_PATCH_REMOVE_ATTRIBUTE`
-- `UI_PATCH_SET_TEXT`
-
-Every mounted virtual node, including fragments/components/providers, receives an ID. Non-rendering node kinds act as logical groups. This gives every backend the same stable tree model and avoids renderer-specific flattening rules in core.
-
-Unkeyed children reconcile positionally. Keyed children are matched by key and identity and emit `UI_PATCH_MOVE` when reordered.
-
-## 8. Driver interface
-
-```c
-typedef struct ui_driver_t {
+typedef struct ui_renderer_t {
     void* user;
-    int (*begin_frame)(void* user);
-    int (*apply_patch)(void* user, const ui_patch_t* patch);
-    int (*end_frame)(void* user);
-    int (*poll_event)(void* user, ui_event_t* out_event);
-    uint64_t (*now_ms)(void* user);
-    int (*wait)(void* user, uint64_t timeout_ms); // optional
-} ui_driver_t;
+    int (*begin)(void* user, const ui_layout_result_t* layout);
+    int (*draw_box)(void* user, const ui_drawable_box_t* box);
+    int (*draw_image)(void* user, const ui_drawable_image_t* image);
+    int (*end)(void* user, const ui_layout_result_t* layout);
+} ui_renderer_t;
 ```
 
-Responsibilities:
+`ui_renderer_draw(renderer, layout)` visits the flat drawable list in paint order.
+`ui_render_vdom(root, viewport_width, viewport_height, renderer)` is the convenience path that performs layout and rendering in one call.
 
-- `begin_frame`: begin one atomic UI mutation batch
-- `apply_patch`: mutate backend retained state
-- `end_frame`: finish/commit/draw as appropriate
-- `poll_event`: dequeue at most one native UI event; return 1 for event, 0 for empty, <0 for error
-- `now_ms`: monotonic backend clock in milliseconds
-- `wait`: optionally block until input/wakeup/timeout
+A Raylib renderer can map `draw_box` to rectangle/border/text primitives and `draw_image` to a texture draw. A terminal renderer can map boxes/text into cells and images to whichever terminal graphics protocol it supports. Neither backend owns layout semantics.
 
-A Raylib driver can store a retained logical tree and draw it each frame. A terminal driver can map the same tree into cells and ANSI output. Neither requires changes to React core.
+## printf renderer
 
-## 9. Events
-
-The core normalizes keyboard, text, mouse, focus, custom and quit events into `ui_event_t`.
-The driver supplies `target_id` after hit testing/focus resolution.
-Handlers are typed attribute values created with:
+`printf_renderer.cp` is the minimal reference backend:
 
 ```c
-ui_value_handler(UI_EVENT_MOUSE_UP, callback, user)
+ui_printf_renderer_state_t state;
+ui_renderer_t renderer = ui_printf_renderer(&state, stdout);
+ui_render_vdom(root, 800, 600, &renderer);
 ```
 
-The runtime locates the target vnode and dispatches matching handlers.
+Example output:
 
-## 10. Timers and event loop
-
-The runtime provides:
-
-```c
-ui_set_timeout(...)
-ui_set_interval(...)
-ui_cancel_timer(...)
-ui_runtime_tick(...)
-ui_runtime_run(...)
-ui_runtime_stop(...)
+```text
+LAYOUT drawables=3
+BOX node=0 parent=... x=1.00 y=2.00 w=100.00 h=50.00 background="blue" ... children=2
+BOX node=0 parent=0 x=4.00 y=6.00 w=40.00 h=12.00 ... text="hello" children=0
+IMAGE node=0 parent=0 x=6.00 y=22.00 w=32.00 h=16.00 bitmap=...
 ```
 
-Timers are based exclusively on `driver.now_ms`; no OS clock API is used by core.
-`ui_runtime_tick` is non-blocking. `ui_runtime_run` uses optional `driver.wait` to avoid spinning.
+This backend is useful both for debugging and for deterministic layout integration tests.
 
-## 11. Ownership rules
+## React runtime
 
-- `ui_runtime_mount` takes ownership of the root vnode.
-- `UI_CHILD` transfers child ownership to its parent.
-- component props are copied.
-- string attributes are copied and owned by the vnode.
-- context provider values are copied.
-- state values and effect dependency bytes are copied.
-- event-handler `user` pointers and pointer attributes are borrowed.
-- future payloads are copied on resolution.
-- `ui_runtime_destroy` recursively releases the retained tree and component state.
+`react.cp` retains the previous React-like behavior while importing VDOM from `vdom.cp`:
 
-Do not attach the same vnode to multiple parents.
+- keyed and positional reconciliation
+- `use_state`
+- `use_effect` with cleanup/dependencies
+- `use_context`
+- `use_future`
+- normalized UI event dispatch
+- timeout/interval timers
+- non-blocking tick and optional blocking event loop
 
-## 12. Backend implementation plan
+The host `ui_driver_t` remains the event/mutation runtime boundary. It is separate from `ui_renderer_t`: a future Raylib or terminal host can combine an event driver with a graphics renderer without coupling React, layout and graphics code.
 
-The next two drivers can be implemented independently:
+## Tests
 
-**Raylib 2D**
-- retain node/property hierarchy keyed by `node_id`
-- layout pass
-- hit-test pass
-- translate Raylib keyboard/mouse input to `ui_event_t`
-- draw during `end_frame`
+- `tests/containers.cp` — generic containers and `dynamic_list.add(T)`.
+- `tests/react_core.cp` — VDOM ownership through React, reconciliation, hooks, context, futures, events and timers.
+- `tests/layout.cp` — default style, all position modes, no implicit sibling flow, style propagation, text/image emissions, child drawable indices and printf renderer output.
 
-**Terminal/ANSI**
-- retain the same hierarchy
-- layout to terminal rows/columns
-- render into a cell backbuffer
-- diff previous/current cell buffers and emit ANSI cursor/style sequences
-- decode terminal keyboard/mouse escape sequences into `ui_event_t`
-
-The core API does not need backend-specific extensions for either initial implementation.
-
-## 13. Test specification
-
-`stdlib/tests/react_core.cp` verifies:
-
-1. child storage through generic `dynamic_list.add(T)`
-2. mount patch ordering and typed attributes
-3. state update -> dirty component -> text reconciliation
-4. effect commit timing, dependency behavior and cleanup
-5. provider scoping / `use_context`
-6. future subscription and wakeup
-7. driver event dequeue and target dispatch
-8. timeout/interval behavior against a fake driver clock
-9. root reconciliation without unnecessary remount
-10. keyed identity preservation and move patches
-11. hook-order invariant enforcement
-
-`stdlib/tests/containers.cp` also verifies the new `dynamic_list.add(T)` API.
-
-Validated with C+ 0.5.56 tree-sitter frontend and GCC:
-
-- container + React core: 22 fixtures, 190 assertions, 0 failures
-- React core standalone: 11 fixtures, 82 assertions, 0 failures
-- generated C compiled with `-Wall -Wextra -fsanitize=address`
-- sanitizer execution completed without AddressSanitizer or leak failures
-
-Known compiler note: the legacy frontend in C+ 0.5.56 does not correctly lower a generic struct method that accepts `T` by value. The tree-sitter frontend does. Therefore `dynamic_list.add(T)` currently requires `--frontend tree-sitter` until that legacy lowering bug is fixed.
+Verified with C+ 0.5.56 tree-sitter frontend and GCC.

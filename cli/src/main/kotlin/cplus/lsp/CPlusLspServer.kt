@@ -530,17 +530,16 @@ class CPlusLspServer(
     private fun importRequests(document: LspDocument): List<String> {
         val indexed = comptimeIndexer.index(document.ast).imports
             .mapNotNull { span -> importPath(document.snapshot.text.substring(span.startOffset, span.endOffset)) }
-        if (indexed.isNotEmpty()) return indexed.distinct()
-
-        // Some host builds of the recovery parser preserve a comptime import
-        // only as an error/recovery node. Keep the AST index authoritative when
-        // it recognizes the construct, but recover the small import boundary
-        // here so workspace navigation remains portable while the grammar
-        // migration is still in progress.
-        return IMPORT_RECOVERY_LITERAL.findAll(document.snapshot.text)
+        // Keep the small lexical recovery boundary additive rather than using
+        // it only when the AST index is empty. Native Tree-sitter hosts can
+        // preserve an import as a recovery node, or expose a partial span,
+        // while still returning other indexed comptime constructs. Import
+        // discovery must therefore be host-independent during the migration.
+        val recovered = IMPORT_RECOVERY_LITERAL.findAll(document.snapshot.text)
             .map { unescapeImport(it.groupValues[1]) }
             .distinct()
             .toList()
+        return (indexed + recovered).distinct()
     }
 
     private fun pathFromUri(value: String): Path? = runCatching {

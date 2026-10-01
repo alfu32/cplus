@@ -5,95 +5,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
-comptime import "stdlib:/containers/dynamic_list.cp";
+comptime import "stdlib:/ui/vdom.cp";
 
-typedef struct ui_runtime_t ui_runtime_t;
-typedef struct ui_render_context_t ui_render_context_t;
-typedef struct ui_vnode_t ui_vnode_t;
-typedef struct ui_component_instance_t ui_component_instance_t;
-typedef struct ui_future_t ui_future_t;
-typedef struct ui_context_t ui_context_t;
-
-typedef ui_vnode_t* ui_vnode_ref_t;
 typedef ui_component_instance_t* ui_component_instance_ref_t;
-comptime typedef dynamic_list(ui_vnode_ref_t) ui_vnode_list_t;
 comptime typedef dynamic_list(ui_component_instance_ref_t) ui_component_instance_list_t;
-
-typedef enum ui_event_type_t {
-    UI_EVENT_NONE = 0,
-    UI_EVENT_KEY_DOWN,
-    UI_EVENT_KEY_UP,
-    UI_EVENT_TEXT,
-    UI_EVENT_MOUSE_MOVE,
-    UI_EVENT_MOUSE_DOWN,
-    UI_EVENT_MOUSE_UP,
-    UI_EVENT_MOUSE_WHEEL,
-    UI_EVENT_FOCUS,
-    UI_EVENT_BLUR,
-    UI_EVENT_CUSTOM,
-    UI_EVENT_QUIT
-} ui_event_type_t;
-
-typedef struct ui_event_t {
-    ui_event_type_t type;
-    uint64_t target_id;
-    int key;
-    unsigned int codepoint;
-    int button;
-    double x;
-    double y;
-    double dx;
-    double dy;
-    double wheel_x;
-    double wheel_y;
-    const char* custom_type;
-    borrowed void* payload;
-} ui_event_t;
-
-typedef int (*ui_event_fn)(borrowed const ui_event_t* event, borrowed void* user);
-typedef struct ui_event_handler_t {
-    ui_event_type_t type;
-    ui_event_fn callback;
-    borrowed void* user;
-} ui_event_handler_t;
-
-typedef enum ui_value_kind_t {
-    UI_VALUE_NONE = 0,
-    UI_VALUE_BOOL,
-    UI_VALUE_INT,
-    UI_VALUE_DOUBLE,
-    UI_VALUE_STRING,
-    UI_VALUE_POINTER,
-    UI_VALUE_HANDLER
-} ui_value_kind_t;
-
-typedef struct ui_value_t {
-    ui_value_kind_t kind;
-    union {
-        int boolean;
-        int64_t integer;
-        double real;
-        char* string;
-        borrowed void* pointer;
-        ui_event_handler_t handler;
-    } as;
-} ui_value_t;
-
-typedef struct ui_attr_t {
-    char* name;
-    ui_value_t value;
-} ui_attr_t;
-comptime typedef dynamic_list(ui_attr_t) ui_attr_list_t;
-
-typedef enum ui_vnode_kind_t {
-    UI_VNODE_ELEMENT = 1,
-    UI_VNODE_TEXT,
-    UI_VNODE_FRAGMENT,
-    UI_VNODE_COMPONENT,
-    UI_VNODE_CONTEXT_PROVIDER
-} ui_vnode_kind_t;
 
 typedef enum ui_patch_type_t {
     UI_PATCH_MOUNT = 1,
@@ -126,7 +42,6 @@ typedef struct ui_driver_t {
     int (*wait)(borrowed void* user, uint64_t timeout_ms);
 } ui_driver_t;
 
-typedef ui_vnode_t* (*ui_component_fn)(borrowed mut ui_render_context_t* context, borrowed const void* props);
 typedef void (*ui_cleanup_fn)(borrowed void* user);
 typedef ui_cleanup_fn (*ui_effect_fn)(borrowed void* user);
 typedef void (*ui_timer_fn)(borrowed mut ui_runtime_t* runtime, borrowed void* user);
@@ -151,13 +66,13 @@ typedef enum ui_future_status_t {
     UI_FUTURE_CANCELLED
 } ui_future_status_t;
 
-struct ui_future_t {
+typedef struct ui_future_t {
     ui_future_status_t status;
     owned void* value;
     size_t value_size;
     int error_code;
     ui_component_instance_list_t subscribers;
-};
+} ui_future_t;
 
 typedef enum ui_hook_kind_t {
     UI_HOOK_STATE = 1,
@@ -184,9 +99,7 @@ typedef struct ui_hook_t {
             size_t deps_size;
             int pending;
         } effect;
-        struct {
-            borrowed ui_future_t* future;
-        } future;
+        struct { borrowed ui_future_t* future; } future;
     } as;
 } ui_hook_t;
 comptime typedef dynamic_list(ui_hook_t) ui_hook_list_t;
@@ -199,30 +112,6 @@ struct ui_component_instance_t {
     int mounted;
     borrowed ui_runtime_t* runtime;
     borrowed ui_vnode_t* owner;
-};
-
-struct ui_vnode_t {
-    ui_vnode_kind_t kind;
-    uint64_t id;
-    char* key;
-    char* tag;
-    char* text;
-    ui_attr_list_t attrs;
-    ui_vnode_list_t children;
-    union {
-        struct {
-            ui_component_fn render;
-            owned void* props;
-            size_t props_size;
-            owned ui_component_instance_t* instance;
-            owned ui_vnode_t* rendered;
-        } component;
-        struct {
-            borrowed ui_context_t* context;
-            owned void* value;
-            size_t value_size;
-        } provider;
-    } as;
 };
 
 typedef struct ui_timer_t {
@@ -252,156 +141,6 @@ struct ui_runtime_t {
     int running;
     int last_error;
 };
-
-static char* ui__strdup(borrowed const char* text) {
-    if (text == NULL) return NULL;
-    size_t n = strlen(text) + 1;
-    char* copy = malloc(n);
-    if (copy != NULL) memcpy(copy, text, n);
-    return copy;
-}
-
-static void* ui__memdup(borrowed const void* value, size_t size) {
-    if (size == 0) return NULL;
-    if (value == NULL) return NULL;
-    void* copy = malloc(size);
-    if (copy != NULL) memcpy(copy, value, size);
-    return copy;
-}
-
-pub ui_value_t ui_value_none(void) { ui_value_t v; memset(&v, 0, sizeof(v)); return v; }
-pub ui_value_t ui_value_bool(int value) { ui_value_t v = ui_value_none(); v.kind = UI_VALUE_BOOL; v.as.boolean = value != 0; return v; }
-pub ui_value_t ui_value_int(int64_t value) { ui_value_t v = ui_value_none(); v.kind = UI_VALUE_INT; v.as.integer = value; return v; }
-pub ui_value_t ui_value_double(double value) { ui_value_t v = ui_value_none(); v.kind = UI_VALUE_DOUBLE; v.as.real = value; return v; }
-pub ui_value_t ui_value_pointer(borrowed void* value) { ui_value_t v = ui_value_none(); v.kind = UI_VALUE_POINTER; v.as.pointer = value; return v; }
-pub ui_value_t ui_value_handler(ui_event_type_t type, ui_event_fn callback, borrowed void* user) { ui_value_t v = ui_value_none(); v.kind = UI_VALUE_HANDLER; v.as.handler.type = type; v.as.handler.callback = callback; v.as.handler.user = user; return v; }
-pub ui_value_t ui_value_string(borrowed const char* value) { ui_value_t v = ui_value_none(); v.kind = UI_VALUE_STRING; v.as.string = ui__strdup(value == NULL ? "" : value); return v; }
-
-static void ui__value_destroy(borrowed mut ui_value_t* value) {
-    if (value != NULL && value->kind == UI_VALUE_STRING) free(value->as.string);
-    if (value != NULL) *value = ui_value_none();
-}
-
-
-static int ui__value_equal(borrowed const ui_value_t* a, borrowed const ui_value_t* b) {
-    if (a->kind != b->kind) return 0;
-    switch (a->kind) {
-        case UI_VALUE_NONE: return 1;
-        case UI_VALUE_BOOL: return a->as.boolean == b->as.boolean;
-        case UI_VALUE_INT: return a->as.integer == b->as.integer;
-        case UI_VALUE_DOUBLE: return a->as.real == b->as.real;
-        case UI_VALUE_STRING:
-            if (a->as.string == NULL || b->as.string == NULL) return a->as.string == b->as.string;
-            return strcmp(a->as.string, b->as.string) == 0;
-        case UI_VALUE_POINTER: return a->as.pointer == b->as.pointer;
-        case UI_VALUE_HANDLER: return a->as.handler.type == b->as.handler.type && a->as.handler.callback == b->as.handler.callback && a->as.handler.user == b->as.handler.user;
-        default: return 0;
-    }
-}
-
-static ui_vnode_t* ui__vnode_new(ui_vnode_kind_t kind) {
-    ui_vnode_t* node = calloc(1, sizeof(ui_vnode_t));
-    if (node == NULL) return NULL;
-    node->kind = kind;
-    if (node->attrs.init() != 0 || node->children.init() != 0) {
-        node->attrs.destroy(); node->children.destroy(); free(node); return NULL;
-    }
-    return node;
-}
-
-pub owned ui_vnode_t* ui_vnode_element(borrowed const char* tag) {
-    ui_vnode_t* node = ui__vnode_new(UI_VNODE_ELEMENT);
-    if (node == NULL) return NULL;
-    node->tag = ui__strdup(tag == NULL ? "" : tag);
-    if (node->tag == NULL) { node->attrs.destroy(); node->children.destroy(); free(node); return NULL; }
-    return node;
-}
-
-pub owned ui_vnode_t* ui_vnode_text(borrowed const char* text) {
-    ui_vnode_t* node = ui__vnode_new(UI_VNODE_TEXT);
-    if (node == NULL) return NULL;
-    node->text = ui__strdup(text == NULL ? "" : text);
-    if (node->text == NULL) { node->attrs.destroy(); node->children.destroy(); free(node); return NULL; }
-    return node;
-}
-
-pub owned ui_vnode_t* ui_vnode_fragment(void) { return ui__vnode_new(UI_VNODE_FRAGMENT); }
-
-pub owned ui_vnode_t* ui_vnode_component(ui_component_fn component, borrowed const void* props, size_t props_size) {
-    if (component == NULL) return NULL;
-    ui_vnode_t* node = ui__vnode_new(UI_VNODE_COMPONENT);
-    if (node == NULL) return NULL;
-    node->as.component.render = component;
-    node->as.component.props_size = props_size;
-    if (props_size > 0) {
-        node->as.component.props = ui__memdup(props, props_size);
-        if (node->as.component.props == NULL) { node->attrs.destroy(); node->children.destroy(); free(node); return NULL; }
-    }
-    return node;
-}
-
-pub owned ui_vnode_t* ui_vnode_provider(borrowed ui_context_t* context, borrowed const void* value, size_t value_size) {
-    if (context == NULL || value == NULL || value_size == 0) return NULL;
-    ui_vnode_t* node = ui__vnode_new(UI_VNODE_CONTEXT_PROVIDER);
-    if (node == NULL) return NULL;
-    node->as.provider.context = context;
-    node->as.provider.value_size = value_size;
-    node->as.provider.value = ui__memdup(value, value_size);
-    if (node->as.provider.value == NULL) { node->attrs.destroy(); node->children.destroy(); free(node); return NULL; }
-    return node;
-}
-
-pub int ui_vnode_key(borrowed mut ui_vnode_t* node, borrowed const char* key) {
-    if (node == NULL) return 1;
-    char* copy = key == NULL ? NULL : ui__strdup(key);
-    if (key != NULL && copy == NULL) return 1;
-    free(node->key); node->key = copy; return 0;
-}
-
-pub int ui_vnode_attr(borrowed mut ui_vnode_t* node, borrowed const char* name, ui_value_t value) {
-    if (node == NULL || name == NULL) { ui__value_destroy(&value); return 1; }
-    for (size_t i = 0; i < node->attrs.length; i++) {
-        ui_attr_t* attr = &node->attrs.items[i];
-        if (strcmp(attr->name, name) == 0) {
-            ui__value_destroy(&attr->value);
-            attr->value = value;
-            return 0;
-        }
-    }
-    ui_attr_t attr;
-    attr.name = ui__strdup(name);
-    attr.value = value;
-    if (attr.name == NULL) { ui__value_destroy(&attr.value); return 1; }
-    if (node->attrs.add(attr) != 0) { free(attr.name); ui__value_destroy(&attr.value); return 1; }
-    return 0;
-}
-
-pub int ui_vnode_child(borrowed mut ui_vnode_t* parent, owned ui_vnode_t* child) {
-    if (parent == NULL || child == NULL) return 1;
-    return parent->children.add(child);
-}
-
-static void ui__future_unsubscribe(borrowed mut ui_future_t* future, borrowed ui_component_instance_t* instance);
-static void ui__instance_destroy(borrowed mut ui_component_instance_t* instance);
-
-pub void ui_vnode_destroy(owned ui_vnode_t* node) {
-    if (node == NULL) return;
-    for (size_t i = 0; i < node->attrs.length; i++) {
-        free(node->attrs.items[i].name);
-        ui__value_destroy(&node->attrs.items[i].value);
-    }
-    for (size_t i = 0; i < node->children.length; i++) ui_vnode_destroy(node->children.items[i]);
-    node->attrs.destroy(); node->children.destroy();
-    free(node->key); free(node->tag); free(node->text);
-    if (node->kind == UI_VNODE_COMPONENT) {
-        ui_vnode_destroy(node->as.component.rendered);
-        ui__instance_destroy(node->as.component.instance);
-        free(node->as.component.props);
-    } else if (node->kind == UI_VNODE_CONTEXT_PROVIDER) {
-        free(node->as.provider.value);
-    }
-    free(node);
-}
 
 pub int ui_context_init(borrowed mut ui_context_t* context, borrowed const char* name, borrowed const void* default_value, size_t size) {
     if (context == NULL || default_value == NULL || size == 0) return 1;
@@ -574,6 +313,7 @@ static ui_vnode_t* ui__render_component(borrowed mut ui_runtime_t* runtime, borr
         instance = ui__instance_new(runtime, node, node->as.component.render);
         if (instance == NULL) { runtime->last_error = 1; return NULL; }
         node->as.component.instance = instance;
+        node->as.component.instance_destroy = ui__instance_destroy;
     }
     instance->owner = node; instance->hook_cursor = 0;
     ui_render_context_t render; render.runtime = runtime; render.instance = instance; render.providers = providers; render.error = 0;
@@ -699,6 +439,7 @@ static int ui__reconcile(borrowed mut ui_runtime_t* runtime, borrowed mut ui_vno
     }
     if (new_node->kind == UI_VNODE_COMPONENT) {
         new_node->as.component.instance = old_node->as.component.instance; old_node->as.component.instance = NULL;
+        new_node->as.component.instance_destroy = old_node->as.component.instance_destroy; old_node->as.component.instance_destroy = NULL;
         new_node->as.component.instance->owner = new_node;
         new_node->as.component.rendered = ui__render_component(runtime, new_node, providers);
         if (new_node->as.component.rendered == NULL) return 1;
@@ -883,13 +624,6 @@ pub void ui_runtime_destroy(borrowed mut ui_runtime_t* runtime) {
     ui_vnode_destroy(runtime->root); runtime->root = NULL; runtime->timers.destroy(); memset(runtime, 0, sizeof(*runtime));
 }
 
-#define UI_ELEMENT(name, tag_literal) ui_vnode_t* name = ui_vnode_element((tag_literal))
-#define UI_TEXT(name, text_value) ui_vnode_t* name = ui_vnode_text((text_value))
-#define UI_FRAGMENT(name) ui_vnode_t* name = ui_vnode_fragment()
-#define UI_COMPONENT(name, component_fn, props_ptr, props_size) ui_vnode_t* name = ui_vnode_component((component_fn), (props_ptr), (props_size))
-#define UI_PROVIDER(name, context_ptr, value_ptr, value_size) ui_vnode_t* name = ui_vnode_provider((context_ptr), (value_ptr), (value_size))
-#define UI_CHILD(parent, child) ui_vnode_child((parent), (child))
-#define UI_ATTR(parent, attr_name, attr_value) ui_vnode_attr((parent), (attr_name), (attr_value))
 #define use_state(context, T, initial_value) ui_use_state_raw((context), sizeof(T), &(T){(initial_value)})
 #define state_value(T, state) (*(T*)((state)->value))
 #define state_set(T, state, new_value) ui_state_set_raw((state), &(T){(new_value)}, sizeof(T))
