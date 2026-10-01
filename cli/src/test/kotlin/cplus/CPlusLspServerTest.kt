@@ -1592,8 +1592,8 @@ class CPlusLspServerTest {
         CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
 
         val response = output.toString(StandardCharsets.UTF_8)
-        assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"imported_box_t\""), response)
-        assertTrue(response.contains("\"id\":3,\"result\":[{\"uri\":\"${dependency.toUri()}\""), response)
+        assertResponseContains(response, "\"id\":2,\"result\":[{\"name\":\"imported_box_t\"")
+        assertResponseContains(response, "\"id\":3,\"result\":[{\"uri\":\"${dependency.toUri()}\"")
         val completion = response.substringAfter("\"id\":4,\"result\":")
             .substringBefore("Content-Length")
         assertTrue(completion.contains("\"label\":\"value\""), response)
@@ -1839,12 +1839,9 @@ class CPlusLspServerTest {
         CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
 
         val response = output.toString(StandardCharsets.UTF_8)
-        assertTrue(response.contains("\"id\":2,\"result\":[{\"name\":\"manifest_import_t\""), response)
-        assertTrue(response.contains("\"uri\":\"${dependency.toUri()}\""), response)
-        assertTrue(
-            response.contains("\"id\":4,\"result\":[{\"uri\":\"${dependency.toUri()}\""),
-            response
-        )
+        assertResponseContains(response, "\"id\":2,\"result\":[{\"name\":\"manifest_import_t\"")
+        assertResponseContains(response, "\"uri\":\"${dependency.toUri()}\"")
+        assertResponseContains(response, "\"id\":4,\"result\":[{\"uri\":\"${dependency.toUri()}\"")
     }
 
     @Test
@@ -1873,10 +1870,10 @@ class CPlusLspServerTest {
         CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
 
         val response = output.toString(StandardCharsets.UTF_8)
-        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"${dependency.toUri()}\""), response)
-        assertTrue(response.contains("\"id\":3,\"result\":{\"isIncomplete\":false"), response)
-        assertTrue(response.contains("\"label\":\"imported_function\""), response)
-        assertTrue(!response.contains("\"label\":\"hidden_function\""), response)
+        assertResponseContains(response, "\"id\":2,\"result\":[{\"uri\":\"${dependency.toUri()}\"")
+        assertResponseContains(response, "\"id\":3,\"result\":{\"isIncomplete\":false")
+        assertResponseContains(response, "\"label\":\"imported_function\"")
+        assertFalse(response.contains("\"label\":\"hidden_function\""), response)
     }
 
     private class ChunkedInputStream(
@@ -1890,5 +1887,12 @@ class CPlusLspServerTest {
     private fun frame(message: String): String {
         val length = message.toByteArray(StandardCharsets.UTF_8).size
         return "Content-Length: $length\r\n\r\n$message"
+    }
+
+    private fun assertResponseContains(response: String, expected: String) {
+        if (!response.contains(expected)) {
+            System.err.println("LSP_RESPONSE_DIAGNOSTIC expected=$expected response=$response")
+        }
+        assertTrue(response.contains(expected), response)
     }
 }
