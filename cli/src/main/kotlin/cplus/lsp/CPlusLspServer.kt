@@ -1162,6 +1162,16 @@ class CPlusLspServer(
         if (cast != null) {
             typeShape(cast.groupValues[1])?.let { return it }
         }
+        splitTopLevelNumericBinary(value)?.let { (left, right) ->
+            val leftType = expressionType(document, left)
+            val rightType = expressionType(document, right)
+            if (leftType != null && rightType != null &&
+                leftType.pointerDepth == 0 && leftType.arrayDepth == 0 &&
+                rightType.pointerDepth == 0 && rightType.arrayDepth == 0
+            ) {
+                numericBinaryType(leftType.base, rightType.base)?.let { return TypeShape(it, 0, 0) }
+            }
+        }
         if (value.startsWith("*")) {
             val pointed = expressionType(document, value.substring(1)) ?: return null
             if (pointed.pointerDepth == 0) return null
@@ -1205,6 +1215,43 @@ class CPlusLspServer(
             pointeeConst = declared.pointeeConst,
             pointeeVolatile = declared.pointeeVolatile
         )
+    }
+
+    private fun splitTopLevelNumericBinary(value: String): Pair<String, String>? {
+        var parentheses = 0
+        var brackets = 0
+        value.forEachIndexed { index, character ->
+            when (character) {
+                '(' -> parentheses++
+                ')' -> parentheses--
+                '[' -> brackets++
+                ']' -> brackets--
+                '+', '-', '*', '/', '%' -> if (parentheses == 0 && brackets == 0 && index > 0) {
+                    val previous = value[index - 1]
+                    if (previous !in "+-*/%&|^!<>=") {
+                        return value.substring(0, index).trim() to value.substring(index + 1).trim()
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun numericBinaryType(left: String, right: String): String? {
+        val leftRank = numericRank(left) ?: return null
+        val rightRank = numericRank(right) ?: return null
+        val leftPromoted = if (leftRank <= INTEGER_PROMOTION_MAX_RANK) INT_RANK else leftRank
+        val rightPromoted = if (rightRank <= INTEGER_PROMOTION_MAX_RANK) INT_RANK else rightRank
+        return numericBaseForRank(maxOf(leftPromoted, rightPromoted))
+    }
+
+    private fun numericBaseForRank(rank: Int): String? = when (rank) {
+        INT_RANK -> "int"
+        4 -> "long"
+        LONG_LONG_RANK -> "long long"
+        FLOAT_RANK -> "float"
+        DOUBLE_RANK -> "double"
+        else -> null
     }
 
     private fun matchingOuterParentheses(value: String): Boolean {
