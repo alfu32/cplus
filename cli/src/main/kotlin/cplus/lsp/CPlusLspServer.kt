@@ -1215,7 +1215,20 @@ class CPlusLspServer(
         if (value.startsWith("'") && value.endsWith("'")) return TypeShape("int", 0, 0)
         val address = value.removePrefix("&").takeIf { value.startsWith("&") }
         val name = address ?: value
-        if (!name.matches(IDENTIFIER)) return null
+        if (!name.matches(IDENTIFIER)) {
+            val member = receiverValue(
+                document,
+                name,
+                document.snapshot.text.indexOf(name).coerceAtLeast(0)
+            ) ?: return null
+            return TypeShape(
+                resolveTypeAlias(member.typeName),
+                member.pointerDepth + if (address != null) 1 else 0,
+                member.arrayDepth,
+                pointeeConst = member.pointeeConst,
+                pointeeVolatile = member.pointeeVolatile
+            )
+        }
         val function = visibleSymbols(document)
             .filter { it.kind in setOf(6, 12) && it.name == name }
             .minByOrNull { it.selection.startOffset }
