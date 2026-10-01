@@ -116,7 +116,14 @@ val installHostParserLibrary = tasks.register("installHostParserLibrary") {
         // so the resource loader receives `lib/.../ktreesitter-c.dll`, not a
         // configuration subdirectory. The previous Copy task matched only
         // the output root and silently became NO-SOURCE on Windows.
-        val names = setOf("libktreesitter-c.so", "libktreesitter-c.dylib", "ktreesitter-c.dll")
+        val names = setOf(
+            "libktreesitter-c.so",
+            "libktreesitter-c.dylib",
+            "ktreesitter-c.dll",
+            // MinGW's GNU generator adds the conventional `lib` prefix to
+            // Windows DLLs unless the target explicitly disables it.
+            "libktreesitter-c.dll"
+        )
         val roots = listOf(
             nativeOutputDirectory.get().asFile,
             layout.buildDirectory.dir("native-parser-cmake").get().asFile
@@ -127,7 +134,8 @@ val installHostParserLibrary = tasks.register("installHostParserLibrary") {
             .firstOrNull { it.isFile && it.name in names }
             ?: error("Native parser build did not produce one of: ${names.joinToString()}")
         destination.mkdirs()
-        library.copyTo(destination.resolve(library.name), overwrite = true)
+        val destinationName = if (nativeHostOs == "windows") "ktreesitter-c.dll" else library.name
+        library.copyTo(destination.resolve(destinationName), overwrite = true)
     }
 }
 
@@ -227,6 +235,7 @@ val buildHostKTreeSitter = tasks.register("buildHostKTreeSitter") {
                 RUNTIME_OUTPUT_DIRECTORY_RELEASE "${normalized(outputRoot)}"
                 LIBRARY_OUTPUT_DIRECTORY_RELEASE "${normalized(outputRoot)}"
                 ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${normalized(outputRoot)}"
+                PREFIX ""
                 DEFINE_SYMBOL ""
             )
             """.trimIndent()
