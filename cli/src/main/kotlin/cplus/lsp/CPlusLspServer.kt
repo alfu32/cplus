@@ -1042,6 +1042,14 @@ class CPlusLspServer(
                     (if (expected.pointeeVolatile && !actual.pointeeVolatile) 1 else 0),
                 true
             )
+            if (expected.pointerDepth == 1 && expected.arrayDepth > 0 &&
+                actual.pointerDepth == 0 && actual.arrayDepth == expected.arrayDepth + 1 &&
+                expectedBase == actualBase && qualificationCompatible
+            ) return TypeMatch(
+                2 + (if (expected.pointeeConst && !actual.pointeeConst) 1 else 0) +
+                    (if (expected.pointeeVolatile && !actual.pointeeVolatile) 1 else 0),
+                true
+            )
             if (expected.pointerDepth == 1 && expected.arrayDepth == 0 &&
                 actual.pointerDepth == 1 && actual.arrayDepth == 0 &&
                 (expectedBase == "void" || actualBase == "void") &&

@@ -991,6 +991,30 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesAStackedArrayAgainstPointerToArrayOverload() {
+        val uri = "file:///overload-pointer-to-array.cp"
+        val source = "int choose(int* values) { return values[0]; }\n" +
+            "int choose(int (*values)[3]) { return values[0][0]; }\n" +
+            "int main(void) { int matrix[2][3] = {{1, 2, 3}, {4, 5, 6}}; return choose(matrix); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val callPosition = source.lines()[2].indexOf("choose")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$callPosition}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":1,"), response)
+    }
+
+    @Test
     fun resolvesAFunctionPointerOverloadAgainstAFunctionValue() {
         val uri = "file:///overload-callable.cp"
         val source = "int increment(int value) { return value + 1; }\n" +
