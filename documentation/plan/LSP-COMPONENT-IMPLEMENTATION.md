@@ -481,3 +481,10 @@ target-specific compiler/ABI support remain out of scope for this roadmap.
   converting through a host `Path`; the resolved `Path` remains authoritative
   for filesystem reads. The focused import-closure suite passes locally after
   this correction.
+- CI run `36838804114` closes the cross-host replay: all four parser-host jobs,
+  the full CLI/JAR packaging job, and packaged-LSP validation passed on Linux
+  x86_64/arm64, macOS arm64, and Windows x86_64. The final fix projects root
+  snapshot symbols materialized from imports through the live-document URI
+  map, eliminating canonical/lexical duplicates such as macOS `/private/var`
+  versus `/var`. The three import-closure regressions are now green on every
+  supported host; benchmark thresholds were unchanged.
