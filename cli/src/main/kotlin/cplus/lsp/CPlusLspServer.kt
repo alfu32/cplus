@@ -1022,16 +1022,22 @@ class CPlusLspServer(
         val expectedArray = expected.arrayDepth > 0
         val actualArray = actual.arrayDepth > 0
         if (expectedPointer || expectedArray || actualPointer || actualArray) {
+            val qualificationCompatible = !actual.pointeeConst || expected.pointeeConst
             if (expectedBase == actualBase && expected.pointerDepth == actual.pointerDepth &&
-                expected.arrayDepth == actual.arrayDepth
-            ) return TypeMatch(0, true)
+                expected.arrayDepth == actual.arrayDepth && qualificationCompatible
+            ) {
+                return TypeMatch(if (!expected.pointeeConst && actual.pointeeConst) 0 else
+                    if (expected.pointeeConst && !actual.pointeeConst) 1 else 0, true)
+            }
             if (expected.pointerDepth == 1 && expected.arrayDepth == 0 &&
                 actual.pointerDepth == 0 && actual.arrayDepth == 1 && expectedBase == actualBase
-            ) return TypeMatch(2, true)
+                && (!actual.pointeeConst || expected.pointeeConst)
+            ) return TypeMatch(if (expected.pointeeConst && !actual.pointeeConst) 3 else 2, true)
             if (expected.pointerDepth == 1 && expected.arrayDepth == 0 &&
                 actual.pointerDepth == 1 && actual.arrayDepth == 0 &&
-                (expectedBase == "void" || actualBase == "void")
-            ) return TypeMatch(8, true)
+                (expectedBase == "void" || actualBase == "void") &&
+                (!actual.pointeeConst || expected.pointeeConst)
+            ) return TypeMatch(if (expected.pointeeConst && !actual.pointeeConst) 9 else 8, true)
             return TypeMatch(0, false)
         }
         if (expectedBase == actualBase) return TypeMatch(0, true)
@@ -1085,6 +1091,9 @@ class CPlusLspServer(
     }
 
     private fun typeShape(declaration: String): TypeShape? {
+        val firstPointer = declaration.indexOf('*')
+        val pointeeConst = firstPointer >= 0 &&
+            Regex("\\bconst\\b").containsMatchIn(declaration.substring(0, firstPointer))
         val cleaned = declaration
             .replace(Regex("\\b(borrowed|owned|mut|const|volatile|restrict)\\b"), " ")
             .trim()
@@ -1098,7 +1107,8 @@ class CPlusLspServer(
                 pointerDepth = 1,
                 arrayDepth = 0,
                 callableArity = parameterCount(parameters),
-                callableReturnBase = callable.groupValues[1]
+                callableReturnBase = callable.groupValues[1],
+                pointeeConst = pointeeConst
             )
         }
         val pointerDepth = cleaned.count { it == '*' }
@@ -1108,7 +1118,7 @@ class CPlusLspServer(
             ?: Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)")
                 .find(cleaned)?.groupValues?.get(1)
             ?: return null
-        return TypeShape(base, pointerDepth, arrayDepth)
+        return TypeShape(base, pointerDepth, arrayDepth, pointeeConst = pointeeConst)
     }
 
     private fun expressionType(document: LspDocument, expression: String): TypeShape? {
@@ -1161,7 +1171,8 @@ class CPlusLspServer(
         return TypeShape(
             resolveTypeAlias(declared.typeName),
             declared.pointerDepth + if (address != null) 1 else 0,
-            declared.arrayDepth
+            declared.arrayDepth,
+            pointeeConst = declared.pointeeConst
         )
     }
 
@@ -1190,7 +1201,8 @@ class CPlusLspServer(
             pointerDepth = 1,
             arrayDepth = 0,
             callableArity = parameterCount(symbol.detail.substring(open + 1, close)),
-            callableReturnBase = returnBase
+            callableReturnBase = returnBase,
+            pointeeConst = typeShape(symbol.detail.substring(0, nameOffset))?.pointeeConst == true
         )
     }
 
@@ -1474,7 +1486,12 @@ class CPlusLspServer(
         val returnDeclaration = symbol.detail.substring(0, nameOffset)
             .replace(Regex("\\b(pub|priv|static|comptime)\\b"), " ")
         val shape = typeShape(returnDeclaration) ?: return null
-        return DeclaredType(resolveTypeAlias(shape.base), shape.pointerDepth, shape.arrayDepth)
+        return DeclaredType(
+            resolveTypeAlias(shape.base),
+            shape.pointerDepth,
+            shape.arrayDepth,
+            shape.pointeeConst
+        )
     }
 
     private fun resolveTypeAlias(typeName: String): String {
@@ -1501,13 +1518,27 @@ class CPlusLspServer(
         // `const counter_t *p` and `counter_t *const p` have the same receiver
         // shape. Keep the base type and pointer depth, while leaving complete
         // C type checking to the selected compiler.
-        val beforeName = symbol.detail.substringBeforeLast(symbol.name)
+        val rawBeforeName = symbol.detail.substringBeforeLast(symbol.name)
+        val firstPointer = rawBeforeName.indexOf('*')
+        val pointeeConst = if (firstPointer >= 0) {
+            Regex("\\bconst\\b").containsMatchIn(rawBeforeName.substring(0, firstPointer))
+        } else {
+            // A const scalar becomes a pointer-to-const when its address is
+            // taken (`const int value; &value`).
+            Regex("\\bconst\\b").containsMatchIn(rawBeforeName)
+        }
+        val beforeName = rawBeforeName
             .replace(Regex("\\b(const|volatile|restrict)\\b"), " ")
             .trim()
         val match = Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*(\\*+)?\\s*$")
             .find(beforeName) ?: return null
         val arrayDepth = Regex("\\[[^]]*\\]").findAll(symbol.detail.substringAfter(symbol.name)).count()
-        return DeclaredType(match.groupValues[1], match.groupValues[2].length, arrayDepth)
+        return DeclaredType(
+            match.groupValues[1],
+            match.groupValues[2].length,
+            arrayDepth,
+            pointeeConst
+        )
     }
 
     private fun notify(method: String, params: String) {
@@ -1644,14 +1675,20 @@ private data class ReadView(
     val importsByDocument: Map<String, Set<String>>
 )
 
-private data class DeclaredType(val typeName: String, val pointerDepth: Int, val arrayDepth: Int)
+private data class DeclaredType(
+    val typeName: String,
+    val pointerDepth: Int,
+    val arrayDepth: Int,
+    val pointeeConst: Boolean = false
+)
 
 private data class TypeShape(
     val base: String,
     val pointerDepth: Int,
     val arrayDepth: Int,
     val callableArity: Int? = null,
-    val callableReturnBase: String? = null
+    val callableReturnBase: String? = null,
+    val pointeeConst: Boolean = false
 )
 
 private data class TypeMatch(val score: Int, val compatible: Boolean)

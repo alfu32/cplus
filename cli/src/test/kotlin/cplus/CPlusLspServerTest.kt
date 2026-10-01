@@ -889,6 +889,34 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun ranksPointerQualificationWithoutSelectingAnUnsafeConstConversion() {
+        val uri = "file:///overload-qualified-pointers.cp"
+        val source = "int choose(const int* values) { return values[0]; }\n" +
+            "int choose(int* values) { return values[0]; }\n" +
+            "int main(void) { int value = 1; const int fixed = 2; return choose(&value) + choose(&fixed); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val firstCall = source.lines()[2].indexOf("choose")
+        val secondCall = source.lines()[2].lastIndexOf("choose")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$firstCall}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$secondCall}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":1,"), response)
+        assertTrue(response.contains("\"id\":3,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":0,"), response)
+    }
+
+    @Test
     fun rejectsAnIncompatiblePointerOverload() {
         val uri = "file:///overload-incompatible-pointers.cp"
         val source = "int choose(int* values) { return values[0]; }\n" +
