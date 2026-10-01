@@ -539,17 +539,14 @@ class CPlusLspServer(
             !documentUri.startsWith("file:", ignoreCase = true)
         ) return null
         return runCatching {
-            val resolved = URI(documentUri).resolve(requested).normalize()
-            if (resolved.scheme.equals("file", ignoreCase = true) &&
-                resolved.rawAuthority == null &&
-                resolved.rawPath.startsWith("/")
-            ) {
-                // Keep the canonical Path.toUri() spelling (file:///path) while
-                // retaining the lexical path from the original document URI.
-                "file://${resolved.rawPath}"
-            } else {
-                resolved.toString()
-            }
+            // Use the lexical source path, rather than the filesystem-resolved
+            // import path, so symlinks remain visible to the editor.  Path.toUri
+            // supplies the portable file:/// spelling and Windows drive syntax.
+            pathFromUri(documentUri)
+                ?.let { lexicalImportPath(it, requested) }
+                ?.toUri()
+                ?.toString()
+                ?: URI(documentUri).resolve(requested).normalize().toString()
         }.getOrNull()
     }
 
