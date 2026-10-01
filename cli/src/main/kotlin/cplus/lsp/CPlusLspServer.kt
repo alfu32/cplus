@@ -65,6 +65,8 @@ class CPlusLspServer(
     private val stateLock = ReentrantReadWriteLock(true)
     private val comptimeIndexer = CPlusComptimeIndexer()
     private var importPaths = CPlusImportPaths()
+    /** The URI spelling supplied by the editor; kept separate from real paths. */
+    private var workspaceRootUri: String? = null
 
     fun serve() {
         try {
@@ -253,6 +255,7 @@ class CPlusLspServer(
     }
 
     private fun configureWorkspace(request: Json.Object) {
+        workspaceRootUri = request.rootUri()
         val root = request.rootUri()?.let(::pathFromUri)
         val project = root?.let(CPlusProject::find)
         importPaths = if (project != null) {
@@ -533,21 +536,41 @@ class CPlusLspServer(
     }
 
     private fun lexicalImportUri(documentUri: String, requested: String): String? {
-        if (requested.startsWith("stdlib:/") ||
-            requested.startsWith("module:/") ||
-            requested.startsWith("project:/") ||
-            !documentUri.startsWith("file:", ignoreCase = true)
-        ) return null
+        if (!documentUri.startsWith("file:", ignoreCase = true)) return null
         return runCatching {
-            // Use the lexical source path, rather than the filesystem-resolved
-            // import path, so symlinks remain visible to the editor.  Path.toUri
-            // supplies the portable file:/// spelling and Windows drive syntax.
-            pathFromUri(documentUri)
-                ?.let { lexicalImportPath(it, requested) }
-                ?.toUri()
-                ?.toString()
-                ?: URI(documentUri).resolve(requested).normalize().toString()
+            if (!requested.startsWith("stdlib:/") &&
+                !requested.startsWith("module:/") &&
+                !requested.startsWith("project:/")
+            ) {
+                // URI resolution preserves the exact directory spelling sent by
+                // the editor.  Do not round-trip through Path: on macOS that can
+                // turn /var into /private/var, and on Windows it can alter the
+                // drive-letter spelling.
+                return@runCatching fileUri(URI(documentUri).resolve(requested).normalize())
+            }
+
+            val sourcePath = pathFromUri(documentUri) ?: return@runCatching null
+            val importedPath = lexicalImportPath(sourcePath, requested) ?: return@runCatching null
+            val rootUri = workspaceRootUri ?: return@runCatching importedPath.toUri().toString()
+            val workspacePath = pathFromUri(rootUri) ?: return@runCatching importedPath.toUri().toString()
+            val projectRoot = CPlusProject.find(workspacePath)?.root ?: workspacePath
+            val moduleRoot = importPaths.moduleRoots.firstOrNull {
+                importedPath.startsWith(it.toAbsolutePath().normalize())
+            } ?: return@runCatching importedPath.toUri().toString()
+            val projectRelativeRoot = projectRoot.relativize(moduleRoot.toAbsolutePath().normalize())
+            val moduleRelativeFile = moduleRoot.toAbsolutePath().normalize().relativize(importedPath)
+            val relative = projectRelativeRoot.resolve(moduleRelativeFile)
+                .toString().replace(java.io.File.separatorChar, '/')
+            fileUri(URI(rootUri).resolve(relative))
         }.getOrNull()
+    }
+
+    /** Normalize only the URI syntax, never the lexical filesystem path. */
+    private fun fileUri(uri: URI): String {
+        if (!uri.scheme.equals("file", ignoreCase = true) || uri.rawAuthority != null) {
+            return uri.toString()
+        }
+        return "file://${uri.rawPath}"
     }
 
     private fun importPath(text: String): String? = IMPORT_LITERAL.find(text)?.groupValues?.get(1)?.let(::unescapeImport)
