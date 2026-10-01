@@ -46,8 +46,20 @@ typedef struct ui_drawable_t {
 } ui_drawable_t;
 comptime typedef dynamic_list(ui_drawable_t) ui_drawable_list_t;
 
+typedef struct ui_layout_result_t ui_layout_result_t;
+
+static int ui__layout_result_init_impl(borrowed mut ui_layout_result_t* result);
+static void ui__layout_result_destroy_impl(borrowed mut ui_layout_result_t* result);
+static int ui__layout_run_impl(borrowed mut ui_layout_result_t* result, borrowed const ui_vnode_t* root, double viewport_width, double viewport_height);
+
 typedef struct ui_layout_result_t {
     ui_drawable_list_t drawables;
+
+    pub int init(borrowed mut *self) { return ui__layout_result_init_impl(self); }
+    pub void destroy(borrowed mut *self) { ui__layout_result_destroy_impl(self); }
+    pub int run(borrowed mut *self, borrowed const ui_vnode_t* root, double viewport_width, double viewport_height) {
+        return ui__layout_run_impl(self, root, viewport_width, viewport_height);
+    }
 } ui_layout_result_t;
 
 static ui_rect_t ui__layout_resolve_rect(borrowed const ui_vnode_t* node, ui_rect_t viewport, ui_rect_t parent, borrowed const ui_rect_t* sibling) {
@@ -62,17 +74,20 @@ static ui_rect_t ui__layout_resolve_rect(borrowed const ui_vnode_t* node, ui_rec
     return result;
 }
 
-pub int ui_layout_result_init(borrowed mut ui_layout_result_t* result) {
+static int ui__layout_result_init_impl(borrowed mut ui_layout_result_t* result) {
     if (result == NULL) return 1;
     memset(result, 0, sizeof(*result));
     return result->drawables.init();
 }
 
-pub void ui_layout_result_destroy(borrowed mut ui_layout_result_t* result) {
+static void ui__layout_result_destroy_impl(borrowed mut ui_layout_result_t* result) {
     if (result == NULL) return;
     for (size_t i = 0; i < result->drawables.length; i++) {
         ui_drawable_t* drawable = &result->drawables.items[i];
-        if (drawable->kind == UI_DRAWABLE_BOX) ui_drawable_index_list__destroy(&drawable->as.box.children);
+        if (drawable->kind == UI_DRAWABLE_BOX) {
+            ui_drawable_index_list_t* children = &drawable->as.box.children;
+            children->destroy();
+        }
     }
     result->drawables.destroy();
     memset(result, 0, sizeof(*result));
@@ -83,7 +98,8 @@ static int ui__layout_attach_child(borrowed mut ui_layout_result_t* result, size
     if (parent_drawable >= result->drawables.length) return 1;
     ui_drawable_t* parent = &result->drawables.items[parent_drawable];
     if (parent->kind != UI_DRAWABLE_BOX) return 0;
-    return ui_drawable_index_list__add(&parent->as.box.children, child_drawable);
+    ui_drawable_index_list_t* children = &parent->as.box.children;
+    return children->add(child_drawable);
 }
 
 static int ui__layout_node(
@@ -166,11 +182,15 @@ static int ui__layout_node(
         drawable.as.box.rect = rect;
         drawable.as.box.style = &node->style.graphics;
         drawable.as.box.text = node->kind == UI_VNODE_TEXT ? node->text : NULL;
-        if (ui_drawable_index_list__init(&drawable.as.box.children) != 0) return 1;
+        ui_drawable_index_list_t* children = &drawable.as.box.children;
+        if (children->init() != 0) return 1;
     }
 
     if (result->drawables.add(drawable) != 0) {
-        if (drawable.kind == UI_DRAWABLE_BOX) ui_drawable_index_list__destroy(&drawable.as.box.children);
+        if (drawable.kind == UI_DRAWABLE_BOX) {
+            ui_drawable_index_list_t* children = &drawable.as.box.children;
+            children->destroy();
+        }
         return 1;
     }
     if (ui__layout_attach_child(result, parent_drawable, index) != 0) return 1;
@@ -188,12 +208,17 @@ static int ui__layout_node(
     return 0;
 }
 
-pub int ui_layout_run(borrowed const ui_vnode_t* root, double viewport_width, double viewport_height, borrowed mut ui_layout_result_t* result) {
+static int ui__layout_run_impl(borrowed mut ui_layout_result_t* result, borrowed const ui_vnode_t* root, double viewport_width, double viewport_height) {
     if (root == NULL || result == NULL) return 1;
     if (result->drawables.items == NULL && result->drawables.capacity == 0 && result->drawables.length == 0) {
-        if (ui_layout_result_init(result) != 0) return 1;
+        if (result->init() != 0) return 1;
     } else {
-        for (size_t i = 0; i < result->drawables.length; i++) if (result->drawables.items[i].kind == UI_DRAWABLE_BOX) ui_drawable_index_list__destroy(&result->drawables.items[i].as.box.children);
+        for (size_t i = 0; i < result->drawables.length; i++) {
+            if (result->drawables.items[i].kind == UI_DRAWABLE_BOX) {
+                ui_drawable_index_list_t* children = &result->drawables.items[i].as.box.children;
+                children->destroy();
+            }
+        }
         result->drawables.length = 0;
     }
     ui_rect_t viewport = {0.0, 0.0, viewport_width, viewport_height};

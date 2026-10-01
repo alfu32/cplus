@@ -24,13 +24,15 @@ A `ui_vnode_t` owns:
 - layout and graphics style
 - kind-specific component/provider/image data
 
-Nodes are created before insertion and child ownership transfers to the parent:
+Nodes are created before insertion and child ownership transfers to the parent. The idiomatic C+ form uses static constructors plus instance methods:
 
 ```c
-UI_ELEMENT(root, "panel");
-UI_TEXT(label, "hello");
-UI_CHILD(root, label);
+ui_vnode_t* root = ui_vnode_t.element("panel");
+ui_vnode_t* label = ui_vnode_t.text_node("hello");
+root->child(label);
 ```
+
+The `UI_ELEMENT` / `UI_TEXT` / `UI_CHILD` C-preprocessor macros remain as compact compatibility helpers. Because ordinary `#define` expansion happens after C+ receiver resolution, prefer the explicit static-constructor form when the declared variable will subsequently be used with receiver calls.
 
 The generic dynamic list also provides value-semantic `add(T value)`, equivalent to `push(&value)`.
 
@@ -49,14 +51,14 @@ height   = 0
 Layout accessors:
 
 ```c
-ui_vnode_position(node, UI_POSITION_FIXED);
-ui_vnode_top(node, 10);
-ui_vnode_left(node, 20);
-ui_vnode_width(node, 300);
-ui_vnode_height(node, 100);
+node->position(UI_POSITION_FIXED);
+node->top(10);
+node->left(20);
+node->width(300);
+node->height(100);
 
 // or atomically:
-ui_vnode_layout(node, UI_POSITION_RELATIVE_PARENT, 10, 20, 300, 100);
+node->layout(UI_POSITION_RELATIVE_PARENT, 10, 20, 300, 100);
 ```
 
 Position modes are deliberately smaller than CSS:
@@ -70,13 +72,13 @@ The anchor is always top-left. The layout engine never implements block flow, in
 Graphics style fields are renderer-neutral:
 
 ```c
-ui_vnode_background(node, "#202020");
-ui_vnode_color(node, "white");
-ui_vnode_border(node, "1 solid gray");
-ui_vnode_font_family(node, "mono");
-ui_vnode_font_size(node, 14);
-ui_vnode_font_weight(node, 700);
-ui_vnode_font_decoration(node, UI_FONT_DECORATION_UNDERLINE);
+node->background("#202020");
+node->color("white");
+node->border("1 solid gray");
+node->font_family("mono");
+node->font_size(14);
+node->font_weight(700);
+node->font_decoration(UI_FONT_DECORATION_UNDERLINE);
 ```
 
 The strings are copied and owned by the vnode.
@@ -86,8 +88,8 @@ The strings are copied and owned by the vnode.
 Images are explicit VDOM nodes with an opaque borrowed bitmap handle:
 
 ```c
-UI_IMAGE(image, bitmap);
-ui_vnode_layout(image, UI_POSITION_RELATIVE_PARENT, 10, 20, 64, 64);
+ui_vnode_t* image = ui_vnode_t.image(bitmap);
+image->layout(UI_POSITION_RELATIVE_PARENT, 10, 20, 64, 64);
 ```
 
 The core does not prescribe pixel format or GPU representation. A concrete renderer interprets the bitmap handle it is given.
@@ -107,10 +109,10 @@ Typical use:
 
 ```c
 ui_layout_result_t layout = {0};
-ui_layout_result_init(&layout);
-ui_layout_run(root, 1280, 720, &layout);
+layout.init();
+layout.run(root, 1280, 720);
 // consume layout.drawables
-ui_layout_result_destroy(&layout);
+layout.destroy();
 ```
 
 ## Graphics renderer interface
@@ -127,8 +129,8 @@ typedef struct ui_renderer_t {
 } ui_renderer_t;
 ```
 
-`ui_renderer_draw(renderer, layout)` visits the flat drawable list in paint order.
-`ui_render_vdom(root, viewport_width, viewport_height, renderer)` is the convenience path that performs layout and rendering in one call.
+`renderer.draw(layout)` visits the flat drawable list in paint order.
+`renderer.render(root, viewport_width, viewport_height)` is the convenience path that performs layout and rendering in one call.
 
 A Raylib renderer can map `draw_box` to rectangle/border/text primitives and `draw_image` to a texture draw. A terminal renderer can map boxes/text into cells and images to whichever terminal graphics protocol it supports. Neither backend owns layout semantics.
 
@@ -138,8 +140,8 @@ A Raylib renderer can map `draw_box` to rectangle/border/text primitives and `dr
 
 ```c
 ui_printf_renderer_state_t state;
-ui_renderer_t renderer = ui_printf_renderer(&state, stdout);
-ui_render_vdom(root, 800, 600, &renderer);
+ui_renderer_t renderer = state.renderer(stdout);
+renderer.render(root, 800, 600);
 ```
 
 Example output:
@@ -167,6 +169,30 @@ This backend is useful both for debugging and for deterministic layout integrati
 - non-blocking tick and optional blocking event loop
 
 The host `ui_driver_t` remains the event/mutation runtime boundary. It is separate from `ui_renderer_t`: a future Raylib or terminal host can combine an event driver with a graphics renderer without coupling React, layout and graphics code.
+
+## C+ receiver-oriented API
+
+The framework source deliberately avoids C-style public free functions. Operations live on the type that owns the state:
+
+```c
+ui_value_t role = ui_value_t.string("main");
+root->attr("role", role);
+
+ui_context_t context;
+context.init("theme", &default_theme, sizeof(default_theme));
+
+ui_future_t request;
+request.init();
+request.resolve(&response, sizeof(response));
+
+ui_runtime_t runtime;
+runtime.init(driver);
+runtime.mount(root);
+runtime.tick();
+runtime.destroy();
+```
+
+Hook macros are only typed conveniences over methods on `ui_render_context_t` / `ui_state_t`; the receiver remains the actual owner of the operation.
 
 ## Tests
 

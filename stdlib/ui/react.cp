@@ -8,6 +8,17 @@
 
 comptime import "stdlib:/ui/vdom.cp";
 
+static void* ui__react_memdup(borrowed const void* value, size_t size) {
+    if (value == NULL || size == 0) return NULL;
+    void* copy = malloc(size);
+    if (copy != NULL) memcpy(copy, value, size);
+    return copy;
+}
+
+static void ui__vnode_destroy_compat(owned ui_vnode_t* node) {
+    if (node != NULL) node->destroy();
+}
+
 typedef ui_component_instance_t* ui_component_instance_ref_t;
 comptime typedef dynamic_list(ui_component_instance_ref_t) ui_component_instance_list_t;
 
@@ -46,11 +57,28 @@ typedef void (*ui_cleanup_fn)(borrowed void* user);
 typedef ui_cleanup_fn (*ui_effect_fn)(borrowed void* user);
 typedef void (*ui_timer_fn)(borrowed mut ui_runtime_t* runtime, borrowed void* user);
 
-struct ui_context_t {
+typedef struct ui_future_t ui_future_t;
+typedef struct ui_state_t ui_state_t;
+
+static int ui__context_init_impl(borrowed mut ui_context_t* context, borrowed const char* name, borrowed const void* default_value, size_t size);
+static void ui__context_destroy_impl(borrowed mut ui_context_t* context);
+static borrowed const void* ui__use_context_raw_impl(borrowed ui_render_context_t* render, borrowed ui_context_t* context, size_t expected_size);
+static int ui__future_init_impl(borrowed mut ui_future_t* future);
+static int ui__future_resolve_impl(borrowed mut ui_future_t* future, borrowed const void* value, size_t size);
+static int ui__future_reject_impl(borrowed mut ui_future_t* future, int error_code);
+static int ui__future_cancel_impl(borrowed mut ui_future_t* future);
+static void ui__future_destroy_impl(borrowed mut ui_future_t* future);
+
+typedef struct ui_context_t {
     const char* name;
     owned void* default_value;
     size_t value_size;
-};
+
+    pub int init(borrowed mut *self, borrowed const char* name, borrowed const void* default_value, size_t size) {
+        return ui__context_init_impl(self, name, default_value, size);
+    }
+    pub void destroy(borrowed mut *self) { ui__context_destroy_impl(self); }
+} ui_context_t;
 
 typedef struct ui_provider_frame_t {
     borrowed ui_context_t* context;
@@ -72,6 +100,12 @@ typedef struct ui_future_t {
     size_t value_size;
     int error_code;
     ui_component_instance_list_t subscribers;
+
+    pub int init(borrowed mut *self) { return ui__future_init_impl(self); }
+    pub int resolve(borrowed mut *self, borrowed const void* value, size_t size) { return ui__future_resolve_impl(self, value, size); }
+    pub int reject(borrowed mut *self, int error_code) { return ui__future_reject_impl(self, error_code); }
+    pub int cancel(borrowed mut *self) { return ui__future_cancel_impl(self); }
+    pub void destroy(borrowed mut *self) { ui__future_destroy_impl(self); }
 } ui_future_t;
 
 typedef enum ui_hook_kind_t {
@@ -80,11 +114,16 @@ typedef enum ui_hook_kind_t {
     UI_HOOK_FUTURE
 } ui_hook_kind_t;
 
+static int ui__state_set_raw_impl(borrowed mut ui_state_t* state, borrowed const void* value, size_t size);
 typedef struct ui_state_t {
     owned void* value;
     size_t size;
     borrowed ui_runtime_t* runtime;
     borrowed ui_component_instance_t* owner;
+
+    pub int set_raw(borrowed mut *self, borrowed const void* value, size_t size) {
+        return ui__state_set_raw_impl(self, value, size);
+    }
 } ui_state_t;
 
 typedef struct ui_hook_t {
@@ -124,14 +163,41 @@ typedef struct ui_timer_t {
 } ui_timer_t;
 comptime typedef dynamic_list(ui_timer_t) ui_timer_list_t;
 
-struct ui_render_context_t {
+static borrowed ui_state_t* ui__use_state_raw_impl(borrowed mut ui_render_context_t* render, size_t size, borrowed const void* initial_value);
+static int ui__use_effect_raw_impl(borrowed mut ui_render_context_t* render, ui_effect_fn effect, borrowed void* user, borrowed const void* deps, size_t deps_size);
+static borrowed ui_future_t* ui__use_future_impl(borrowed mut ui_render_context_t* render, borrowed mut ui_future_t* future);
+typedef struct ui_render_context_t {
     borrowed ui_runtime_t* runtime;
     borrowed ui_component_instance_t* instance;
     borrowed ui_provider_frame_t* providers;
     int error;
-};
 
-struct ui_runtime_t {
+    pub borrowed ui_state_t* use_state_raw(borrowed mut *self, size_t size, borrowed const void* initial_value) {
+        return ui__use_state_raw_impl(self, size, initial_value);
+    }
+    pub borrowed const void* use_context_raw(borrowed mut *self, borrowed ui_context_t* context, size_t expected_size) {
+        return ui__use_context_raw_impl(self, context, expected_size);
+    }
+    pub int use_effect_raw(borrowed mut *self, ui_effect_fn effect, borrowed void* user, borrowed const void* deps, size_t deps_size) {
+        return ui__use_effect_raw_impl(self, effect, user, deps, deps_size);
+    }
+    pub borrowed ui_future_t* use_future(borrowed mut *self, borrowed mut ui_future_t* future) {
+        return ui__use_future_impl(self, future);
+    }
+} ui_render_context_t;
+
+static int ui__runtime_dispatch_impl(borrowed mut ui_runtime_t* runtime, borrowed const ui_event_t* event);
+static int ui__runtime_init_impl(borrowed mut ui_runtime_t* runtime, ui_driver_t driver);
+static int ui__runtime_mount_impl(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* root);
+static int ui__runtime_update_root_impl(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* next_root);
+static uint64_t ui__runtime_set_timeout_impl(borrowed mut ui_runtime_t* runtime, uint64_t delay_ms, ui_timer_fn callback, borrowed void* user);
+static uint64_t ui__runtime_set_interval_impl(borrowed mut ui_runtime_t* runtime, uint64_t interval_ms, ui_timer_fn callback, borrowed void* user);
+static int ui__runtime_cancel_timer_impl(borrowed mut ui_runtime_t* runtime, uint64_t id);
+static int ui__runtime_tick_impl(borrowed mut ui_runtime_t* runtime);
+static int ui__runtime_run_impl(borrowed mut ui_runtime_t* runtime);
+static void ui__runtime_stop_impl(borrowed mut ui_runtime_t* runtime);
+static void ui__runtime_destroy_impl(borrowed mut ui_runtime_t* runtime);
+typedef struct ui_runtime_t {
     ui_driver_t driver;
     owned ui_vnode_t* root;
     ui_timer_list_t timers;
@@ -140,23 +206,35 @@ struct ui_runtime_t {
     int dirty;
     int running;
     int last_error;
-};
 
-pub int ui_context_init(borrowed mut ui_context_t* context, borrowed const char* name, borrowed const void* default_value, size_t size) {
+    pub int init(borrowed mut *self, ui_driver_t driver) { return ui__runtime_init_impl(self, driver); }
+    pub int mount(borrowed mut *self, owned ui_vnode_t* root) { return ui__runtime_mount_impl(self, root); }
+    pub int update_root(borrowed mut *self, owned ui_vnode_t* root) { return ui__runtime_update_root_impl(self, root); }
+    pub int dispatch(borrowed mut *self, borrowed const ui_event_t* event) { return ui__runtime_dispatch_impl(self, event); }
+    pub uint64_t set_timeout(borrowed mut *self, uint64_t delay_ms, ui_timer_fn callback, borrowed void* user) { return ui__runtime_set_timeout_impl(self, delay_ms, callback, user); }
+    pub uint64_t set_interval(borrowed mut *self, uint64_t interval_ms, ui_timer_fn callback, borrowed void* user) { return ui__runtime_set_interval_impl(self, interval_ms, callback, user); }
+    pub int cancel_timer(borrowed mut *self, uint64_t id) { return ui__runtime_cancel_timer_impl(self, id); }
+    pub int tick(borrowed mut *self) { return ui__runtime_tick_impl(self); }
+    pub int run(borrowed mut *self) { return ui__runtime_run_impl(self); }
+    pub void stop(borrowed mut *self) { ui__runtime_stop_impl(self); }
+    pub void destroy(borrowed mut *self) { ui__runtime_destroy_impl(self); }
+} ui_runtime_t;
+
+static int ui__context_init_impl(borrowed mut ui_context_t* context, borrowed const char* name, borrowed const void* default_value, size_t size) {
     if (context == NULL || default_value == NULL || size == 0) return 1;
     memset(context, 0, sizeof(*context));
     context->name = name;
-    context->default_value = ui__memdup(default_value, size);
+    context->default_value = ui__react_memdup(default_value, size);
     context->value_size = size;
     return context->default_value == NULL;
 }
 
-pub void ui_context_destroy(borrowed mut ui_context_t* context) {
+static void ui__context_destroy_impl(borrowed mut ui_context_t* context) {
     if (context == NULL) return;
     free(context->default_value); memset(context, 0, sizeof(*context));
 }
 
-pub borrowed const void* ui_use_context_raw(borrowed ui_render_context_t* render, borrowed ui_context_t* context, size_t expected_size) {
+static borrowed const void* ui__use_context_raw_impl(borrowed ui_render_context_t* render, borrowed ui_context_t* context, size_t expected_size) {
     if (render == NULL || context == NULL || expected_size != context->value_size) { if (render) render->error = 1; return NULL; }
     ui_provider_frame_t* frame = render->providers;
     while (frame != NULL) {
@@ -186,7 +264,7 @@ static void ui__future_unsubscribe(borrowed mut ui_future_t* future, borrowed ui
     }
 }
 
-pub int ui_future_init(borrowed mut ui_future_t* future) {
+static int ui__future_init_impl(borrowed mut ui_future_t* future) {
     if (future == NULL) return 1;
     memset(future, 0, sizeof(*future));
     future->status = UI_FUTURE_PENDING;
@@ -200,23 +278,23 @@ static void ui__future_wake(borrowed mut ui_future_t* future) {
     }
 }
 
-pub int ui_future_resolve(borrowed mut ui_future_t* future, borrowed const void* value, size_t size) {
+static int ui__future_resolve_impl(borrowed mut ui_future_t* future, borrowed const void* value, size_t size) {
     if (future == NULL || future->status != UI_FUTURE_PENDING || (size > 0 && value == NULL)) return 1;
-    if (size > 0) { future->value = ui__memdup(value, size); if (future->value == NULL) return 1; }
+    if (size > 0) { future->value = ui__react_memdup(value, size); if (future->value == NULL) return 1; }
     future->value_size = size; future->status = UI_FUTURE_RESOLVED; ui__future_wake(future); return 0;
 }
 
-pub int ui_future_reject(borrowed mut ui_future_t* future, int error_code) {
+static int ui__future_reject_impl(borrowed mut ui_future_t* future, int error_code) {
     if (future == NULL || future->status != UI_FUTURE_PENDING) return 1;
     future->error_code = error_code; future->status = UI_FUTURE_REJECTED; ui__future_wake(future); return 0;
 }
 
-pub int ui_future_cancel(borrowed mut ui_future_t* future) {
+static int ui__future_cancel_impl(borrowed mut ui_future_t* future) {
     if (future == NULL || future->status != UI_FUTURE_PENDING) return 1;
     future->status = UI_FUTURE_CANCELLED; ui__future_wake(future); return 0;
 }
 
-pub void ui_future_destroy(borrowed mut ui_future_t* future) {
+static void ui__future_destroy_impl(borrowed mut ui_future_t* future) {
     if (future == NULL) return;
     free(future->value); future->subscribers.destroy(); memset(future, 0, sizeof(*future));
 }
@@ -235,13 +313,13 @@ static ui_hook_t* ui__next_hook(borrowed mut ui_render_context_t* render, ui_hoo
     return &instance->hooks.items[index];
 }
 
-pub borrowed ui_state_t* ui_use_state_raw(borrowed mut ui_render_context_t* render, size_t size, borrowed const void* initial_value) {
+static borrowed ui_state_t* ui__use_state_raw_impl(borrowed mut ui_render_context_t* render, size_t size, borrowed const void* initial_value) {
     if (size == 0 || initial_value == NULL) { if (render) render->error = 1; return NULL; }
     size_t before = render->instance->hook_cursor;
     ui_hook_t* hook = ui__next_hook(render, UI_HOOK_STATE);
     if (hook == NULL) return NULL;
     if (before >= render->instance->hooks.length - 1 && hook->as.state.value == NULL) {
-        hook->as.state.value = ui__memdup(initial_value, size);
+        hook->as.state.value = ui__react_memdup(initial_value, size);
         if (hook->as.state.value == NULL) { render->error = 1; return NULL; }
         hook->as.state.size = size; hook->as.state.runtime = render->runtime; hook->as.state.owner = render->instance;
     }
@@ -249,7 +327,7 @@ pub borrowed ui_state_t* ui_use_state_raw(borrowed mut ui_render_context_t* rend
     return &hook->as.state;
 }
 
-pub int ui_state_set_raw(borrowed mut ui_state_t* state, borrowed const void* value, size_t size) {
+static int ui__state_set_raw_impl(borrowed mut ui_state_t* state, borrowed const void* value, size_t size) {
     if (state == NULL || value == NULL || size != state->size) return 1;
     if (memcmp(state->value, value, size) == 0) return 0;
     memcpy(state->value, value, size);
@@ -258,7 +336,7 @@ pub int ui_state_set_raw(borrowed mut ui_state_t* state, borrowed const void* va
     return 0;
 }
 
-pub int ui_use_effect_raw(borrowed mut ui_render_context_t* render, ui_effect_fn effect, borrowed void* user, borrowed const void* deps, size_t deps_size) {
+static int ui__use_effect_raw_impl(borrowed mut ui_render_context_t* render, ui_effect_fn effect, borrowed void* user, borrowed const void* deps, size_t deps_size) {
     if (effect == NULL) { render->error = 1; return 1; }
     ui_hook_t* hook = ui__next_hook(render, UI_HOOK_EFFECT);
     if (hook == NULL) return 1;
@@ -269,19 +347,19 @@ pub int ui_use_effect_raw(borrowed mut ui_render_context_t* render, ui_effect_fn
     }
     if (changed) {
         unsigned char* copy = NULL;
-        if (deps_size > 0) { copy = ui__memdup(deps, deps_size); if (copy == NULL) { render->error = 1; return 1; } }
+        if (deps_size > 0) { copy = ui__react_memdup(deps, deps_size); if (copy == NULL) { render->error = 1; return 1; } }
         free(hook->as.effect.deps); hook->as.effect.deps = copy; hook->as.effect.deps_size = deps_size; hook->as.effect.pending = 1;
     }
     hook->as.effect.effect = effect; hook->as.effect.user = user;
     return 0;
 }
 
-pub borrowed ui_future_t* ui_use_future(borrowed mut ui_render_context_t* render, borrowed mut ui_future_t* future) {
+static borrowed ui_future_t* ui__use_future_impl(borrowed mut ui_render_context_t* render, borrowed mut ui_future_t* future) {
     if (future == NULL) { render->error = 1; return NULL; }
     ui_hook_t* hook = ui__next_hook(render, UI_HOOK_FUTURE);
     if (hook == NULL) return NULL;
     if (hook->as.future.future != future) {
-        ui__future_unsubscribe(hook->as.future.future, render->instance);
+        if (hook->as.future.future != NULL) ui__future_unsubscribe(hook->as.future.future, render->instance);
         if (ui__future_subscribe(future, render->instance) != 0) { render->error = 1; return NULL; }
         hook->as.future.future = future;
     }
@@ -320,7 +398,7 @@ static ui_vnode_t* ui__render_component(borrowed mut ui_runtime_t* runtime, borr
     ui_vnode_t* result = node->as.component.render(&render, node->as.component.props);
     if (render.error || result == NULL || instance->hook_cursor != instance->hooks.length) {
         runtime->last_error = 1;
-        if (result != NULL) ui_vnode_destroy(result);
+        if (result != NULL) if (result != NULL) result->destroy();
         return NULL;
     }
     instance->dirty = 0; instance->mounted = 1;
@@ -435,7 +513,7 @@ static int ui__reconcile(borrowed mut ui_runtime_t* runtime, borrowed mut ui_vno
     }
     for (size_t i = 0; i < new_node->attrs.length; i++) {
         ui_attr_t* prev = ui__find_attr(old_node, new_node->attrs.items[i].name);
-        if (prev == NULL || !ui__value_equal(&prev->value, &new_node->attrs.items[i].value)) { memset(&patch,0,sizeof(patch)); patch.type = UI_PATCH_SET_ATTRIBUTE; patch.node_id = new_node->id; patch.name = new_node->attrs.items[i].name; patch.value = new_node->attrs.items[i].value; if (ui__emit(runtime,&patch)!=0) return 1; }
+        if (prev == NULL || !prev->value.equals(&new_node->attrs.items[i].value)) { memset(&patch,0,sizeof(patch)); patch.type = UI_PATCH_SET_ATTRIBUTE; patch.node_id = new_node->id; patch.name = new_node->attrs.items[i].name; patch.value = new_node->attrs.items[i].value; if (ui__emit(runtime,&patch)!=0) return 1; }
     }
     if (new_node->kind == UI_VNODE_COMPONENT) {
         new_node->as.component.instance = old_node->as.component.instance; old_node->as.component.instance = NULL;
@@ -477,7 +555,7 @@ static int ui__refresh_dirty(borrowed mut ui_runtime_t* runtime, borrowed mut ui
             if (next == NULL) return 1;
             node->as.component.rendered = next;
             if (ui__reconcile(runtime, old_rendered, next, node->id, 0, providers) != 0) return 1;
-            ui_vnode_destroy(old_rendered);
+            if (old_rendered != NULL) old_rendered->destroy();
         }
         return ui__refresh_dirty(runtime, node->as.component.rendered, providers);
     }
@@ -495,7 +573,7 @@ static ui_vnode_t* ui__find_node(borrowed ui_vnode_t* node, uint64_t id) {
     return NULL;
 }
 
-pub int ui_runtime_dispatch(borrowed mut ui_runtime_t* runtime, borrowed const ui_event_t* event) {
+static int ui__runtime_dispatch_impl(borrowed mut ui_runtime_t* runtime, borrowed const ui_event_t* event) {
     if (runtime == NULL || event == NULL) return 1;
     if (event->type == UI_EVENT_QUIT) { runtime->running = 0; return 0; }
     ui_vnode_t* node = ui__find_node(runtime->root, event->target_id);
@@ -510,13 +588,13 @@ pub int ui_runtime_dispatch(borrowed mut ui_runtime_t* runtime, borrowed const u
     return 0;
 }
 
-pub int ui_runtime_init(borrowed mut ui_runtime_t* runtime, ui_driver_t driver) {
+static int ui__runtime_init_impl(borrowed mut ui_runtime_t* runtime, ui_driver_t driver) {
     if (runtime == NULL || driver.apply_patch == NULL || driver.poll_event == NULL || driver.now_ms == NULL) return 1;
     memset(runtime, 0, sizeof(*runtime)); runtime->driver = driver; runtime->next_node_id = 1; runtime->next_timer_id = 1; runtime->running = 1;
     return runtime->timers.init();
 }
 
-pub int ui_runtime_mount(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* root) {
+static int ui__runtime_mount_impl(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* root) {
     if (runtime == NULL || root == NULL || runtime->root != NULL) return 1;
     if (ui__begin(runtime) != 0) return 1;
     runtime->root = root;
@@ -526,30 +604,30 @@ pub int ui_runtime_mount(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* r
     return result;
 }
 
-pub int ui_runtime_update_root(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* next_root) {
+static int ui__runtime_update_root_impl(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* next_root) {
     if (runtime == NULL || next_root == NULL || runtime->root == NULL) return 1;
     ui_vnode_t* old = runtime->root;
     if (ui__begin(runtime) != 0) return 1;
     int result = ui__reconcile(runtime, old, next_root, 0, 0, NULL);
     if (ui__end(runtime) != 0) result = 1;
-    if (result == 0) { runtime->root = next_root; ui_vnode_destroy(old); ui__flush_effects_node(next_root); }
-    else ui_vnode_destroy(next_root);
+    if (result == 0) { runtime->root = next_root; if (old != NULL) old->destroy(); ui__flush_effects_node(next_root); }
+    else if (next_root != NULL) next_root->destroy();
     return result;
 }
 
-pub uint64_t ui_set_timeout(borrowed mut ui_runtime_t* runtime, uint64_t delay_ms, ui_timer_fn callback, borrowed void* user) {
+static uint64_t ui__runtime_set_timeout_impl(borrowed mut ui_runtime_t* runtime, uint64_t delay_ms, ui_timer_fn callback, borrowed void* user) {
     if (runtime == NULL || callback == NULL) return 0;
     ui_timer_t timer; timer.id = runtime->next_timer_id++; timer.due_ms = runtime->driver.now_ms(runtime->driver.user) + delay_ms; timer.interval_ms = 0; timer.callback = callback; timer.user = user; timer.active = 1;
     return runtime->timers.add(timer) == 0 ? timer.id : 0;
 }
 
-pub uint64_t ui_set_interval(borrowed mut ui_runtime_t* runtime, uint64_t interval_ms, ui_timer_fn callback, borrowed void* user) {
+static uint64_t ui__runtime_set_interval_impl(borrowed mut ui_runtime_t* runtime, uint64_t interval_ms, ui_timer_fn callback, borrowed void* user) {
     if (runtime == NULL || callback == NULL || interval_ms == 0) return 0;
     ui_timer_t timer; timer.id = runtime->next_timer_id++; timer.due_ms = runtime->driver.now_ms(runtime->driver.user) + interval_ms; timer.interval_ms = interval_ms; timer.callback = callback; timer.user = user; timer.active = 1;
     return runtime->timers.add(timer) == 0 ? timer.id : 0;
 }
 
-pub int ui_cancel_timer(borrowed mut ui_runtime_t* runtime, uint64_t id) {
+static int ui__runtime_cancel_timer_impl(borrowed mut ui_runtime_t* runtime, uint64_t id) {
     if (runtime == NULL || id == 0) return 1;
     for (size_t i = 0; i < runtime->timers.length; i++) if (runtime->timers.items[i].id == id) { runtime->timers.items[i].active = 0; return 0; }
     return 1;
@@ -580,7 +658,7 @@ static uint64_t ui__next_wait(borrowed ui_runtime_t* runtime) {
     return best;
 }
 
-pub int ui_runtime_tick(borrowed mut ui_runtime_t* runtime) {
+static int ui__runtime_tick_impl(borrowed mut ui_runtime_t* runtime) {
     if (runtime == NULL) return 1;
     ui_event_t event;
     for (;;) {
@@ -588,7 +666,7 @@ pub int ui_runtime_tick(borrowed mut ui_runtime_t* runtime) {
         int polled = runtime->driver.poll_event(runtime->driver.user, &event);
         if (polled < 0) return polled;
         if (polled == 0) break;
-        int dispatched = ui_runtime_dispatch(runtime, &event);
+        int dispatched = ui__runtime_dispatch_impl(runtime, &event);
         if (dispatched != 0) return dispatched;
     }
     ui__run_timers(runtime);
@@ -603,11 +681,11 @@ pub int ui_runtime_tick(borrowed mut ui_runtime_t* runtime) {
     return runtime->last_error;
 }
 
-pub int ui_runtime_run(borrowed mut ui_runtime_t* runtime) {
+static int ui__runtime_run_impl(borrowed mut ui_runtime_t* runtime) {
     if (runtime == NULL) return 1;
     runtime->running = 1;
     while (runtime->running) {
-        int result = ui_runtime_tick(runtime);
+        int result = ui__runtime_tick_impl(runtime);
         if (result != 0) return result;
         if (runtime->driver.wait != NULL) {
             result = runtime->driver.wait(runtime->driver.user, ui__next_wait(runtime));
@@ -617,18 +695,18 @@ pub int ui_runtime_run(borrowed mut ui_runtime_t* runtime) {
     return 0;
 }
 
-pub void ui_runtime_stop(borrowed mut ui_runtime_t* runtime) { if (runtime) runtime->running = 0; }
+static void ui__runtime_stop_impl(borrowed mut ui_runtime_t* runtime) { if (runtime) runtime->running = 0; }
 
-pub void ui_runtime_destroy(borrowed mut ui_runtime_t* runtime) {
+static void ui__runtime_destroy_impl(borrowed mut ui_runtime_t* runtime) {
     if (runtime == NULL) return;
-    ui_vnode_destroy(runtime->root); runtime->root = NULL; runtime->timers.destroy(); memset(runtime, 0, sizeof(*runtime));
+    if (runtime->root != NULL) runtime->root->destroy(); runtime->root = NULL; runtime->timers.destroy(); memset(runtime, 0, sizeof(*runtime));
 }
 
-#define use_state(context, T, initial_value) ui_use_state_raw((context), sizeof(T), &(T){(initial_value)})
+#define use_state(context, T, initial_value) ui_render_context__use_state_raw((context), sizeof(T), &(T){(initial_value)})
 #define state_value(T, state) (*(T*)((state)->value))
-#define state_set(T, state, new_value) ui_state_set_raw((state), &(T){(new_value)}, sizeof(T))
-#define use_context(context, T, context_object) ((const T*)ui_use_context_raw((context), (context_object), sizeof(T)))
-#define use_effect(context, effect_fn, user_ptr, deps_ptr, deps_size) ui_use_effect_raw((context), (effect_fn), (user_ptr), (deps_ptr), (deps_size))
-#define use_future(context, future_ptr) ui_use_future((context), (future_ptr))
+#define state_set(T, state, new_value) ui_state__set_raw((state), &(T){(new_value)}, sizeof(T))
+#define use_context(context, T, context_object) ((const T*)ui_render_context__use_context_raw((context), (context_object), sizeof(T)))
+#define use_effect(context, effect_fn, user_ptr, deps_ptr, deps_size) ui_render_context__use_effect_raw((context), (effect_fn), (user_ptr), (deps_ptr), (deps_size))
+#define use_future(context, future_ptr) ui_render_context__use_future((context), (future_ptr))
 
 #endif
