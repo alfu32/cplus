@@ -467,3 +467,10 @@ target-specific compiler/ABI support remain out of scope for this roadmap.
   launcher quoting defect; `cpc.cmd` was corrected in `2283728` by removing the
   trailing path separator before quoting `-Dcplus.home`. The replacement run
   passed without a timeout or protocol error.
+- CI run `36795168927` isolated a cross-host import-indexing regression: macOS
+  arm64 and Windows x86_64 failed the same three import-closure tests, while
+  Linux x86_64/arm64 passed the complete LSP gates and all hosts passed the
+  benchmark. `importRequests` now combines AST-indexed imports with the
+  lexical recovery scan instead of skipping recovery whenever the AST returns
+  a partial import list. The focused three-test regression and the complete
+  `CPlusLspServerTest` class pass locally; hosted replay is required.
