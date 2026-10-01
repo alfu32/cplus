@@ -334,7 +334,7 @@ reliability and release subtasks represented by a single indefinite status.
 | LSP-8.5.a | DONE-LOCAL  | Load the packaged plugin in IntelliJ     | `scripts/intellij-lsp-smoke.sh` loads the 0.5.59 plugin in IntelliJ IDEA 2026.2.2 under an isolated profile.                                                           |
 | LSP-8.5.b | IN PROGRESS | Activate LSP for a real project document | The smoke harness opens `doom.cp`, discovers the project-local launcher, and observes `cpc lsp` initialization; the provider now exposes a C-plus-specific Language Services widget/settings target; add protocol-visible diagnostics/document-sync checks. |
 | LSP-8.5.c | IN PROGRESS | Verify editor feature presentation       | Exercise diagnostics, completion, navigation, structure, and test gutter against a real IDE document.                                                                  |
-| LSP-8.5.d | OPEN        | Verify unexpected exit and restart       | Kill the child server, assert recovery, and exercise the restart action with log/protocol evidence.                                                                    |
+| LSP-8.5.d | OPEN        | Verify unexpected exit and restart       | The harness now supports an opt-in exact-PID restart probe; a real IntelliJ replay must still prove recovery and exercise the restart action with log/protocol evidence.     |
 
 #### IntelliJ smoke harness note
 
@@ -347,6 +347,15 @@ bundled-plugin inventory so the user's plugin migration settings are not importe
 The focused server test and IntelliJ plugin test/package gate pass. A fresh IntelliJ
 profile still requires host-level Unix-domain socket support; until that replay is
 run outside the restricted sandbox, LSP-8.5.b/c and LSP-7.9.d remain open.
+
+For deterministic unexpected-exit testing, setting `INTELLIJ_SMOKE_RESTART=1`
+also passes `CPLUS_LSP_LIFECYCLE_FILE` to the child server. The server writes its
+own PID and `running`/`stopped` state to that opt-in file. The harness terminates
+only the recorded PID, then requires a different PID and a second `initialize`
+trace entry before it reports recovery. This avoids name-based process matching
+and does not affect normal LSP sessions. The marker lifecycle has a focused CLI
+unit test; the real IntelliJ replay remains unproven when the host cannot start
+the IDE.
 
 The IntelliJ command settings migration is whitespace-tolerant for legacy built-ins,
 including `cplus test`, `cplus parse`, and `cplus lsp`; current built-in defaults use

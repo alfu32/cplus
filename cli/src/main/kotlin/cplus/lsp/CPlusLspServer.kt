@@ -28,7 +28,10 @@ class CPlusLspServer(
     input: InputStream = System.`in`,
     output: OutputStream = System.out,
     private val astDiagnosticProvider: (CPlusAst) -> List<ParserDiagnostic> = { it.unsupportedAstDiagnostics() },
-    tracePath: Path? = System.getenv("CPLUS_LSP_TRACE")?.takeIf(String::isNotBlank)?.let { Path.of(it) }
+    tracePath: Path? = System.getenv("CPLUS_LSP_TRACE")?.takeIf(String::isNotBlank)?.let { Path.of(it) },
+    lifecyclePath: Path? = System.getenv("CPLUS_LSP_LIFECYCLE_FILE")
+        ?.takeIf(String::isNotBlank)
+        ?.let { Path.of(it) }
 ) {
     private val input = BufferedInputStream(input)
     private val output = BufferedOutputStream(output)
@@ -42,6 +45,8 @@ class CPlusLspServer(
     private val activeReadView = ThreadLocal<ReadView?>()
     /** Optional method-level trace for host integration diagnostics; never touches protocol stdout. */
     private val tracePath = tracePath
+    /** Optional process marker used only by isolated host-integration smoke tests. */
+    private val lifecyclePath = lifecyclePath
     private val traceLock = Any()
     /** Cancellations received before a request instance has been dispatched. */
     private val preCancelledRequests = ConcurrentHashMap.newKeySet<String>()
@@ -69,6 +74,7 @@ class CPlusLspServer(
     private var workspaceRootUri: String? = null
 
     fun serve() {
+        writeLifecycle("running")
         try {
             while (true) {
             val message = readMessage() ?: return
@@ -163,6 +169,7 @@ class CPlusLspServer(
             }
         } finally {
             requestExecutor.shutdownNow()
+            writeLifecycle("stopped")
         }
     }
 
@@ -1542,6 +1549,23 @@ class CPlusLspServer(
                     StandardCharsets.UTF_8,
                     java.nio.file.StandardOpenOption.CREATE,
                     java.nio.file.StandardOpenOption.APPEND
+                )
+            }
+        }
+    }
+
+    private fun writeLifecycle(state: String) {
+        val path = lifecyclePath ?: return
+        runCatching {
+            synchronized(traceLock) {
+                path.parent?.let(Files::createDirectories)
+                Files.writeString(
+                    path,
+                    "pid=${ProcessHandle.current().pid()} state=$state${System.lineSeparator()}",
+                    StandardCharsets.UTF_8,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                    java.nio.file.StandardOpenOption.WRITE
                 )
             }
         }

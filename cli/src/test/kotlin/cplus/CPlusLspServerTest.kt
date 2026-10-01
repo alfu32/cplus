@@ -17,6 +17,24 @@ import org.junit.jupiter.api.io.TempDir
 
 class CPlusLspServerTest {
     @Test
+    fun recordsOptInLifecycleStateForHostRestartProbes(@TempDir directory: Path) {
+        val lifecycle = directory.resolve("lsp.lifecycle")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+
+        CPlusLspServer(
+            ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)),
+            ByteArrayOutputStream(),
+            lifecyclePath = lifecycle
+        ).serve()
+
+        val marker = Files.readString(lifecycle)
+        assertTrue(Regex("pid=\\d+ state=stopped").matches(marker.trim()), marker)
+    }
+
+    @Test
     fun classifiesTopLevelUnmappedAstFragmentsAsMappedWarnings() {
         val source = SourceManager().open(SourceId.named("file:///synthetic-unsupported.cp"), "future_syntax")
         val fragment = CPlusAstNode(
