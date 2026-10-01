@@ -1179,6 +1179,15 @@ class CPlusLspServer(
                 )
             }
         }
+        val subscript = Regex("^(.+)\\[[^\\]]*\\]$").matchEntire(value)
+        if (subscript != null) {
+            val container = expressionType(document, subscript.groupValues[1]) ?: return null
+            return when {
+                container.arrayDepth > 0 -> container.copy(arrayDepth = container.arrayDepth - 1)
+                container.pointerDepth > 0 -> container.copy(pointerDepth = container.pointerDepth - 1)
+                else -> null
+            }
+        }
         splitTopLevelNumericBinary(value)?.let { (left, right) ->
             val leftType = expressionType(document, left)
             val rightType = expressionType(document, right)

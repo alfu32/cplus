@@ -700,6 +700,35 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun resolvesOverloadsForArraySubscriptShapes() {
+        val uri = "file:///overload-array-subscript.cp"
+        val source = "int choose(int value) { return value; }\n" +
+            "int choose(int* values) { return values[0]; }\n" +
+            "int main(void) { int matrix[2][3] = {{1, 2, 3}, {4, 5, 6}}; return choose(matrix[0]) + choose(matrix[0][1]); }\n"
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val line = source.lines()[2]
+        val pointerCall = line.indexOf("choose(matrix[0])")
+        val scalarCall = line.indexOf("choose(matrix[0][1])")
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$pointerCall}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/definition\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":2,\"character\":$scalarCall}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)), output).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"id\":2,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":1,"), response)
+        assertTrue(response.contains("\"id\":3,\"result\":[{\"uri\":\"$uri\",\"range\":{\"start\":{\"line\":0,"), response)
+    }
+
+    @Test
     fun resolvesCIntegerPromotionsBeforeWiderOverloads() {
         val uri = "file:///overload-integer-promotions.cp"
         val source = "int choose(int value) { return value; }\n" +
