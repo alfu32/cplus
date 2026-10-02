@@ -701,6 +701,7 @@ class CPlusLspServer(
                         (selected.uri to selected.selection.startOffset)
             }
             .sortedWith(compareBy<LspReference> { it.uri }.thenBy { it.span.startOffset })
+            .distinctBy { it.uri to it.span.startOffset }
             .joinToString(",", "[", "]") { reference ->
                 "{\"uri\":${Json.string(reference.uri)},\"range\":${reference.span.toRangeJson()}}"
             }
@@ -727,8 +728,26 @@ class CPlusLspServer(
         return reachableDocuments(document.uri).asSequence()
             .mapNotNull(readDocuments()::get)
             .flatMap { candidate ->
-                candidate.ast.root.identifierOccurrences()
+                val astOccurrences = candidate.ast.root.identifierOccurrences()
                     .filter { it.node.kind == CPlusAstKind.IDENTIFIER }
+                // A recovery tree can drop a type declaration's use together
+                // with the damaged sibling that follows it (for example
+                // `value.` in an incomplete member expression).  Type aliases
+                // still have a stable lexical identity, so recover only this
+                // bounded type-reference slice from code text.  Strings and
+                // comments are masked by the scanner below; ordinary callable
+                // references remain AST-only and therefore conservative.
+                val lexicalOccurrences = if (selected?.kind in TYPE_SYMBOL_KINDS) {
+                    lexicalIdentifierOccurrences(candidate, target)
+                        .filter { lexical ->
+                            astOccurrences.none { ast ->
+                                ast.node.span.startOffset == lexical.node.span.startOffset
+                            }
+                        }
+                } else {
+                    emptySequence()
+                }
+                sequenceOf(astOccurrences, lexicalOccurrences).flatten()
                     .filter { node ->
                         val text = candidate.parsedText.substring(node.node.span.startOffset, node.node.span.endOffset)
                         text == target
@@ -822,6 +841,9 @@ class CPlusLspServer(
             // falling back to declaration order would leak same-named fields.
             val receiver = receiverType(reference.document, occurrence.node.span.startOffset)
             return receiver != null && resolveTypeAlias(receiver) == selected.ownerName
+        }
+        if (selected.kind in TYPE_SYMBOL_KINDS && occurrence.node.syntaxKind == "type_identifier") {
+            return true
         }
         val scoped = declarations
             .filter { it.scope.contains(span) && it.selection.startOffset <= span.startOffset }
@@ -2086,6 +2108,99 @@ private fun CPlusAstNode.identifierOccurrences(
     if (kind == CPlusAstKind.IDENTIFIER) yield(LspIdentifierOccurrence(this@identifierOccurrences, ancestors))
     val nextAncestors = ancestors + syntaxKind
     children.forEach { child -> yieldAll(child.identifierOccurrences(nextAncestors)) }
+}
+
+private val TYPE_SYMBOL_KINDS = setOf(10, 23, 26)
+
+/**
+ * Recover identifier spans from code text when a parser recovery node hides a
+ * type reference. This intentionally recognizes only identifiers and skips
+ * comments/literals; it is not a replacement parser or a general reference
+ * index.
+ */
+private fun lexicalIdentifierOccurrences(
+    document: LspDocument,
+    target: String
+): Sequence<LspIdentifierOccurrence> = sequence {
+    // The parser may be looking at a materialized comptime revision.  Scan
+    // that same revision so offsets line up with the AST and its source map;
+    // the caller maps recovered spans back to the editor snapshot afterward.
+    val text = document.parsedText
+    val sourceFile = SourceFile(text, document.snapshot.sourceFile.name)
+    var index = 0
+    var state = 0 // normal, line comment, block comment, string, character
+    while (index < text.length) {
+        val character = text[index]
+        when (state) {
+            1 -> {
+                if (character == '\n') state = 0
+                index++
+            }
+            2 -> {
+                if (character == '*' && index + 1 < text.length && text[index + 1] == '/') {
+                    state = 0
+                    index += 2
+                } else {
+                    index++
+                }
+            }
+            3, 4 -> {
+                if (character == '\\') {
+                    index = (index + 2).coerceAtMost(text.length)
+                } else if ((state == 3 && character == '"') ||
+                    (state == 4 && character == '\'')
+                ) {
+                    state = 0
+                    index++
+                } else {
+                    index++
+                }
+            }
+            else -> when {
+                character == '/' && index + 1 < text.length && text[index + 1] == '/' -> {
+                    state = 1
+                    index += 2
+                }
+                character == '/' && index + 1 < text.length && text[index + 1] == '*' -> {
+                    state = 2
+                    index += 2
+                }
+                character == '"' -> {
+                    state = 3
+                    index++
+                }
+                character == '\'' -> {
+                    state = 4
+                    index++
+                }
+                character == '_' || character.isLetter() -> {
+                    val start = index++
+                    while (index < text.length &&
+                        (text[index] == '_' || text[index].isLetterOrDigit())
+                    ) index++
+                    if (text.substring(start, index) == target) {
+                        val span = sourceFile.span(start, index)
+                        yield(
+                            LspIdentifierOccurrence(
+                                CPlusAstNode(
+                                    kind = CPlusAstKind.IDENTIFIER,
+                                    syntaxKind = "type_identifier",
+                                    span = span,
+                                    fieldName = null,
+                                    children = emptyList(),
+                                    named = true,
+                                    opaque = false,
+                                    recovered = true
+                                ),
+                                emptyList()
+                            )
+                        )
+                    }
+                }
+                else -> index++
+            }
+        }
+    }
 }
 
 private fun CPlusAstNode.descendantsAndSelf(): Sequence<CPlusAstNode> =

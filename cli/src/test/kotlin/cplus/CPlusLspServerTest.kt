@@ -1810,7 +1810,14 @@ class CPlusLspServerTest {
                 "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$completionLine,\"character\":$aliasCharacter}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/completion\",\"params\":{" +
                 "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$completionLine,\"character\":${source.lines()[completionLine].length - 1}}}}",
-            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"shutdown\",\"params\":null}"
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/hover\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$completionLine,\"character\":$aliasCharacter}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/references\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$completionLine,\"character\":$aliasCharacter}," +
+                "\"context\":{\"includeDeclaration\":true}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"textDocument/documentHighlight\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$completionLine,\"character\":$aliasCharacter}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"shutdown\",\"params\":null}"
         ).joinToString("") { frame(it) }
         val output = ByteArrayOutputStream()
 
@@ -1822,6 +1829,16 @@ class CPlusLspServerTest {
         val completion = response.substringAfter("\"id\":4,\"result\":")
             .substringBefore("Content-Length")
         assertTrue(completion.contains("\"label\":\"value\""), response)
+        val hover = response.substringAfter("\"id\":5,\"result\":")
+            .substringBefore("Content-Length")
+        assertTrue(hover.contains("imported_box_t"), response)
+        val references = response.substringAfter("\"id\":6,\"result\":")
+            .substringBefore("Content-Length")
+        assertTrue(references.contains("\"uri\":\"${dependency.toUri()}\""), response)
+        assertTrue(references.contains("\"uri\":\"$uri\""), response)
+        val highlights = response.substringAfter("\"id\":7,\"result\":")
+            .substringBefore("Content-Length")
+        assertTrue(highlights.contains("\"kind\":2"), response)
     }
 
     @Test
