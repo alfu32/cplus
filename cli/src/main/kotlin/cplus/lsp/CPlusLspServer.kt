@@ -1188,6 +1188,23 @@ class CPlusLspServer(
                 else -> null
             }
         }
+        splitTopLevelConditional(value)?.let { (condition, whenTrue, whenFalse) ->
+            val conditionType = expressionType(document, condition)
+            val trueType = expressionType(document, whenTrue)
+            val falseType = expressionType(document, whenFalse)
+            if (conditionType != null && trueType != null && falseType != null) {
+                if (trueType.pointerDepth == falseType.pointerDepth &&
+                    trueType.arrayDepth == falseType.arrayDepth &&
+                    resolveTypeAlias(trueType.base) == resolveTypeAlias(falseType.base)
+                ) {
+                    return trueType.copy(
+                        pointeeConst = trueType.pointeeConst || falseType.pointeeConst,
+                        pointeeVolatile = trueType.pointeeVolatile || falseType.pointeeVolatile
+                    )
+                }
+                numericBinaryType(trueType.base, falseType.base)?.let { return TypeShape(it, 0, 0) }
+            }
+        }
         splitTopLevelNumericBinary(value)?.let { (left, right) ->
             val leftType = expressionType(document, left)
             val rightType = expressionType(document, right)
@@ -1270,6 +1287,29 @@ class CPlusLspServer(
                     if (previous !in "+-*/%&|^!<>=") {
                         return value.substring(0, index).trim() to value.substring(index + 1).trim()
                     }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun splitTopLevelConditional(value: String): Triple<String, String, String>? {
+        var parentheses = 0
+        var brackets = 0
+        var question = -1
+        value.forEachIndexed { index, character ->
+            when (character) {
+                '(' -> parentheses++
+                ')' -> parentheses--
+                '[' -> brackets++
+                ']' -> brackets--
+                '?' -> if (parentheses == 0 && brackets == 0 && question < 0) question = index
+                ':' -> if (parentheses == 0 && brackets == 0 && question >= 0) {
+                    return Triple(
+                        value.substring(0, question).trim(),
+                        value.substring(question + 1, index).trim(),
+                        value.substring(index + 1).trim()
+                    )
                 }
             }
         }

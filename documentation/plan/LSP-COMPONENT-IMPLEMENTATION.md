@@ -204,6 +204,43 @@ This dashboard is the actionable breakdown of the three parent phases. A parent
 status is only a summary; work is considered converged when every row below is
 `DONE` or is explicitly deferred with an accepted scope change.
 
+### Finite closure contract for comptime semantic parity
+
+“Broader comptime semantic parity” is not an open-ended requirement to model
+all of C or every possible composition of comptime constructs. It is the
+remaining LSP-5.6e acceptance package and closes against the following finite
+matrix:
+
+| Slice                        | Required generated artifact                                                                                  | Required LSP evidence                                                                                     |
+|------------------------------|--------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
+| Generated declarations       | aliases, typedefs, fields, methods, functions, and variables materialized by the repository's comptime forms | document symbols, completion, definition, hover, and references preserve the original `.cp` origin        |
+| Generated scopes and imports | imported generators, generated aliases, and dependency order in the open-document import closure             | completion/definition/references see only the current closure and never stale removed symbols             |
+| Generated receiver shapes    | generated value, pointer, array, and method-return receivers used by repository examples                     | member completion, definition, hover, and bounded callable selection agree with the generated declaration |
+| Generated edits              | add/remove/change of comptime declarations and platform-selected branches                                    | `didChange` invalidates all affected generated symbols, spans, diagnostics, and caches                    |
+| Diagnostics and origins      | unsupported or recovered generated fragments, mapped compiler failures, and source spans                     | warnings remain non-blocking; errors retain severity and original source locations                        |
+
+The input set is the pinned repository corpus: every `.cp`/`.c+` file under
+`stdlib/`, `examples/`, and `stdlib/tests/`, plus the versioned comptime fixtures
+under `cli/src/test` and `parser-tree-sitter`. New syntax is added to this
+matrix only when it introduces a new semantic invariant; spelling variants and
+additional examples extend the nearest existing row.
+
+Each matrix cell must have a deterministic fixture and a focused test. A cell
+may close in either of two ways:
+
+1. `DONE`: generated declarations and source origins are resolved consistently
+   by the listed LSP features; or
+2. `BOUNDED-UNSUPPORTED`: the server fails closed, emits the documented mapped
+   warning/error, and does not invent a symbol or location.
+
+LSP-5.6e closes when every cell is `DONE` or `BOUNDED-UNSUPPORTED`, the full
+   pinned corpus passes, generated-scope invalidation passes, and the supported
+   Linux/macOS/Windows host jobs pass twice consecutively. After that point,
+   newly discovered behavior is a separately scoped language feature or bug;
+   it does not reopen this task automatically. Compiler legality, complete C
+   ABI conversion rules, and legacy frontend retirement remain outside this
+   LSP closure gate.
+
 | Parent | Subtask                                 | Status      | Concrete deliverable                                                                                                                                                                                                                                    | Blocks          |
 |--------|-----------------------------------------|-------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
 | LSP-5  | 5.6a semantic type model                | DONE        | Compiler semantics expose canonical primitive, typedef, pointer, array, callable, parameter, and local-value shapes with declaration spans and preserved declaration qualifiers                                                                         | 5.6b–e          |
