@@ -17,11 +17,11 @@ data class SourceId(val value: String) {
             val absolute = path.toAbsolutePath().normalize()
             val canonical = try {
                 if (Files.exists(absolute)) {
-                    // File#getCanonicalPath also expands Windows 8.3 short names.
-                    // Without that normalization, an imported module can be keyed by
-                    // its long path while the root is keyed by RUNNER~1 (or vice
-                    // versa), producing duplicate graph vertices and unstable order.
-                    absolute.toFile().canonicalFile.toPath()
+                    // Resolve filesystem links as well as normalizing Windows short
+                    // names. Using Path#toRealPath is important on Windows: the
+                    // File canonical-path implementation can preserve a symlink's
+                    // alias instead of returning the target identity.
+                    absolute.toRealPath().normalize()
                 } else {
                     // Generated/virtual roots commonly do not exist yet. Canonicalize
                     // their existing parent so a virtual leaf still agrees with an
