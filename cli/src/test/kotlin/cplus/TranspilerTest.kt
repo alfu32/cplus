@@ -10,6 +10,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 class TranspilerTest {
+    private fun escapedLinePath(path: Path): String =
+        path.toAbsolutePath().toString().replace("\\", "\\\\")
+
+    private fun escapedJsonPath(path: Path): String =
+        path.toAbsolutePath().toString().replace("\\", "\\\\")
+
     @Test
     fun legacyPassSelectionSupportsRollbackAndFailsClosedAtTheDisabledBoundary() {
         val source = """
@@ -354,7 +360,7 @@ class TranspilerTest {
             ).run(listOf("parse", "--stdin", "--source", source.toString()))
 
             assertEquals(0, status)
-            assertTrue(output.toString().contains(source.toAbsolutePath().normalize().toString()), output.toString())
+            assertTrue(output.toString().contains(escapedJsonPath(source)), output.toString())
             assertTrue(output.toString().contains("\"endOffset\":${unsavedText.length}"), output.toString())
             assertTrue(output.toString().contains("\"kind\":\"struct_declaration\""), output.toString())
 
@@ -365,7 +371,7 @@ class TranspilerTest {
                 stdinText = { "int incomplete( {" }
             ).run(listOf("parse", "--stdin", "--source", source.toString()))
             assertEquals(1, malformedStatus)
-            assertTrue(malformedOutput.toString().contains(source.toAbsolutePath().normalize().toString()), malformedOutput.toString())
+            assertTrue(malformedOutput.toString().contains(escapedJsonPath(source)), malformedOutput.toString())
             assertTrue(malformedOutput.toString().contains("\"diagnostics\":[{"), malformedOutput.toString())
 
             val invalidArguments = CPlusCli(output = StringBuilder(), errors = StringBuilder(), stdinText = { "" })
@@ -392,10 +398,10 @@ class TranspilerTest {
 
             assertEquals(0, status)
             assertTrue(json.contains("\"schema\":\"cplus.imports.v1\""), json)
-            assertTrue(json.contains("\"importer\":\"${SourceId.fromPath(root).value}\""), json)
-            assertTrue(json.contains("\"imported\":\"${SourceId.fromPath(dependency).value}\""), json)
+            assertTrue(json.contains("\"importer\":\"${escapedJsonPath(root)}\""), json)
+            assertTrue(json.contains("\"imported\":\"${escapedJsonPath(dependency)}\""), json)
             assertTrue(json.contains("\"startLine\":1"), json)
-            assertTrue(json.indexOf(SourceId.fromPath(dependency).value) < json.indexOf(SourceId.fromPath(root).value), json)
+            assertTrue(json.indexOf(escapedJsonPath(dependency)) < json.indexOf(escapedJsonPath(root)), json)
         } finally {
             Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
@@ -410,7 +416,7 @@ class TranspilerTest {
 
         val generated = CPlusTranspiler().transpile(input, "legacy-baseline.cp")
 
-        assertEquals(expectedC, generated.code)
+        assertEquals(expectedC.replace("\r\n", "\n"), generated.code.replace("\r\n", "\n"))
         val mainLine = generated.code.lines().indexOfFirst { it == "int main(void) {" } + 1
         assertTrue(mainLine > 0, generated.code)
         val origin = generated.sourceMap.sourceForGeneratedLine(mainLine + 1)
@@ -1658,7 +1664,7 @@ class TranspilerTest {
             val result = CPlusTranspiler().transpile(source, directory.resolve("main.cp").toString())
             assertTrue("int result = 73;" in result.code, result.code)
             assertTrue("imported_runtime = 1;" in result.code, result.code)
-            assertTrue("#line 1 \"${imported.toAbsolutePath()}\"" in result.code, result.code)
+            assertTrue("#line 1 \"${escapedLinePath(imported)}\"" in result.code, result.code)
         } finally {
             Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
@@ -2222,7 +2228,7 @@ class TranspilerTest {
 
             assertTrue("int result = 73;" in result.code, result.code)
             assertTrue("imported_runtime = 1;" in result.code, result.code)
-            assertTrue("#line 1 \"${imported.toAbsolutePath()}\"" in result.code, result.code)
+            assertTrue("#line 1 \"${escapedLinePath(imported)}\"" in result.code, result.code)
         } finally {
             Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
@@ -2357,7 +2363,7 @@ class TranspilerTest {
             assertTrue("int limit = 8;" in result.code, result.code)
             assertTrue("typedef struct imported_t" in result.code, result.code)
             assertTrue(
-                result.code.contains("#line 1 \"${imported.toAbsolutePath()}\""),
+                result.code.contains("#line 1 \"${escapedLinePath(imported)}\""),
                 result.code
             )
             assertTrue(

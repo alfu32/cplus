@@ -91,7 +91,15 @@ internal class ComptimeCompiler(
         stack: ArrayDeque<Path>,
         extractTests: Boolean
     ): ComptimeModuleResult {
-        val key = source.name?.let(::pathFromSourceName)?.toAbsolutePath()?.normalize()
+        // Editor buffers and direct transpiler calls use virtual names such as
+        // `<c-plus-input>`. They are source identities, not filesystem paths;
+        // attempting to parse them as Windows paths throws on characters such
+        // as `<` and `>`. Only real path-like names participate in module
+        // caching, cycle detection, and import-relative resolution.
+        val key = source.name
+            ?.let { name -> runCatching { pathFromSourceName(name) }.getOrNull() }
+            ?.toAbsolutePath()
+            ?.normalize()
         if (key != null) {
             modules[key]?.let { return it }
             if (modules.size >= MAX_IMPORT_MODULES) {

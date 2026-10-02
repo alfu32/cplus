@@ -319,6 +319,16 @@ class TccCompiler {
             }
             val diagnostics = process.inputStream.bufferedReader().use { it.readText() }
             val exitCode = process.waitFor()
+            if (exitCode == 0 && !Files.isRegularFile(outputPath) && isWindowsHost()) {
+                // GCC/Clang on Windows append `.exe` when the requested output
+                // name has no extension.  Keep the CLI's explicit `-o` path
+                // contract stable so callers can run and inspect that path
+                // consistently across hosts.
+                val windowsOutput = outputPath.resolveSibling("${outputPath.fileName}.exe")
+                if (Files.isRegularFile(windowsOutput)) {
+                    Files.move(windowsOutput, outputPath)
+                }
+            }
             return TccCompilationResult(
                 exitCode = exitCode,
                     diagnostics = CompilerDiagnosticParser.parse(diagnostics, source)
@@ -377,6 +387,8 @@ class TccCompiler {
     }
 
     private fun isLinuxHost(): Boolean = System.getProperty("os.name").lowercase().contains("linux")
+
+    private fun isWindowsHost(): Boolean = System.getProperty("os.name").lowercase().contains("win")
 
     private fun quoteOption(option: String): String {
         if (option.isEmpty()) return "\"\""
