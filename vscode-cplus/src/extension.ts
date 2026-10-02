@@ -7,8 +7,9 @@ import { clearTimeout, setTimeout } from "node:timers";
 import { CPlusAstNode, CPlusSymbol, indexText, memberContext, symbolsFromAst } from "./index";
 import { CPlusTestFixture, findTestFixtures, findTestFixturesFromAst } from "./tests";
 import { decodeImportGraph } from "./importGraph";
-import { CPlusLspClient } from "./lspClient";
+import { CPlusLspClient, semanticTokenTypes, semanticTokenModifiers } from "./lspClient";
 import { resolveLanguageServerCommand } from "./lspDiscovery";
+import { commandEnvironment } from "./environment";
 import {
     builtinTestMacros,
     cKeywords,
@@ -55,6 +56,17 @@ function rangeFor(document: vscode.TextDocument, start: number, end: number): vs
 
 const parserTrees = new Map<string, { version: number; source: string; root: CPlusAstNode }>();
 const parserTreeListeners = new Set<(document: vscode.TextDocument) => void>();
+
+function configuredEnvironment(): Record<string, string | undefined> {
+    return commandEnvironment(vscode.workspace.getConfiguration("cplus").get<Record<string, string>>("environment", {}));
+}
+
+/** Compiler/frontend flags precede the CLI subcommand, never its input files. */
+function withGlobalArguments(command: string[], flags: string[]): string[] {
+    const index = command.findIndex((item, index) => index > 0 && ["transcode", "compile", "run", "test", "parse", "graph", "lsp"].includes(item));
+    const split = index < 0 ? command.length : index;
+    return [...command.slice(0, split), ...flags, ...command.slice(split)];
+}
 
 class CPlusCompletionProvider implements vscode.CompletionItemProvider {
     provideCompletionItems(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionList {
@@ -274,9 +286,11 @@ async function compilerDiagnostics(
     const local = localDiagnostics(document);
     const parsed: vscode.Diagnostic[] = [];
     if (configuration.get<boolean>("parserDiagnostics", false)) {
-        const command = splitCommand(configuration.get<string>("parserCommand", "cplus parse"));
+        const command = withGlobalArguments(splitCommand(configuration.get<string>("parserCommand", "cplus parse")),
+            configuration.get<string[]>("compilerArguments", []));
         await new Promise<void>((resolve) => {
             const child = execFile(command[0], [...command.slice(1), "--stdin", "--source", document.uri.fsPath], {
+                env: configuredEnvironment(),
                 cwd: vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath,
                 maxBuffer: 16 * 1024 * 1024
             }, (_error, stdout) => {
@@ -318,19 +332,20 @@ async function compilerDiagnostics(
 
     const compiler: vscode.Diagnostic[] = [];
     if (includeCompiler && configuration.get<boolean>("compilerDiagnostics", false)) {
-        const command = splitCommand(configuration.get<string>("compilerCommand", "cplus compile"));
         const extraArgs = configuration.get<string[]>("compilerArguments", []);
+        const command = withGlobalArguments(splitCommand(configuration.get<string>("compilerCommand", "cplus compile")), extraArgs);
         const output = join(tmpdir(), "cplus-vscode-" + Date.now());
         await new Promise<void>((resolve) => {
-            execFile(command[0], [...command.slice(1), document.uri.fsPath, "-o", output, ...extraArgs], {
+            execFile(command[0], [...command.slice(1), document.uri.fsPath, "-o", output], {
+                env: configuredEnvironment(),
                 cwd: vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath,
                 maxBuffer: 1024 * 1024
             }, (error, stdout, stderr) => {
                 for (const line of (stderr + "\n" + stdout).split(/\r?\n/)) {
-                    const match = /^(.*?):(\d+):(\d+):\s*(?:error|warning):\s*(.*)$/.exec(line);
+                    const match = /^(.*?):(\d+):(\d+):\s*(error|warning):\s*(.*)$/.exec(line);
                     if (!match || match[1] !== document.uri.fsPath) continue;
                     const range = new vscode.Range(Number(match[2]) - 1, Number(match[3]) - 1, Number(match[2]) - 1, Number(match[3]));
-                    compiler.push(new vscode.Diagnostic(range, match[4], error ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning));
+                    compiler.push(new vscode.Diagnostic(range, match[5], match[4] === "error" ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning));
                 }
                 void unlink(output).catch(() => undefined);
                 resolve();
@@ -350,9 +365,10 @@ function registerCommands(context: vscode.ExtensionContext, diagnostics: vscode.
         const configuration = vscode.workspace.getConfiguration("cplus");
         const command = splitCommand(configuration.get<string>(setting, setting === "runnerCommand" ? "cplus run" : "cplus compile"));
         if (replaceLast && command.length > 1) command[command.length - 1] = replaceLast;
-        const terminal = vscode.window.createTerminal("C-plus " + setting);
+        const terminal = vscode.window.createTerminal({ name: "C-plus " + setting, env: configuredEnvironment() });
         terminal.show();
-        terminal.sendText([...command, editor.document.uri.fsPath].map(shellQuote).join(" "));
+        terminal.sendText([...withGlobalArguments(command, configuration.get<string[]>("compilerArguments", [])),
+            editor.document.uri.fsPath].map(shellQuote).join(" "));
     };
     context.subscriptions.push(
         vscode.commands.registerCommand("cplus.transcode", () => runCli("compilerCommand", "transcode")),
@@ -427,8 +443,9 @@ function registerTestSupport(context: vscode.ExtensionContext): void {
             await document.save();
             const configuration = vscode.workspace.getConfiguration("cplus");
             const command = splitCommand(configuration.get<string>("testProgramCommand", "cplus test"));
-            const args = [...command.slice(1), ...(configuration.get<string[]>("compilerArguments", [])), job.location.uri.fsPath, job.location.fixture.name];
-            const result = await execute(command[0] ?? "cplus", args, token);
+            const configured = withGlobalArguments(command, configuration.get<string[]>("compilerArguments", []));
+            const args = [...configured.slice(1), job.location.uri.fsPath, job.location.fixture.name];
+            const result = await execute(configured[0] ?? "cplus", args, token);
             if (result.output) run.appendOutput(result.output.replace(/\r?\n/g, "\r\n"), undefined, job.item);
             if (result.cancelled) run.skipped(job.item);
             else if (result.code === 0) run.passed(job.item);
@@ -475,6 +492,7 @@ function execute(command: string, args: string[], token: vscode.CancellationToke
         let cancelled = false;
         const subscription = token.onCancellationRequested(() => { cancelled = true; child?.kill(); });
         child = execFile(command, args, {
+            env: configuredEnvironment(),
             cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
             maxBuffer: 8 * 1024 * 1024
         }, (error, stdout, stderr) => {
@@ -511,32 +529,44 @@ class CPlusMainCodeLensProvider implements vscode.CodeLensProvider {
 class CPlusLspCompletionProvider implements vscode.CompletionItemProvider {
     constructor(private readonly client: CPlusLspClient) {}
 
-    provideCompletionItems(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.CompletionList> {
-        return this.client.completion(document, position).catch(() => new vscode.CompletionList([], false));
+    provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.CompletionList> {
+        return this.client.completion(document, position, token).catch((error) => {
+            if (!token.isCancellationRequested) this.client.reportFailure(error);
+            return new vscode.CompletionList([], false);
+        });
     }
 }
 
 class CPlusLspHoverProvider implements vscode.HoverProvider {
     constructor(private readonly client: CPlusLspClient) {}
 
-    provideHover(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Hover | undefined> {
-        return this.client.hover(document, position).catch(() => undefined);
+    provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Hover | undefined> {
+        return this.client.hover(document, position, token).catch((error) => {
+            if (!token.isCancellationRequested) this.client.reportFailure(error);
+            return undefined;
+        });
     }
 }
 
 class CPlusLspDefinitionProvider implements vscode.DefinitionProvider {
     constructor(private readonly client: CPlusLspClient) {}
 
-    provideDefinition(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Location[] | undefined> {
-        return this.client.definition(document, position).catch(() => undefined);
+    provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Location[] | undefined> {
+        return this.client.definition(document, position, token).catch((error) => {
+            if (!token.isCancellationRequested) this.client.reportFailure(error);
+            return undefined;
+        });
     }
 }
 
 class CPlusLspDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
     constructor(private readonly client: CPlusLspClient) {}
 
-    provideDocumentSymbols(document: vscode.TextDocument): Promise<vscode.DocumentSymbol[]> {
-        return this.client.documentSymbols(document).catch(() => []);
+    provideDocumentSymbols(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.DocumentSymbol[]> {
+        return this.client.documentSymbols(document, token).catch((error) => {
+            if (!token.isCancellationRequested) this.client.reportFailure(error);
+            return [];
+        });
     }
 }
 
@@ -548,7 +578,13 @@ function registerLanguageServer(context: vscode.ExtensionContext): boolean {
     const arguments_ = configuration.get<string[]>("languageServerArguments", []);
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const command = resolveLanguageServerCommand({ configured: configuredCommand, workspaceRoot });
-    const client = new CPlusLspClient(command, arguments_, output);
+    const client = new CPlusLspClient(command, arguments_, output,
+        configuration.get<Record<string, string>>("environment", {}),
+        configuration.get<number>("languageServerRequestTimeout", 15000));
+    const recover = <T>(promise: Promise<T>, fallback: T, token: vscode.CancellationToken): Promise<T> => promise.catch((error) => {
+        if (!token.isCancellationRequested) client.reportFailure(error);
+        return fallback;
+    });
     context.subscriptions.push(
         output,
         client,
@@ -561,7 +597,52 @@ function registerLanguageServer(context: vscode.ExtensionContext): boolean {
         vscode.languages.registerCompletionItemProvider("cplus", new CPlusLspCompletionProvider(client), ".", ">", "@"),
         vscode.languages.registerHoverProvider("cplus", new CPlusLspHoverProvider(client)),
         vscode.languages.registerDefinitionProvider("cplus", new CPlusLspDefinitionProvider(client)),
-        vscode.languages.registerDocumentSymbolProvider("cplus", new CPlusLspDocumentSymbolProvider(client))
+        vscode.languages.registerDocumentSymbolProvider("cplus", new CPlusLspDocumentSymbolProvider(client)),
+        vscode.languages.registerReferenceProvider("cplus", {
+            provideReferences: (document, position, referenceContext, token) =>
+                recover(client.references(document, position, referenceContext.includeDeclaration, token), [], token)
+        }),
+        vscode.languages.registerDocumentHighlightProvider("cplus", {
+            provideDocumentHighlights: (document, position, token) => recover(client.highlights(document, position, token), [], token)
+        }),
+        vscode.languages.registerWorkspaceSymbolProvider({
+            provideWorkspaceSymbols: (query, token) => recover(client.workspaceSymbols(query, token), [], token)
+        }),
+        vscode.languages.registerSignatureHelpProvider("cplus", {
+            provideSignatureHelp: (document, position, token) => recover(client.signatureHelp(document, position, token), undefined, token)
+        }, "(", ","),
+        vscode.languages.registerFoldingRangeProvider("cplus", {
+            provideFoldingRanges: (document, _context, token) => recover(client.foldingRanges(document, token), [], token)
+        }),
+        vscode.languages.registerCodeLensProvider("cplus", {
+            provideCodeLenses: (document, token) => recover(client.codeLenses(document, token), [], token)
+        }),
+        vscode.languages.registerDocumentSemanticTokensProvider("cplus", {
+            provideDocumentSemanticTokens: (document, token) =>
+                recover(client.semanticTokens(document, token), new vscode.SemanticTokens(new Uint32Array()), token)
+        }, new vscode.SemanticTokensLegend(semanticTokenTypes, semanticTokenModifiers)),
+        vscode.commands.registerCommand("cplus.runTest", async (uri: string, name: string) => {
+            const target = vscode.Uri.parse(uri);
+            if (target.scheme !== "file") return;
+            const document = await vscode.workspace.openTextDocument(target);
+            if (document.isDirty && !await document.save()) return;
+            const config = vscode.workspace.getConfiguration("cplus");
+            const command = withGlobalArguments(splitCommand(config.get<string>("testProgramCommand", "cpc test")),
+                config.get<string[]>("compilerArguments", []));
+            const terminal = vscode.window.createTerminal({ name: "C-plus test", env: configuredEnvironment() });
+            terminal.show();
+            terminal.sendText([...command, target.fsPath, name].map(shellQuote).join(" "));
+        }),
+        vscode.workspace.onDidChangeConfiguration((event) => {
+            if (event.affectsConfiguration("cplus.environment") || event.affectsConfiguration("cplus.languageServerCommand") ||
+                event.affectsConfiguration("cplus.languageServerArguments") || event.affectsConfiguration("cplus.languageServerRequestTimeout")) {
+                const next = vscode.workspace.getConfiguration("cplus");
+                const command = resolveLanguageServerCommand({ configured: next.get<string>("languageServerCommand", ""), workspaceRoot });
+                void client.reconfigure(command, next.get<string[]>("languageServerArguments", []),
+                    next.get<Record<string, string>>("environment", {}), next.get<number>("languageServerRequestTimeout", 15000))
+                    .catch((error) => { client.reportFailure(error); void vscode.window.showWarningMessage("C-plus language server reconfiguration failed; see its output channel."); });
+            }
+        })
     );
     void client.start().catch((error: unknown) => {
         output.appendLine(error instanceof Error ? error.message : String(error));
@@ -576,9 +657,11 @@ function registerMainRun(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand("cplus.runMain", async (uri?: vscode.Uri) => {
             const target = uri ?? vscode.window.activeTextEditor?.document.uri;
             if (!target || target.scheme !== "file") return;
-            const command = splitCommand(vscode.workspace.getConfiguration("cplus").get<string>("runnerCommand", "cplus run"));
+            const configuration = vscode.workspace.getConfiguration("cplus");
+            const command = withGlobalArguments(splitCommand(configuration.get<string>("runnerCommand", "cplus run")),
+                configuration.get<string[]>("compilerArguments", []));
             if (!command.length) return;
-            const terminal = vscode.window.createTerminal("C-plus run main");
+            const terminal = vscode.window.createTerminal({ name: "C-plus run main", env: configuredEnvironment() });
             terminal.show();
             terminal.sendText([...command, target.fsPath].map(shellQuote).join(" "));
         })

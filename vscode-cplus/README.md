@@ -10,6 +10,25 @@ The Testing view discovers named `@test` fixtures and places run controls in the
 
 The extension contributes a **C-plus File Icons** theme for `.cp` and `.c+` files. Select it through **Preferences: File Icon Theme**; VS Code requires an explicit icon-theme choice before file icons are applied. The theme's SVG is included in the extension so it also works in an Extension Development Host.
 
+## Language server
+
+Enable `cplus.languageServer` for the CLI-owned Tree-sitter service. It supplies
+completion, hover, definition/references, read/write highlights, workspace and
+hierarchical document symbols, signature help, folding, semantic typedef/symbol
+highlighting, and `@test` run lenses.
+Imported generators use unsaved editor buffers and refresh dependent documents.
+Set `cplus.languageServerCommand` to the executable and put global CLI options
+in `cplus.languageServerArguments` (before the automatically appended `lsp`).
+`cplus.compilerArguments` also precedes compile/run/test commands.
+
+Use `cplus.environment`, for example `{"PATH":"$PATH:/opt/c-plus","CC":"clang"}`,
+for both server and compiler/run/test processes. Environment values expand
+against the inherited environment; commands themselves are not shell scripts.
+Changing server settings restarts the process and re-opens current documents.
+Requests support cancellation and configurable deadlines through
+`cplus.languageServerRequestTimeout`; failures go to the C-plus output channel.
+See [the LSP contract](../documentation/spec/SPEC.lsp.md) for boundaries and examples.
+
 ## Development
 
 ```sh

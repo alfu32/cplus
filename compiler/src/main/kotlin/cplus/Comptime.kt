@@ -30,7 +30,9 @@ internal class ComptimeCompiler(
     private val logger: CompilationLogger,
     private val importPaths: CPlusImportPaths = CPlusImportPaths(),
     private val targetOs: String = CPlusTarget.hostOs(),
-    private val sourceManager: SourceManager = SourceManager()
+    private val sourceManager: SourceManager = SourceManager(),
+    /** Tooling overlays are read-only; ordinary compilation still reads disk. */
+    private val sourceProvider: ((Path) -> SourceFile?)? = null
 ) {
     private companion object {
         const val MAX_IMPORT_MODULES = 256
@@ -310,7 +312,7 @@ internal class ComptimeCompiler(
             throw syntax("C-plus imports must use .cp or .c+: $path", source, item.start)
         }
         return try {
-            sourceManager.load(path).sourceFile
+            sourceProvider?.invoke(path) ?: sourceManager.load(path).sourceFile
         } catch (error: Exception) {
             throw syntax("cannot read imported C-plus file $path: ${error.message}", source, item.start)
         }
@@ -347,7 +349,9 @@ internal class ComptimeCompiler(
         requestedPath: String,
         extensionlessCandidates: List<String>
     ): Path = try {
-        CPlusImportResolver(importPaths).resolve(source, requestedPath, extensionlessCandidates)
+        CPlusImportResolver(importPaths) { path ->
+            sourceProvider?.invoke(path) != null || Files.isRegularFile(path)
+        }.resolve(source, requestedPath, extensionlessCandidates)
     } catch (error: CPlusImportResolutionException) {
         throw syntax(error.message ?: "cannot resolve import '$requestedPath'", source, offset)
     }
@@ -1072,21 +1076,28 @@ internal class ComptimeCompiler(
  */
 data class CPlusToolMaterialization(
     val source: SourceFile,
-    val mapping: MappedText
+    val mapping: MappedText,
+    /** Active imports after conditional selection, including generated imports. */
+    val imports: List<SourceImportEdge> = emptyList(),
+    val compilerOptions: List<String> = emptyList()
 )
 
 fun materializeCPlusForTools(
     source: SourceFile,
     importPaths: CPlusImportPaths = CPlusImportPaths(),
-    targetOs: String = CPlusTarget.hostOs()
+    targetOs: String = CPlusTarget.hostOs(),
+    /** Supplies current editor snapshots for imports; null falls back to disk. */
+    sourceProvider: ((Path) -> SourceFile?)? = null
 ): CPlusToolMaterialization {
-    val runtime = ComptimeCompiler(
+    val compiled = ComptimeCompiler(
         root = source,
         logger = SilentCompilationLogger,
         importPaths = importPaths,
-        targetOs = targetOs
-    ).compile(resolveTestBodies = false, extractTests = true).runtime
-    return CPlusToolMaterialization(SourceFile(runtime.text, source.name, runtime), runtime)
+        targetOs = targetOs,
+        sourceProvider = sourceProvider
+    ).compile(resolveTestBodies = false, extractTests = true)
+    val runtime = compiled.runtime
+    return CPlusToolMaterialization(SourceFile(runtime.text, source.name, runtime), runtime, compiled.imports, compiled.compilerOptions)
 }
 
 /** Returns the first source span owned by the legacy comptime parser, if any. */

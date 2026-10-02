@@ -25,6 +25,7 @@ import cplus.MappedText
 import cplus.MappedTextBuilder
 import cplus.MappedEmitter
 import cplus.ParserDiagnostic
+import cplus.ParserDiagnosticSeverity
 import cplus.SourceId
 import cplus.SourceSpan
 import cplus.SourceManager
@@ -61,7 +62,8 @@ data class TreeSitterPrototypeResult(
     val synthesizedSource: MappedText? = null
 ) {
     val successful: Boolean
-        get() = cSource != null && parserDiagnostics.isEmpty() && loweringDiagnostics.isEmpty() && unsupportedNodes.isEmpty()
+        get() = cSource != null && parserDiagnostics.none { it.severity == ParserDiagnosticSeverity.ERROR } &&
+            loweringDiagnostics.isEmpty() && unsupportedNodes.isEmpty()
 }
 
 data class TreeSitterUnsupportedConstruct(val syntaxKind: String, val span: cplus.SourceSpan)
@@ -115,21 +117,45 @@ class TreeSitterCPlusPrototypeTranspiler(
     private val targetOs: String = cplus.CPlusTarget.hostOs(),
     private val importPaths: CPlusImportPaths = CPlusImportPaths(),
     private val targetArch: String = cplus.CPlusTarget.hostArch(),
-    private val passSelection: TreeSitterPassSelection = TreeSitterPassSelection()
+    private val passSelection: TreeSitterPassSelection = TreeSitterPassSelection(),
+    /** CLI emission policy; strict migration/test callers retain the default. */
+    private val recoverDiagnostics: Boolean = false
 ) {
     fun transpile(source: SourceSnapshot): TreeSitterPrototypeResult {
+        val result = transpileStrict(source)
+        if (result.cSource != null || !recoverDiagnostics) return result
+        val diagnostics = result.parserDiagnostics + result.loweringDiagnostics.map {
+            ParserDiagnostic(it.code, it.message, ParserDiagnosticSeverity.ERROR, it.span)
+        } + result.unsupportedNodes.map {
+            ParserDiagnostic("CPLUS_UNSUPPORTED_AST", "AST fragment '${it.syntaxKind}' has no compiler mapping; source preserved",
+                ParserDiagnosticSeverity.WARNING, it.span)
+        }
+        if (diagnostics.isEmpty()) return result // no coherent diagnostic recovery contract
+        val preserved = rewriteCPlusAnnotationMacros(MappedText.identity(source.sourceFile))
+        val emitted = MappedEmitter(source.sourceFile).emit(preserved, "", result.allocationAnalysis, result.compilerOptions)
+            .copy(frontendDiagnostics = diagnostics.distinctBy { listOf(it.code, it.span, it.message) })
+        return result.copy(cSource = preserved, transcodedSource = emitted)
+    }
+
+    private fun transpileStrict(source: SourceSnapshot): TreeSitterPrototypeResult {
         var revision = 0
         fun snapshotFor(text: String): SourceSnapshot = sourceManager.open(
             SourceId.named("${source.id.value}#tree-sitter-${revision++}"),
             text
         )
 
+        val parserWarnings = mutableListOf<ParserDiagnostic>()
+        var mapped = MappedText.identity(source.sourceFile)
+        fun parseCurrent(snapshot: SourceSnapshot, origin: MappedText = mapped): cplus.CPlusParseResult =
+            backend.parse(snapshot).also { parsed ->
+                parserWarnings += parsed.diagnostics.filter { it.severity == ParserDiagnosticSeverity.WARNING }
+                    .map { it.copy(span = origin.toOriginalSpan(it.span)) }
+            }
         var snapshot = source
-        var parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
+        var parsed = parseCurrent(snapshot)
+        if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
             return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mappedIdentity(source), it.span) }, emptyList(), emptyList())
         }
-        var mapped = MappedText.identity(source.sourceFile)
         var ast = CPlusAstAdapter().adapt(parsed)
         var testFixtures: List<cplus.CPlusExtractedTestFixture> = emptyList()
         var allocationAnalysis = cplus.AllocationAnalysisResult()
@@ -166,8 +192,8 @@ class TreeSitterCPlusPrototypeTranspiler(
             conditionalPassCount++
             mapped = materialized.source
             snapshot = snapshotFor(mapped.text)
-            parsed = backend.parse(snapshot)
-            if (parsed.diagnostics.isNotEmpty()) {
+            parsed = parseCurrent(snapshot)
+            if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                 return TreeSitterPrototypeResult(
                     null,
                     parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
@@ -194,7 +220,7 @@ class TreeSitterCPlusPrototypeTranspiler(
 
         val imports = TreeSitterComptimeImportLowering(backend, sourceManager, importPaths, targetOs)
             .lower(parsed, mapped)
-        if (imports.parserDiagnostics.isNotEmpty()) {
+        if (imports.parserDiagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
             return TreeSitterPrototypeResult(null, imports.parserDiagnostics, emptyList(), emptyList())
         }
         if (imports.loweringDiagnostics.isNotEmpty()) {
@@ -205,8 +231,8 @@ class TreeSitterCPlusPrototypeTranspiler(
         compilerOptionOrder = imports.compilerOptionOrder
         sourceImports = imports.sourceImports
         snapshot = snapshotFor(mapped.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
+        parsed = parseCurrent(snapshot)
+        if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
             return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
         }
 
@@ -229,8 +255,8 @@ class TreeSitterCPlusPrototypeTranspiler(
                 comptimeBlockPassCount++
                 mapped = reflectedFields.source
                 snapshot = snapshotFor(mapped.text)
-                parsed = backend.parse(snapshot)
-                if (parsed.diagnostics.isNotEmpty()) {
+                parsed = parseCurrent(snapshot)
+                if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                     return TreeSitterPrototypeResult(
                         null,
                         parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
@@ -256,8 +282,8 @@ class TreeSitterCPlusPrototypeTranspiler(
             comptimeBlockPassCount++
             mapped = materialized.source
             snapshot = snapshotFor(mapped.text)
-            parsed = backend.parse(snapshot)
-            if (parsed.diagnostics.isNotEmpty()) {
+            parsed = parseCurrent(snapshot)
+            if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                 return TreeSitterPrototypeResult(
                     null,
                     parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
@@ -308,8 +334,8 @@ class TreeSitterCPlusPrototypeTranspiler(
             if (generatedFieldLoops.source.text != mapped.text) {
                 mapped = generatedFieldLoops.source
                 snapshot = snapshotFor(mapped.text)
-                parsed = backend.parse(snapshot)
-                if (parsed.diagnostics.isNotEmpty()) {
+                parsed = parseCurrent(snapshot)
+                if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                     return TreeSitterPrototypeResult(
                         null,
                         parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
@@ -334,8 +360,8 @@ class TreeSitterCPlusPrototypeTranspiler(
             if (generatedBlocks.source.text != mapped.text) {
                 mapped = generatedBlocks.source
                 snapshot = snapshotFor(mapped.text)
-                parsed = backend.parse(snapshot)
-                if (parsed.diagnostics.isNotEmpty()) {
+                parsed = parseCurrent(snapshot)
+                if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                     return TreeSitterPrototypeResult(
                         null,
                         parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
@@ -380,8 +406,8 @@ class TreeSitterCPlusPrototypeTranspiler(
                 }
                 mapped = entities.source
                 snapshot = snapshotFor(mapped.text)
-                parsed = backend.parse(snapshot)
-                if (parsed.diagnostics.isNotEmpty()) {
+                parsed = parseCurrent(snapshot)
+                if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                     return TreeSitterPrototypeResult(
                         null,
                         parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
@@ -397,7 +423,7 @@ class TreeSitterCPlusPrototypeTranspiler(
             if (descendants(parsed.root).any { it.kind in CPLUS_MODULE_IMPORT_NODES }) {
                 val expandedImports = TreeSitterComptimeImportLowering(backend, sourceManager, importPaths, targetOs)
                     .lower(parsed, mapped, source.sourceFile, compilerOptionOrder.toSet())
-                if (expandedImports.parserDiagnostics.isNotEmpty()) {
+                if (expandedImports.parserDiagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                     return TreeSitterPrototypeResult(null, expandedImports.parserDiagnostics, emptyList(), emptyList())
                 }
                 if (expandedImports.loweringDiagnostics.isNotEmpty()) {
@@ -426,8 +452,8 @@ class TreeSitterCPlusPrototypeTranspiler(
                     sourceImports = (sourceImports + expandedImports.sourceImports).distinct()
                     mapped = expandedSource
                     snapshot = snapshotFor(mapped.text)
-                    parsed = backend.parse(snapshot)
-                    if (parsed.diagnostics.isNotEmpty()) {
+                    parsed = parseCurrent(snapshot)
+                    if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                         return TreeSitterPrototypeResult(
                             null,
                             parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
@@ -519,8 +545,8 @@ class TreeSitterCPlusPrototypeTranspiler(
         if (cImports.source.text != mapped.text) {
             mapped = cImports.source
             snapshot = snapshotFor(mapped.text)
-            parsed = backend.parse(snapshot)
-            if (parsed.diagnostics.isNotEmpty()) {
+            parsed = parseCurrent(snapshot)
+            if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                 return TreeSitterPrototypeResult(null, parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) }, emptyList(), emptyList())
             }
             ast = CPlusAstAdapter().adapt(parsed)
@@ -566,8 +592,8 @@ class TreeSitterCPlusPrototypeTranspiler(
         if (scalarMaterialized.source.text != mapped.text) {
             mapped = scalarMaterialized.source
             snapshot = snapshotFor(mapped.text)
-            parsed = backend.parse(snapshot)
-            if (parsed.diagnostics.isNotEmpty()) {
+            parsed = parseCurrent(snapshot)
+            if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                 return TreeSitterPrototypeResult(
                     null,
                     parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
@@ -592,8 +618,8 @@ class TreeSitterCPlusPrototypeTranspiler(
         if (flagsMaterialized.source.text != mapped.text) {
             mapped = flagsMaterialized.source
             snapshot = snapshotFor(mapped.text)
-            parsed = backend.parse(snapshot)
-            if (parsed.diagnostics.isNotEmpty()) {
+            parsed = parseCurrent(snapshot)
+            if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                 return TreeSitterPrototypeResult(
                     null,
                     parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
@@ -729,9 +755,9 @@ class TreeSitterCPlusPrototypeTranspiler(
             mapped,
             runtimeSteps
         ) { stageSource ->
-            backend.parse(snapshotFor(stageSource.text))
+            parseCurrent(snapshotFor(stageSource.text), stageSource)
         }
-        if (runtimeLowering.parserDiagnostics.isNotEmpty()) {
+        if (runtimeLowering.parserDiagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
             return TreeSitterPrototypeResult(
                 null,
                 runtimeLowering.parserDiagnostics,
@@ -769,8 +795,8 @@ class TreeSitterCPlusPrototypeTranspiler(
             testFixtures = extractedTests.fixtures
             mapped = extractedTests.source
             snapshot = snapshotFor(mapped.text)
-            parsed = backend.parse(snapshot)
-            if (parsed.diagnostics.isNotEmpty()) {
+            parsed = parseCurrent(snapshot)
+            if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                 return TreeSitterPrototypeResult(
                     null,
                     parsed.diagnostics.map { it.withMappedSpan(mapped, it.span) },
@@ -805,8 +831,8 @@ class TreeSitterCPlusPrototypeTranspiler(
         output.append(mapped)
         val emittedSource = output.build()
         snapshot = snapshotFor(emittedSource.text)
-        parsed = backend.parse(snapshot)
-        if (parsed.diagnostics.isNotEmpty()) {
+        parsed = parseCurrent(snapshot)
+        if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
             return TreeSitterPrototypeResult(
                 null,
                 parsed.diagnostics.map { it.withMappedSpan(emittedSource, it.span) },
@@ -845,8 +871,8 @@ class TreeSitterCPlusPrototypeTranspiler(
         )
         // Validate the emitter's C-plus-shaped intermediate with the C-plus
         // grammar; the hygienic macro names are applied only to final C output.
-        val emittedParse = backend.parse(snapshotFor(generatedC.text))
-        if (emittedParse.diagnostics.isNotEmpty()) {
+        val emittedParse = parseCurrent(snapshotFor(generatedC.text), generatedC)
+        if (emittedParse.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
             return TreeSitterPrototypeResult(
                 null,
                 emittedParse.diagnostics.map { it.withMappedSpan(generatedC, it.span) },
@@ -856,11 +882,15 @@ class TreeSitterCPlusPrototypeTranspiler(
                 testFixtures
             )
         }
+        val warnings = (parserWarnings + runtimeLowering.parserDiagnostics +
+            imports.parserDiagnostics.filter { it.severity == ParserDiagnosticSeverity.WARNING })
+            .distinctBy { listOf(it.code, it.span, it.message) }
         val transcoded = MappedEmitter(source.sourceFile)
             .emit(hygienicGeneratedC, "", allocationAnalysis, compilerOptions)
             .copy(
                 sourceOrder = sourceOrder,
                 sourceImports = sourceImports,
+                frontendDiagnostics = warnings,
                 frontendPasses = runtimeLowering.trace.map { it.stepId },
                 frontendPassesChanged = runtimeLowering.trace
                     .filter { it.sourceChanged }
@@ -874,7 +904,7 @@ class TreeSitterCPlusPrototypeTranspiler(
             )
         return TreeSitterPrototypeResult(
             hygienicGeneratedC,
-            emptyList(),
+            warnings,
             emptyList(),
             emptyList(),
             throwingFunctions,

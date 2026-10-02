@@ -16,6 +16,15 @@ The discovered launcher receives IntelliJ's own Java runtime through `CPLUS_JAVA
 
 With the parser command configured, the Structure tool window shows structs, fields, methods, and top-level functions from the cached `cplus.parse.v1` tree. Entries navigate to their source spans. The view updates when a new parser snapshot is accepted; without an exact-current parser result, the structural outline is empty rather than guessed from incomplete PSI. Test gutter actions also use AST fixture names and offsets from the exact cached snapshot, falling back to the legacy fixture scanner only when no matching parser result is available. **Show C-plus Import Graph** in the editor context menu runs the configured graph command (default `cpc graph`) and offers resolved dependency edges; selecting an edge opens the imported file. Save the editor before invoking it because graph resolution uses the on-disk source.
 
+Applying a changed language-server command or environment validates the
+environment first and restarts clients in open projects. The server runs in the
+project working directory with language ID `cplus`. Initialization and exit are
+recorded in the IDEA log. An unexpected exit produces a visible notification
+and one automatic restart; a second exit asks you to check command diagnostics
+and restart manually. Settings changes and **Restart C-plus Language Server**
+reset that allowance. Protocol features, unsaved imported generators, mapped
+diagnostics, and their limits are documented in [the LSP contract](../documentation/spec/SPEC.lsp.md).
+
 Build the deployable plugin with:
 
 ```sh

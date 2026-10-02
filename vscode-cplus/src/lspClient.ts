@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { clearTimeout, setTimeout } from "node:timers";
 import { languageServerDiscoveryFailure, resolveLanguageServerCommand, splitCommand } from "./lspDiscovery";
 import { lspDiagnosticKind } from "./lspDiagnostics";
+import { commandEnvironment } from "./environment";
 
 // The extension intentionally keeps its runtime dependency-free. VS Code's
 // extension host supplies Node, while this project does not require the full
@@ -17,6 +18,10 @@ type Buffer = any;
 const childProcess: any = require("node:child_process");
 
 type JsonObject = { [key: string]: unknown };
+
+/** Must match the server's advertised semantic-token legend order. */
+export const semanticTokenTypes = ["type", "struct", "enum", "typeParameter", "function", "method", "property", "variable", "parameter", "enumMember", "macro"];
+export const semanticTokenModifiers = ["declaration"];
 
 interface LspPosition {
     line: number;
@@ -44,6 +49,7 @@ interface LspDiagnostic {
 interface PendingRequest {
     resolve: (value: unknown) => void;
     reject: (reason: unknown) => void;
+    cleanup: () => void;
 }
 
 /** Small dependency-free JSON-RPC client for the CLI-owned C-plus language server. */
@@ -61,9 +67,11 @@ export class CPlusLspClient implements vscode.Disposable {
     private restartTimer?: any;
 
     constructor(
-        private readonly command: string | string[],
-        private readonly arguments_: string[],
-        private readonly output: vscode.OutputChannel
+        private command: string | string[],
+        private arguments_: string[],
+        private readonly output: vscode.OutputChannel,
+        private environment: Record<string, string> = {},
+        private requestTimeoutMs = 15000
     ) {}
 
     async start(): Promise<void> {
@@ -75,6 +83,7 @@ export class CPlusLspClient implements vscode.Disposable {
         if (!command.length) throw new Error("cplus.languageServerCommand is empty");
         const child = childProcess.spawn(command[0], [...command.slice(1), ...this.arguments_, "lsp"], {
             cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+            env: commandEnvironment(this.environment),
             stdio: "pipe"
         });
         this.child = child;
@@ -109,6 +118,19 @@ export class CPlusLspClient implements vscode.Disposable {
                 vscode.workspace.onDidChangeTextDocument((event) => this.change(event.document)),
                 vscode.workspace.onDidCloseTextDocument((document) => this.close(document))
             );
+            const watcher = vscode.workspace.createFileSystemWatcher?.("**/*.{cp,c+}");
+            if (watcher) {
+                const changed = (uri: vscode.Uri, type: number): void => this.notify("workspace/didChangeWatchedFiles", {
+                    changes: [{ uri: uri.toString(), type }]
+                });
+                this.disposables.push(watcher, watcher.onDidCreate((uri) => changed(uri, 1)),
+                    watcher.onDidChange((uri) => changed(uri, 2)), watcher.onDidDelete((uri) => changed(uri, 3)));
+            }
+            if (vscode.workspace.onDidSaveTextDocument) this.disposables.push(
+                vscode.workspace.onDidSaveTextDocument((document) => {
+                    if (document.languageId === "cplus") this.notify("textDocument/didSave", { textDocument: { uri: document.uri.toString() } });
+                })
+            );
         }
     }
 
@@ -117,17 +139,54 @@ export class CPlusLspClient implements vscode.Disposable {
         if (this.disposed) return;
         // A user-requested restart starts a fresh bounded crash-recovery window.
         this.restartAttempts = 0;
+        if (this.restartTimer !== undefined) clearTimeout(this.restartTimer);
+        this.restartTimer = undefined;
         this.stopping = true;
+        this.fail(new Error("language server restarting"));
         this.stopProcess();
         this.stopping = false;
         await this.start();
     }
 
-    async request<T>(method: string, params: unknown): Promise<T> {
+    async reconfigure(command: string[], arguments_: string[], environment: Record<string, string>, timeout: number): Promise<void> {
+        // Validate the environment before stopping a working process.
+        commandEnvironment(environment);
+        this.command = command;
+        this.arguments_ = arguments_;
+        this.environment = environment;
+        this.requestTimeoutMs = timeout;
+        await this.restart();
+    }
+
+    async request<T>(method: string, params: unknown, token?: vscode.CancellationToken): Promise<T> {
         if (!this.child || !this.started && method !== "initialize") throw new Error("language server is not running");
         const id = this.nextId++;
-        const promise = new Promise<unknown>((resolve, reject) => this.pending.set(id, { resolve, reject }));
-        this.write({ jsonrpc: "2.0", id, method, params });
+        if (token?.isCancellationRequested) throw new Error("language server request cancelled");
+        if (this.pending.size >= 128) throw new Error("too many pending language server requests");
+        const promise = new Promise<unknown>((resolve, reject) => {
+            let cancellation: vscode.Disposable | undefined;
+            const timer = setTimeout(() => {
+                const entry = this.pending.get(id);
+                if (!entry) return;
+                this.pending.delete(id);
+                entry.cleanup();
+                this.notify("$/cancelRequest", { id });
+                reject(new Error(`Language server timed out: ${method}`));
+            }, method === "initialize" ? Math.max(60000, this.requestTimeoutMs) : this.requestTimeoutMs);
+            this.pending.set(id, { resolve, reject, cleanup: () => { clearTimeout(timer); cancellation?.dispose(); } });
+            cancellation = token?.onCancellationRequested(() => {
+                const entry = this.pending.get(id);
+                if (!entry) return;
+                this.pending.delete(id);
+                entry.cleanup();
+                this.notify("$/cancelRequest", { id });
+                reject(new Error("language server request cancelled"));
+            });
+        });
+        try { this.write({ jsonrpc: "2.0", id, method, params }); } catch (error) {
+            const entry = this.pending.get(id);
+            if (entry) { this.pending.delete(id); entry.cleanup(); entry.reject(error); }
+        }
         return await promise as T;
     }
 
@@ -136,44 +195,103 @@ export class CPlusLspClient implements vscode.Disposable {
         this.write({ jsonrpc: "2.0", method, params });
     }
 
-    async completion(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.CompletionList> {
+    async semanticTokens(document: vscode.TextDocument, token?: vscode.CancellationToken): Promise<vscode.SemanticTokens> {
+        const result = await this.request<{ data: number[] }>("textDocument/semanticTokens/full", {
+            textDocument: { uri: document.uri.toString() }
+        }, token);
+        return new vscode.SemanticTokens(new Uint32Array(result?.data ?? []));
+    }
+
+    async completion(document: vscode.TextDocument, position: vscode.Position, token?: vscode.CancellationToken): Promise<vscode.CompletionList> {
         const result = await this.request<{ items?: Array<{ label: string; kind?: number; detail?: string }> }>("textDocument/completion", {
             textDocument: { uri: document.uri.toString() },
             position: toLspPosition(position)
-        });
+        }, token);
         const items = (result?.items ?? []).map((item) => {
-            const completion = new vscode.CompletionItem(item.label, item.kind === 14
-                ? vscode.CompletionItemKind.Keyword
-                : vscode.CompletionItemKind.Function);
+            const completion = new vscode.CompletionItem(item.label, item.kind ? item.kind - 1 : vscode.CompletionItemKind.Text);
             completion.detail = item.detail;
             return completion;
         });
         return new vscode.CompletionList(items, false);
     }
 
-    async hover(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Hover | undefined> {
+    async hover(document: vscode.TextDocument, position: vscode.Position, token?: vscode.CancellationToken): Promise<vscode.Hover | undefined> {
         const result = await this.request<{ contents?: { value?: string }; range?: LspRange } | null>("textDocument/hover", {
             textDocument: { uri: document.uri.toString() },
             position: toLspPosition(position)
-        });
+        }, token);
         if (!result?.contents) return undefined;
         const range = result.range ? fromLspRange(result.range) : undefined;
         return new vscode.Hover(new vscode.MarkdownString(result.contents.value ?? ""), range);
     }
 
-    async definition(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Location[] | undefined> {
+    async definition(document: vscode.TextDocument, position: vscode.Position, token?: vscode.CancellationToken): Promise<vscode.Location[] | undefined> {
         const result = await this.request<LspLocation[]>("textDocument/definition", {
             textDocument: { uri: document.uri.toString() },
             position: toLspPosition(position)
-        });
+        }, token);
         return result?.map((location) => new vscode.Location(vscode.Uri.parse(location.uri), fromLspRange(location.range)));
     }
 
-    async documentSymbols(document: vscode.TextDocument): Promise<vscode.DocumentSymbol[]> {
+    async documentSymbols(document: vscode.TextDocument, token?: vscode.CancellationToken): Promise<vscode.DocumentSymbol[]> {
         const result = await this.request<Array<JsonObject>>("textDocument/documentSymbol", {
             textDocument: { uri: document.uri.toString() }
-        });
+        }, token);
         return (result ?? []).map((symbol) => toDocumentSymbol(symbol));
+    }
+
+    async references(document: vscode.TextDocument, position: vscode.Position, includeDeclaration: boolean, token?: vscode.CancellationToken): Promise<vscode.Location[]> {
+        const result = await this.request<LspLocation[]>("textDocument/references", {
+            textDocument: { uri: document.uri.toString() }, position: toLspPosition(position), context: { includeDeclaration }
+        }, token);
+        return (result ?? []).map((location) => new vscode.Location(vscode.Uri.parse(location.uri), fromLspRange(location.range)));
+    }
+
+    async highlights(document: vscode.TextDocument, position: vscode.Position, token?: vscode.CancellationToken): Promise<vscode.DocumentHighlight[]> {
+        const result = await this.request<Array<{ range: LspRange; kind: number }>>("textDocument/documentHighlight", {
+            textDocument: { uri: document.uri.toString() }, position: toLspPosition(position)
+        }, token);
+        return (result ?? []).map((item) => new vscode.DocumentHighlight(fromLspRange(item.range), item.kind - 1));
+    }
+
+    async workspaceSymbols(query: string, token?: vscode.CancellationToken): Promise<vscode.SymbolInformation[]> {
+        const result = await this.request<Array<{ name: string; kind: number; containerName?: string; location: LspLocation }>>("workspace/symbol", { query }, token);
+        return (result ?? []).map((item) => new vscode.SymbolInformation(item.name, item.kind - 1, item.containerName ?? "",
+            new vscode.Location(vscode.Uri.parse(item.location.uri), fromLspRange(item.location.range))));
+    }
+
+    async signatureHelp(document: vscode.TextDocument, position: vscode.Position, token?: vscode.CancellationToken): Promise<vscode.SignatureHelp | undefined> {
+        const result = await this.request<{ signatures: Array<{ label: string; parameters: Array<{ label: string }> }>; activeSignature: number; activeParameter: number } | null>(
+            "textDocument/signatureHelp", { textDocument: { uri: document.uri.toString() }, position: toLspPosition(position) }, token);
+        if (!result) return undefined;
+        const help = new vscode.SignatureHelp();
+        help.signatures = result.signatures.map((item) => {
+            const signature = new vscode.SignatureInformation(item.label);
+            signature.parameters = item.parameters.map((parameter) => new vscode.ParameterInformation(parameter.label));
+            return signature;
+        });
+        help.activeSignature = result.activeSignature;
+        help.activeParameter = result.activeParameter;
+        return help;
+    }
+
+    async foldingRanges(document: vscode.TextDocument, token?: vscode.CancellationToken): Promise<vscode.FoldingRange[]> {
+        const result = await this.request<Array<{ startLine: number; endLine: number; kind: string }>>("textDocument/foldingRange", {
+            textDocument: { uri: document.uri.toString() }
+        }, token);
+        return (result ?? []).map((item) => new vscode.FoldingRange(item.startLine, item.endLine,
+            item.kind === "comment" ? vscode.FoldingRangeKind.Comment : vscode.FoldingRangeKind.Region));
+    }
+
+    async codeLenses(document: vscode.TextDocument, token?: vscode.CancellationToken): Promise<vscode.CodeLens[]> {
+        const result = await this.request<Array<{ range: LspRange; command: vscode.Command }>>("textDocument/codeLens", {
+            textDocument: { uri: document.uri.toString() }
+        }, token);
+        return (result ?? []).map((item) => new vscode.CodeLens(fromLspRange(item.range), item.command));
+    }
+
+    reportFailure(error: unknown): void {
+        this.output.appendLine(error instanceof Error ? error.message : JSON.stringify(error));
     }
 
     dispose(): void {
@@ -220,7 +338,10 @@ export class CPlusLspClient implements vscode.Disposable {
         this.buffer = Buffer.concat([this.buffer, chunk]);
         while (true) {
             const separator = this.buffer.indexOf("\r\n\r\n");
-            if (separator < 0) return;
+            if (separator < 0) {
+                if (this.buffer.length > 8192) this.protocolFailure("language server header exceeds 8 KiB");
+                return;
+            }
             const header = this.buffer.subarray(0, separator).toString("ascii");
             const length = /^Content-Length:\s*(\d+)$/im.exec(header)?.[1];
             if (!length) {
@@ -228,12 +349,23 @@ export class CPlusLspClient implements vscode.Disposable {
                 continue;
             }
             const bodyStart = separator + 4;
-            const bodyEnd = bodyStart + Number(length);
+            const bodyLength = Number(length);
+            if (!Number.isSafeInteger(bodyLength) || bodyLength > 16 * 1024 * 1024) {
+                this.protocolFailure("language server frame exceeds 16 MiB");
+                return;
+            }
+            const bodyEnd = bodyStart + bodyLength;
             if (this.buffer.length < bodyEnd) return;
             const body = this.buffer.subarray(bodyStart, bodyEnd).toString("utf8");
             this.buffer = this.buffer.subarray(bodyEnd);
             this.receive(body);
         }
+    }
+
+    private protocolFailure(message: string): void {
+        this.output.appendLine(message);
+        this.fail(new Error(message));
+        this.stopProcess();
     }
 
     private receive(body: string): void {
@@ -243,6 +375,8 @@ export class CPlusLspClient implements vscode.Disposable {
             const params = message.params as JsonObject | undefined;
             const uri = typeof params?.uri === "string" ? vscode.Uri.parse(params.uri) : undefined;
             if (!uri) return;
+            const document = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === uri.toString());
+            if (document && typeof params?.version === "number" && params.version < document.version) return;
             const rawDiagnostics = Array.isArray(params?.diagnostics) ? params.diagnostics : [];
             const diagnostics = rawDiagnostics
                 .map((item) => toDiagnostic(item as LspDiagnostic))
@@ -250,11 +384,17 @@ export class CPlusLspClient implements vscode.Disposable {
             this.diagnostics.set(uri, diagnostics);
             return;
         }
+        if (message.method === "window/logMessage" || message.method === "window/showMessage") {
+            const params = message.params as JsonObject | undefined;
+            this.output.appendLine(String(params?.message ?? ""));
+            return;
+        }
         const id = typeof message.id === "number" ? message.id : undefined;
         if (id === undefined) return;
         const pending = this.pending.get(id);
         if (!pending) return;
         this.pending.delete(id);
+        pending.cleanup();
         if (message.error) pending.reject(message.error);
         else pending.resolve(message.result);
     }
@@ -270,7 +410,7 @@ export class CPlusLspClient implements vscode.Disposable {
         if (!this.pending.size) return;
         const pending = [...this.pending.values()];
         this.pending.clear();
-        pending.forEach((request) => request.reject(error));
+        pending.forEach((request) => { request.cleanup(); request.reject(error); });
     }
 
     private stopProcess(): void {
@@ -278,6 +418,7 @@ export class CPlusLspClient implements vscode.Disposable {
         this.child = undefined;
         this.started = false;
         this.buffer = Buffer.alloc(0);
+        this.diagnostics.clear?.();
         if (child) child.kill();
     }
 
@@ -286,6 +427,7 @@ export class CPlusLspClient implements vscode.Disposable {
         this.child = undefined;
         this.started = false;
         this.buffer = Buffer.alloc(0);
+        this.diagnostics.clear?.();
         this.fail(new Error(`language server exited (${code ?? signal ?? "unknown"})`));
         if (this.disposed || this.stopping || this.restartAttempts >= 1) return;
         this.restartAttempts++;
@@ -323,14 +465,15 @@ function toDiagnostic(value: LspDiagnostic): vscode.Diagnostic | undefined {
 }
 
 function toDocumentSymbol(value: JsonObject): vscode.DocumentSymbol {
-    const location = value.location as JsonObject;
-    const range = fromLspRange(location.range as LspRange);
+    const location = value.location as JsonObject | undefined;
+    const range = fromLspRange((value.range ?? location?.range) as LspRange);
+    const selection = value.selectionRange ? fromLspRange(value.selectionRange as LspRange) : range;
     const symbol = new vscode.DocumentSymbol(
         String(value.name ?? ""),
         String(value.detail ?? ""),
-        Number(value.kind ?? vscode.SymbolKind.Namespace),
+        typeof value.kind === "number" ? value.kind - 1 : vscode.SymbolKind.Namespace,
         range,
-        range
+        selection
     );
     const children = Array.isArray(value.children) ? value.children.map((child) => toDocumentSymbol(child as JsonObject)) : [];
     symbol.children = children;

@@ -131,6 +131,18 @@
           },
           "default": [],
           "description": "Arguments passed before the built-in `lsp` subcommand when starting the language server."
+        },
+        "cplus.environment": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {},
+          "description": "Environment for all C-plus processes, including CC/TCC. Values expand inherited $NAME, ${NAME}, and %NAME% references; PATH=$PATH:/path extends PATH."
+        },
+        "cplus.languageServerRequestTimeout": {
+          "type": "number",
+          "minimum": 1000,
+          "default": 15000,
+          "description": "Language-server request deadline in milliseconds (initialization allows at least 60 seconds)."
         }
       }
     }
@@ -138,7 +150,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node test/smoke.js && node test/restart.js && node test/diagnostics.js",
+    "test": "npm run compile && node test/smoke.js && node test/restart.js && node test/diagnostics.js && node test/tooling.js",
     "package": "npm run compile && node scripts/package.js"
   },
   "devDependencies": {

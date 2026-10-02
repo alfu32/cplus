@@ -70,7 +70,23 @@ The warning is advisory: it does not suppress source emission. An implicitly
 fatal failure, such as a crashed transcoder or unusable source pass, may still
 terminate generation.
 
-`test` uses the AST-first `AUTO` frontend by default for compatibility-aware migration. Tree-sitter runs first; lowering or host-compiler rejection retries the retained legacy frontend. Select the frontend globally, before `test`, with `--frontend=auto|legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). Explicit `auto` is equivalent to the default; explicit Tree-sitter is strict; explicit legacy is the rollback path. At `-v2`, a fallback emits the requested mode, selected backend, failure stage, source location, and up to three host diagnostics. The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate.
+The CLI's AST frontend opts into explicit diagnostic recovery. Auto selection
+first tries strict AST lowering and the retained compatibility lowerer, so
+valid older source forms are not mistaken for unrecoverable input. If a strict AST
+pass returns diagnostics without a coherent lowered stream, recovery emits the
+preserved input with annotation-macro hygiene and attaches mapped frontend
+diagnostics. It does **not** assert that preserved C-plus constructs are valid
+C; compile/run/test still report the downstream failure. The compiler-facing
+prototype API remains strict by default for migration assertions, and crashes
+are not caught and disguised as successful recovery. Advisory parser warnings
+are retained through reparses and successful AST lowering. `TranscodedSource`
+exposes these independently as `frontendDiagnostics`; allocation advice remains
+a separate analysis channel.
+
+See [SPEC.lsp.md](SPEC.lsp.md) for the editor snapshot/import overlay API, feature
+responses, and bounded client recovery.
+
+`test` uses the AST-first `AUTO` frontend by default for compatibility-aware migration. Tree-sitter runs first; lowering or host-compiler rejection retries the retained legacy frontend. Select the frontend globally, before `test`, with `--frontend=auto|legacy|tree-sitter` (or the separated `--frontend tree-sitter` form). Explicit `auto` is equivalent to the default; explicit Tree-sitter disables legacy fallback but retains diagnostic-only emission recovery; explicit legacy is the rollback path. At `-v2`, a fallback emits the requested mode, selected backend, failure stage, source location, and up to three host diagnostics. The Tree-sitter test path owns runtime materialization and lowering, then uses the established fixture harness bridge while fixture-body AST lowering remains a separate migration gate.
 
 For migration tests, fixture extraction is an independent frontend concern. The
 internal `CPlusLegacyPassSelection.extractTests` and

@@ -7,6 +7,7 @@
     <depends>com.intellij.modules.lsp</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="C-plus language server" displayType="BALLOON" />
         <toolWindow id="C-plus" anchor="bottom" factoryClass="cplus.intellij.CPlusOutputToolWindowFactory" />
         <applicationService serviceImplementation="cplus.intellij.CPlusSettings" />
         <applicationConfigurable parentId="tools" instance="cplus.intellij.CPlusSettingsConfigurable" id="cplus.settings" displayName="C-plus" />

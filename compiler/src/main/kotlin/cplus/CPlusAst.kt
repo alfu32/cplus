@@ -76,8 +76,13 @@ class CPlusAstAdapter {
         source = parsed.source,
         root = parsed.root.toAstNode(),
         diagnostics = parsed.diagnostics,
-        structurallyComplete = parsed.coverage == ParseCoverage.STRUCTURAL && parsed.diagnostics.isEmpty()
+        structurallyComplete = parsed.coverage == ParseCoverage.STRUCTURAL &&
+            parsed.diagnostics.none { it.severity == ParserDiagnosticSeverity.ERROR } &&
+            parsed.root.descendantsContainRecovery().not()
     )
+
+    private fun CPlusSyntaxNode.descendantsContainRecovery(): Boolean =
+        isError || isMissing || opaque || children.any { it.descendantsContainRecovery() }
 
     private fun CPlusSyntaxNode.toAstNode(): CPlusAstNode {
         val adaptedChildren = children.map { it.toAstNode() }

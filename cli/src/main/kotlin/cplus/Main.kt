@@ -192,7 +192,8 @@ class CPlusCli(
                 }
             }
         }
-        CPlusLspServer(tracePath = tracePath).serve()
+        CPlusLspServer(tracePath = tracePath, configuredStdlibRoot = cliStdlibRoot,
+            configuredTargetOs = CPlusTarget.osFromCompilerOptions(cliCompilerFlags)).serve()
         return 0
     }
 
@@ -551,20 +552,30 @@ class CPlusCli(
         logger: CompilationLogger,
         importPaths: CPlusImportPaths,
         targetOs: String,
-        frontend: CompilationFrontend
+        frontend: CompilationFrontend,
+        recoverFrontendDiagnostics: Boolean = true
     ): TranscodedSource = when (frontend) {
         CompilationFrontend.LEGACY -> transpiler.transpile(
             source, sourceName, logger, importPaths, targetOs
         )
         CompilationFrontend.AUTO -> try {
-            transpileWithFrontend(source, sourceName, logger, importPaths, targetOs, CompilationFrontend.TREE_SITTER)
+            transpileWithFrontend(source, sourceName, logger, importPaths, targetOs, CompilationFrontend.TREE_SITTER,
+                recoverFrontendDiagnostics = false)
         } catch (error: CPlusSyntaxException) {
             logger.info(
                 "frontend fallback: requested=auto selected=legacy reason=tree-sitter lowering failed " +
                     "at ${error.sourceSpan?.startLine ?: "?"}:${error.sourceSpan?.startColumn ?: "?"}: " +
                     (error.message ?: "unknown lowering failure")
             )
-            transpiler.transpile(source, sourceName, logger, importPaths, targetOs)
+            try {
+                transpiler.transpile(source, sourceName, logger, importPaths, targetOs)
+            } catch (_: CPlusSyntaxException) {
+                // Compatibility lowering may understand syntax not modeled by the
+                // AST yet. Only preserve the diagnostic source stream when neither
+                // frontend can lower it; do not turn valid old fixtures into raw C+.
+                transpileWithFrontend(source, sourceName, logger, importPaths, targetOs,
+                    CompilationFrontend.TREE_SITTER, recoverFrontendDiagnostics = true)
+            }
         }
         CompilationFrontend.TREE_SITTER -> logger.pass("tree-sitter-transpile") {
             val manager = SourceManager()
@@ -574,7 +585,8 @@ class CPlusCli(
                 sourceManager = manager,
                 targetOs = targetOs,
                 importPaths = importPaths,
-                targetArch = targetArchitecture()
+                targetArch = targetArchitecture(),
+                recoverDiagnostics = recoverFrontendDiagnostics
             ).transpile(snapshot)
             result.transcodedSource ?: run {
                 val diagnostic = result.loweringDiagnostics.firstOrNull()
@@ -608,20 +620,27 @@ class CPlusCli(
         logger: CompilationLogger,
         importPaths: CPlusImportPaths,
         targetOs: String,
-        frontend: CompilationFrontend
+        frontend: CompilationFrontend,
+        recoverFrontendDiagnostics: Boolean = true
     ): TranscodedTestSource = when (frontend) {
         CompilationFrontend.LEGACY -> transpiler.transpileTests(
             source, sourceName, logger, importPaths, targetOs
         )
         CompilationFrontend.AUTO -> try {
-            transpileTestsWithFrontend(source, sourceName, logger, importPaths, targetOs, CompilationFrontend.TREE_SITTER)
+            transpileTestsWithFrontend(source, sourceName, logger, importPaths, targetOs, CompilationFrontend.TREE_SITTER,
+                recoverFrontendDiagnostics = false)
         } catch (error: CPlusSyntaxException) {
             logger.info(
                 "frontend fallback: requested=auto selected=legacy reason=tree-sitter test lowering failed " +
                     "at ${error.sourceSpan?.startLine ?: "?"}:${error.sourceSpan?.startColumn ?: "?"}: " +
                     (error.message ?: "unknown lowering failure")
             )
-            transpiler.transpileTests(source, sourceName, logger, importPaths, targetOs)
+            try {
+                transpiler.transpileTests(source, sourceName, logger, importPaths, targetOs)
+            } catch (_: CPlusSyntaxException) {
+                transpileTestsWithFrontend(source, sourceName, logger, importPaths, targetOs,
+                    CompilationFrontend.TREE_SITTER, recoverFrontendDiagnostics = true)
+            }
         }
         CompilationFrontend.TREE_SITTER -> logger.pass("tree-sitter-test-transpile") {
             val manager = SourceManager()
@@ -631,10 +650,11 @@ class CPlusCli(
                 sourceManager = manager,
                 targetOs = targetOs,
                 importPaths = importPaths,
-                targetArch = targetArchitecture()
+                targetArch = targetArchitecture(),
+                recoverDiagnostics = recoverFrontendDiagnostics
             ).transpile(snapshot)
             val runtime = result.cSource
-            if (runtime == null || !result.successful) {
+            if (runtime == null || result.transcodedSource == null) {
                 val diagnostic = result.loweringDiagnostics.firstOrNull()
                 if (diagnostic != null) throw CPlusSyntaxException(diagnostic.message, diagnostic.span)
                 val parserDiagnostic = result.parserDiagnostics.firstOrNull()
@@ -658,6 +678,7 @@ class CPlusCli(
                     compilerOptions = result.compilerOptions,
                     sourceOrder = result.sourceOrder,
                     sourceImports = result.sourceImports,
+                    frontendDiagnostics = result.transcodedSource?.frontendDiagnostics.orEmpty(),
                     frontendPasses = result.runtimePasses + bridged.source.frontendPasses
                 )
             )
@@ -865,6 +886,13 @@ class CPlusCli(
     }
 
     private fun printAllocationDiagnostics(source: TranscodedSource) {
+        source.frontendDiagnostics.forEach { diagnostic ->
+            if (verbosity == 0 || verbosity == 1 && diagnostic.severity == ParserDiagnosticSeverity.WARNING) return@forEach
+            val span = diagnostic.span
+            val file = span.file?.replace(Regex("#tree-sitter-\\d+$"), "") ?: "<c-plus-input>"
+            errors.append("$file:${span.startLine}:${span.startColumn}: ${diagnostic.severity.name.lowercase()}: ")
+                .append(diagnostic.message).append(" [${diagnostic.code}]\n")
+        }
         if (verbosity < 2) return
         source.allocationAnalysis.diagnostics.forEach { diagnostic ->
             val span = diagnostic.sourceSpan

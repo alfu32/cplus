@@ -8,6 +8,7 @@ import com.intellij.platform.lsp.api.LspClientManager
 class CPlusRestartLspAction : AnAction("Restart C-plus Language Server") {
     override fun actionPerformed(event: AnActionEvent) {
         val project = event.project ?: return
+        CPlusLspRecovery.getInstance(project).reset()
         LspClientManager.getInstance(project)
             .stopAndRestartClientsIfNeeded(CPlusLspIntegrationProvider::class.java)
     }

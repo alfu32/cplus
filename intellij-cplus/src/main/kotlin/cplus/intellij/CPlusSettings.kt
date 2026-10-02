@@ -5,6 +5,8 @@ import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
+import com.intellij.openapi.project.ProjectManager
+import com.intellij.platform.lsp.api.LspClientManager
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
@@ -155,10 +157,30 @@ class CPlusSettingsConfigurable : Configurable {
     }
 
     override fun apply() {
+        // Validate before persisting, so Apply never silently stores an
+        // environment the process launcher cannot consume.
+        try {
+            CPlusCommand.parseEnvironment(environment.text, System.getenv())
+        } catch (error: IllegalArgumentException) {
+            diagnostics.append("\nSettings not applied: ${error.message}\n")
+            throw com.intellij.openapi.options.ConfigurationException(error.message ?: "Invalid C-plus environment")
+        }
+        val previous = CPlusSettings.getInstance().current().copy()
         CPlusSettings.getInstance().update(
             compiler.text.trim(), runner.text.trim(), testProgram.text.trim(), parser.text.trim(), importGraph.text.trim(),
             languageServer.text.trim(), environment.text
         )
+        val saved = CPlusSettings.getInstance().current()
+        diagnostics.append("\nSettings applied. Compiler: ${saved.compilerCommand}; LSP: ${saved.languageServerCommand}\n")
+        if (previous.languageServerCommand != saved.languageServerCommand || previous.environment != saved.environment) {
+            ApplicationManager.getApplication().invokeLater {
+                ProjectManager.getInstance().openProjects.filterNot { it.isDisposed }.forEach { project ->
+                    CPlusLspRecovery.getInstance(project).reset()
+                    LspClientManager.getInstance(project)
+                        .stopAndRestartClientsIfNeeded(CPlusLspIntegrationProvider::class.java)
+                }
+            }
+        }
     }
 
     override fun reset() {

@@ -238,7 +238,9 @@ data class TranscodedSource(
     /** Parser-independent semantic handles for synthesized aggregate members. */
     val synthesizedMemberHandles: List<CPlusSynthesizedMember> = emptyList(),
     /** The mapped source revision whose offsets are used by [synthesizedNodes]. */
-    val synthesizedSource: MappedText? = null
+    val synthesizedSource: MappedText? = null,
+    /** Advisory/recoverable frontend diagnostics do not suppress the emitted stream. */
+    val frontendDiagnostics: List<ParserDiagnostic> = emptyList()
 )
 
 /** Emits C-plus text and inserts compiler-visible source locations at mapped line boundaries. */

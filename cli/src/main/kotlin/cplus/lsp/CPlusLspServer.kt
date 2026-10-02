@@ -31,7 +31,9 @@ class CPlusLspServer(
     tracePath: Path? = System.getenv("CPLUS_LSP_TRACE")?.takeIf(String::isNotBlank)?.let { Path.of(it) },
     lifecyclePath: Path? = System.getenv("CPLUS_LSP_LIFECYCLE_FILE")
         ?.takeIf(String::isNotBlank)
-        ?.let { Path.of(it) }
+        ?.let { Path.of(it) },
+    private val configuredStdlibRoot: Path? = null,
+    configuredTargetOs: String = CPlusTarget.hostOs()
 ) {
     private val input = BufferedInputStream(input)
     private val output = BufferedOutputStream(output)
@@ -43,6 +45,7 @@ class CPlusLspServer(
     private val importsByDocument = LinkedHashMap<String, LinkedHashSet<String>>()
     private val importersByDocument = LinkedHashMap<String, LinkedHashSet<String>>()
     private val activeReadView = ThreadLocal<ReadView?>()
+    private val activeSemanticDocument = ThreadLocal<LspDocument?>()
     /** Optional method-level trace for host integration diagnostics; never touches protocol stdout. */
     private val tracePath = tracePath
     /** Optional process marker used only by isolated host-integration smoke tests. */
@@ -72,6 +75,7 @@ class CPlusLspServer(
     private var importPaths = CPlusImportPaths()
     /** The URI spelling supplied by the editor; kept separate from real paths. */
     private var workspaceRootUri: String? = null
+    private var targetOs: String = configuredTargetOs
 
     fun serve() {
         writeLifecycle("running")
@@ -100,14 +104,18 @@ class CPlusLspServer(
                 respondError(id, -32602, "invalid parameters for $method")
                 continue
             }
-            when (method) {
+            try { when (method) {
                 "initialize" -> {
                     withWriteState { configureWorkspace(request) }
                     respond(id, "{\"capabilities\":{" +
                         "\"textDocumentSync\":1," +
                         "\"documentSymbolProvider\":true," +
                         "\"workspaceSymbolProvider\":true," +
-                        "\"completionProvider\":{\"triggerCharacters\":[\".\",\"->\"]}," +
+                        "\"completionProvider\":{\"triggerCharacters\":[\".\",\">\",\"@\"]}," +
+                        "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}," +
+                        "\"foldingRangeProvider\":true," +
+                        "\"codeLensProvider\":{\"resolveProvider\":false}," +
+                        "\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"type\",\"struct\",\"enum\",\"typeParameter\",\"function\",\"method\",\"property\",\"variable\",\"parameter\",\"enumMember\",\"macro\"],\"tokenModifiers\":[\"declaration\"]},\"full\":true}," +
                         "\"hoverProvider\":true," +
                         "\"definitionProvider\":true," +
                         "\"referencesProvider\":true," +
@@ -133,12 +141,36 @@ class CPlusLspServer(
                 "textDocument/didClose" -> request.uri()?.let { uri ->
                     withWriteState {
                         openDocuments.remove(uri)
-                        documents.remove(uri)
+                        val old = documents.remove(uri)
                         parseSessions.remove(uri)
-                        clearImports(uri)
+                        val path = pathFromUri(uri)
+                        if (!importersByDocument[uri].isNullOrEmpty() && path != null && Files.isRegularFile(path)) {
+                            val text = Files.readString(path, StandardCharsets.UTF_8)
+                            documents[uri] = parseDocument(uri, old?.version ?: 0, sources.open(SourceId(uri), text))
+                            refreshImports(uri)
+                            refreshDependents(uri)
+                        } else {
+                            clearImports(uri)
+                            refreshDependents(uri)
+                        }
                         pruneUnreachableDocuments()
                         notify("textDocument/publishDiagnostics", "{\"uri\":${Json.string(uri)},\"diagnostics\":[]}")
                     }
+                }
+                "textDocument/didSave" -> request.uri()?.let { uri -> withWriteState { reloadDocument(uri) } }
+                "workspace/didChangeWatchedFiles" -> withWriteState {
+                    val params = request.values["params"] as? Json.Object
+                    val changes = params?.values?.get("changes") as? Json.Array
+                    changes?.values?.forEach { change ->
+                        (change as? Json.Object)?.string("uri")?.let(::reloadDocument)
+                    }
+                }
+                "workspace/didChangeConfiguration" -> withWriteState {
+                    val params = request.values["params"] as? Json.Object
+                    val settings = params?.values?.get("settings") as? Json.Object
+                    val cplus = settings?.values?.get("cplus") as? Json.Object ?: settings
+                    cplus?.string("targetOs")?.let { targetOs = it }
+                    rebuildOpenDocuments()
                 }
                 "textDocument/documentSymbol" -> dispatchReadRequest(id, request) { state ->
                     respondForDocument(id, request, state) { documentSymbols(request.uri()) }
@@ -164,7 +196,23 @@ class CPlusLspServer(
                 "textDocument/documentHighlight" -> dispatchReadRequest(id, request) { state ->
                     respondForDocument(id, request, state) { documentHighlights(request) }
                 }
+                "textDocument/signatureHelp" -> dispatchReadRequest(id, request) { state ->
+                    respondForDocument(id, request, state) { signatureHelp(request) }
+                }
+                "textDocument/foldingRange" -> dispatchReadRequest(id, request) { state ->
+                    respondForDocument(id, request, state) { foldingRanges(request.uri()) }
+                }
+                "textDocument/codeLens" -> dispatchReadRequest(id, request) { state ->
+                    respondForDocument(id, request, state) { testCodeLenses(request.uri()) }
+                }
+                "textDocument/semanticTokens/full" -> dispatchReadRequest(id, request) { state ->
+                    respondForDocument(id, request, state) { semanticTokens(request.uri()) }
+                }
                 else -> if (id != null) respondError(id, -32601, "method not supported: $method")
+            } } catch (error: Exception) {
+                trace("dispatch failure method=$method error=$error")
+                if (id != null) respondError(id, -32603, error.message ?: "language server operation failed")
+                else notify("window/logMessage", "{\"type\":1,\"message\":${Json.string("$method failed: ${error.message}")}}")
             }
             }
         } finally {
@@ -198,6 +246,9 @@ class CPlusLspServer(
                             activeReadView.remove()
                         }
                     }
+                } catch (error: Exception) {
+                    trace("request failure method=${request.string("method")} error=$error")
+                    if (!state.cancelled.get()) respondError(id, -32603, error.message ?: "request failed")
                 } finally {
                     requestStates.remove(key, state)
                 }
@@ -265,21 +316,24 @@ class CPlusLspServer(
         workspaceRootUri = request.rootUri()
         val root = request.rootUri()?.let(::pathFromUri)
         val project = root?.let(CPlusProject::find)
+        val initialization = (request.values["params"] as? Json.Object)?.values?.get("initializationOptions") as? Json.Object
+        initialization?.string("targetOs")?.let { targetOs = it }
         importPaths = if (project != null) {
-            project.importPaths(null, System.getenv("CPLUS_STDLIB"))
+            project.importPaths(configuredStdlibRoot, System.getenv("CPLUS_STDLIB"))
         } else {
             CPlusImportPaths(
-                standardLibraryRoots = CPlusProject.defaultStandardLibraryRoots(null, System.getenv("CPLUS_STDLIB")),
+                standardLibraryRoots = CPlusProject.defaultStandardLibraryRoots(configuredStdlibRoot, System.getenv("CPLUS_STDLIB")),
                 moduleRoots = listOfNotNull(root)
             )
         }
     }
 
     private fun hasInvalidParameters(method: String, request: Json.Object): Boolean = when (method) {
-        "textDocument/documentSymbol" -> request.uri() == null
+        "textDocument/documentSymbol", "textDocument/foldingRange", "textDocument/codeLens",
+        "textDocument/semanticTokens/full" -> request.uri() == null
         "textDocument/completion", "textDocument/hover", "textDocument/definition",
-        "textDocument/references", "textDocument/documentHighlight" ->
-            request.uri() == null || request.position() == null
+        "textDocument/references", "textDocument/documentHighlight", "textDocument/signatureHelp" ->
+            request.uri() == null || request.position()?.let { it.line >= 0 && it.character >= 0 } != true
         else -> false
     }
 
@@ -287,21 +341,37 @@ class CPlusLspServer(
         val current = documents[update.uri]
         if (current != null && update.version != null && update.version <= current.version) return false
         val version = update.version ?: ((current?.version ?: 0) + 1)
-        val snapshot = sources.open(SourceId.named(update.uri), update.text)
-        val parsed = parseDocument(update.uri, version, snapshot)
+        val snapshot = sources.open(SourceId(update.uri), update.text)
         if (opened) openDocuments += update.uri
+        // Install the newest snapshot before evaluating imports, including cyclic imports.
+        documents[update.uri] = LspDocument(update.uri, version, snapshot, snapshot.text, null,
+            CPlusAst(snapshot, CPlusAstNode(CPlusAstKind.TRANSLATION_UNIT, "translation_unit",
+                snapshot.sourceFile.span(0, snapshot.text.length), null, emptyList(), true, false, false),
+                emptyList(), false))
+        val parsed = parseDocument(update.uri, version, snapshot)
         documents[update.uri] = parsed
         publishDiagnostics(update.uri, parsed.diagnostics)
         return true
     }
 
     private fun parseDocument(uri: String, version: Int, snapshot: SourceSnapshot): LspDocument {
-        val materialized = runCatching {
-            materializeCPlusForTools(snapshot.sourceFile, importPaths)
-        }.getOrNull()?.takeIf { it.source.text != snapshot.text }
+        val materialization = runCatching {
+            materializeCPlusForTools(snapshot.sourceFile, importPaths, targetOs) { path ->
+                documents.entries.firstOrNull { (candidate, _) ->
+                    candidate in openDocuments && sameSourceFile(candidate, path.toString())
+                }?.value?.snapshot?.sourceFile
+            }
+        }
+        val materialized = materialization.getOrNull()?.takeIf { it.source.text != snapshot.text }
+        val materializationDiagnostics = materialization.exceptionOrNull()?.let { error ->
+            trace("materialization failure uri=$uri error=$error")
+            listOf(ParserDiagnostic("CPLUS_TOOL_MATERIALIZATION", error.message ?: "comptime materialization failed",
+                ParserDiagnosticSeverity.WARNING,
+                (error as? CPlusSyntaxException)?.sourceSpan ?: snapshot.sourceFile.span(0, 0)))
+        }.orEmpty()
         val parsedSnapshot = if (materialized == null) snapshot else
             sources.open(SourceId.named("$uri#comptime"), materialized.source.text)
-        val options = CPlusParseOptions(editorMode = true)
+        val options = CPlusParseOptions(editorMode = true, targetOs = targetOs)
         val session = parseSessions[uri]
         val result = if (session == null) {
             parser.openIncrementalSession(parsedSnapshot, options).also { parseSessions[uri] = it }.current()
@@ -323,14 +393,14 @@ class CPlusLspServer(
             ast = ast,
             diagnostics = parserDiagnostics
         )
-        val semanticDiagnostics = ambiguousCallableDiagnostics(provisional)
+        val semanticDiagnostics = withSemanticDocument(provisional) { ambiguousCallableDiagnostics(provisional) }
         val diagnostics = (parserDiagnostics + semanticDiagnostics).distinctBy {
             listOf(it.code, it.span.startOffset, it.span.endOffset, it.message)
         }.map { diagnostic ->
             if (materialized == null) diagnostic else diagnostic.copy(
                 span = materialized.mapping.toOriginalSpan(diagnostic.span)
             )
-        }
+        } + materializationDiagnostics
         return LspDocument(
             uri = uri,
             version = version,
@@ -338,7 +408,20 @@ class CPlusLspServer(
             parsedText = parsedSnapshot.text,
             mappedSource = materialized?.mapping,
             ast = ast,
-            diagnostics = diagnostics
+            diagnostics = diagnostics,
+            editorAst = if (materialized == null) ast else CPlusAstAdapter().adapt(parser.parse(snapshot, options)),
+            indexedSymbols = provisional.runtimeSymbols,
+            activeImports = materialization.getOrNull()?.imports?.filter { sameSourceFile(it.importer.value, uri) }?.map { edge ->
+                val span = edge.location
+                val direct = if (sameSourceFile(span.file, uri) && span.startOffset >= 0 && span.endOffset <= snapshot.text.length)
+                    importPath(snapshot.text.substring(span.startOffset, span.endOffset)) else null
+                // Later expansion passes can move the edge's offset while the
+                // graph still records its canonical destination. Recover the
+                // original spelling only when it resolves to that actual edge.
+                direct ?: originalImportRequests(snapshot.text).firstOrNull { requested ->
+                    lexicalImportPath(pathFromUri(uri), requested)?.let { sameSourceFile(it.toString(), edge.imported.value) } == true
+                } ?: edge.imported.value
+            }
         )
     }
 
@@ -427,14 +510,16 @@ class CPlusLspServer(
                 // lexical URI so mapped definitions can be returned to the
                 // client using the same path it opened/imported.
                 val snapshot = sources.open(SourceId(importedUri), text)
-                documents[importedUri] = parseDocument(importedUri, 0, snapshot)
+                val imported = parseDocument(importedUri, 0, snapshot)
+                documents[importedUri] = imported
+                publishDiagnostics(importedUri, imported.diagnostics)
                 pending += importedUri
             }
         }
         pruneUnreachableDocuments()
     }
 
-    /** Re-publish dependent snapshots so semantic diagnostics can later reuse this boundary. */
+    /** Re-materialize the transitive dependent closure from current editor snapshots. */
     private fun refreshDependents(uri: String) {
         val visited = mutableSetOf<String>()
         val pending = ArrayDeque<String>()
@@ -442,12 +527,48 @@ class CPlusLspServer(
         while (pending.isNotEmpty()) {
             val changed = pending.removeFirst()
             if (!visited.add(changed)) continue
-            for (dependent in importersByDocument[changed].orEmpty()) {
+            for (dependent in importersByDocument[changed].orEmpty().toList()) {
+                if (dependent == uri || dependent in visited) continue
                 documents[dependent]?.let { document ->
-                    publishDiagnostics(dependent, document.diagnostics)
+                    val reparsed = parseDocument(dependent, document.version, document.snapshot)
+                    documents[dependent] = reparsed
+                    refreshImports(dependent)
+                    publishDiagnostics(dependent, reparsed.diagnostics)
                     pending += dependent
                 }
             }
+        }
+    }
+
+    private fun reloadDocument(uri: String) {
+        if (uri in openDocuments) {
+            refreshImports(uri)
+            refreshDependents(uri)
+            return
+        }
+        val previous = documents[uri] ?: return
+        val path = pathFromUri(uri) ?: return
+        if (Files.isRegularFile(path)) {
+            val text = Files.readString(path, StandardCharsets.UTF_8)
+            documents[uri] = parseDocument(uri, previous.version + 1, sources.open(SourceId(uri), text))
+            publishDiagnostics(uri, documents.getValue(uri).diagnostics)
+            refreshImports(uri)
+        } else {
+            documents.remove(uri)
+            parseSessions.remove(uri)
+            clearImports(uri)
+        }
+        refreshDependents(uri)
+        pruneUnreachableDocuments()
+    }
+
+    private fun rebuildOpenDocuments() {
+        for (uri in openDocuments.toList()) {
+            val previous = documents[uri] ?: continue
+            val next = parseDocument(uri, previous.version, previous.snapshot)
+            documents[uri] = next
+            refreshImports(uri)
+            publishDiagnostics(uri, next.diagnostics)
         }
     }
 
@@ -482,7 +603,7 @@ class CPlusLspServer(
         val sourcePath = pathFromUri(document.uri)
         lexicalImportPath(sourcePath, requested)?.let { return it }
         val resolved = runCatching {
-            CPlusImportResolver(importPaths).resolve(
+            CPlusImportResolver(importPaths, ::sourceAvailable).resolve(
                 source = SourceFile(document.snapshot.text, sourcePath?.toString() ?: document.uri),
                 requestedPath = requested,
                 extensionlessCandidates = listOf("cp", "c+")
@@ -507,8 +628,11 @@ class CPlusLspServer(
         }
         return candidates
             .map { candidate -> (if (candidate.isAbsolute) candidate else sourceDirectory.resolve(candidate)).normalize() }
-            .firstOrNull { Files.isRegularFile(it) }
+            .firstOrNull(::sourceAvailable)
     }
+
+    private fun sourceAvailable(path: Path): Boolean = Files.isRegularFile(path) ||
+        openDocuments.any { sameSourceFile(it, path.toString()) }
 
     /**
      * Resolve an editor import without canonicalizing the path used as its URI.
@@ -537,7 +661,7 @@ class CPlusLspServer(
             val normalizedRoot = root.toAbsolutePath().normalize()
             for (candidate in candidates) {
                 val resolved = (if (candidate.isAbsolute) candidate else normalizedRoot.resolve(candidate)).normalize()
-                if (resolved.startsWith(normalizedRoot) && Files.isRegularFile(resolved)) return resolved
+                if (resolved.startsWith(normalizedRoot) && sourceAvailable(resolved)) return resolved
             }
         }
         return null
@@ -584,18 +708,22 @@ class CPlusLspServer(
     private fun importPath(text: String): String? = IMPORT_LITERAL.find(text)?.groupValues?.get(1)?.let(::unescapeImport)
 
     private fun importRequests(document: LspDocument): List<String> {
-        val indexed = comptimeIndexer.index(document.ast).imports
+        document.activeImports?.let { return it.distinct() }
+        val indexed = comptimeIndexer.index(document.editorAst).imports
             .mapNotNull { span -> importPath(document.snapshot.text.substring(span.startOffset, span.endOffset)) }
         // Keep the small lexical recovery boundary additive rather than using
         // it only when the AST index is empty. Native Tree-sitter hosts can
         // preserve an import as a recovery node, or expose a partial span,
         // while still returning other indexed comptime constructs. Import
         // discovery must therefore be host-independent during the migration.
-        val recovered = IMPORT_RECOVERY_LITERAL.findAll(document.snapshot.text)
-            .map { unescapeImport(it.groupValues[1]) }
-            .distinct()
-            .toList()
+        val recovered = originalImportRequests(document.snapshot.text)
         return (indexed + recovered).distinct()
+    }
+
+    private fun originalImportRequests(text: String): List<String> {
+        val masked = maskToolingText(text)
+        return IMPORT_RECOVERY_LITERAL.findAll(text).filter { masked[it.range.first] != ' ' }
+            .map { unescapeImport(it.groupValues[1]) }.distinct().toList()
     }
 
     private fun pathFromUri(value: String): Path? = runCatching {
@@ -607,19 +735,74 @@ class CPlusLspServer(
         .replace("\\\\", "\\")
 
     private fun publishDiagnostics(uri: String, diagnostics: List<ParserDiagnostic>) {
-        val encoded = diagnostics.joinToString(",") { diagnostic ->
+        // An imported origin is not a range in the requesting document. Its
+        // own snapshot publishes that diagnostic; never underline a random
+        // root line with an imported file's offsets.
+        val encoded = diagnostics.filter { it.span.file == null || sameSourceFile(it.span.file, uri) }
+            .joinToString(",") { diagnostic ->
             val span = diagnostic.span
             "{\"range\":{\"start\":{\"line\":${span.startLine - 1},\"character\":${span.startColumn - 1}}," +
                 "\"end\":{\"line\":${span.endLine - 1},\"character\":${span.endColumn - 1}}}," +
                 "\"severity\":${if (diagnostic.severity.name == "WARNING") 2 else 1}," +
                 "\"code\":${Json.string(diagnostic.code)},\"source\":\"c-plus\",\"message\":${Json.string(diagnostic.message)}}"
         }
-        notify("textDocument/publishDiagnostics", "{\"uri\":${Json.string(uri)},\"diagnostics\":[$encoded]}")
+        val version = documents[uri]?.version?.let { ",\"version\":$it" }.orEmpty()
+        notify("textDocument/publishDiagnostics", "{\"uri\":${Json.string(uri)},\"diagnostics\":[$encoded]$version}")
     }
 
     private fun documentSymbols(uri: String?): String {
         val document = uri?.let(readDocuments()::get) ?: return "[]"
-        return document.symbols.joinToString(",", "[", "]") { symbol -> symbol.toJson() }
+        return document.symbolTreeJson
+    }
+
+    /** Original AST roles plus scoped declarations, never generated offsets or a name-only global scan. */
+    private fun semanticTokens(uri: String?): String {
+        val document = uri?.let(readDocuments()::get) ?: return "{\"data\":[]}"
+        val byName = visibleSymbols(document).groupBy { it.name }
+        val parameterSelections = document.editorAst.root.descendantsAndSelf()
+            .filter { it.kind == CPlusAstKind.PARAMETER }
+            .flatMap { it.declaredIdentifiers().asSequence() }
+            .map { it.span.startOffset }.toSet()
+        val encoded = mutableListOf<Int>()
+        var previousLine = 0
+        var previousColumn = 0
+        val identifiers = document.editorAst.root.descendantsAndSelf()
+            .filter { it.syntaxKind in setOf("identifier", "type_identifier", "field_identifier") &&
+                it.span.endOffset > it.span.startOffset && it.span.startLine == it.span.endLine }
+            .distinctBy { it.span.startOffset }.sortedBy { it.span.startOffset }
+        for (node in identifiers) {
+            val name = document.snapshot.text.substring(node.span.startOffset, node.span.endOffset)
+            val candidates = byName[name].orEmpty().filter {
+                !it.local || sameSourceUri(it.uri, document.uri) && it.scope.contains(node.span.startOffset) &&
+                    it.selection.startOffset <= node.span.startOffset
+            }
+            val declaration = candidates.firstOrNull {
+                sameSourceUri(it.uri, document.uri) && it.selection.startOffset == node.span.startOffset
+            }
+            val symbol = declaration ?: candidates.filter { it.local }.minByOrNull { it.scope.size() }
+                ?: candidates.takeIf { it.map { candidate -> candidate.kind }.distinct().size == 1 }?.firstOrNull()
+            val kind = when {
+                symbol?.kind == 23 -> 1
+                symbol?.kind == 10 -> 2
+                symbol?.kind == 26 || node.syntaxKind == "type_identifier" -> 0
+                symbol?.kind == 12 -> 4
+                symbol?.kind == 6 -> 5
+                symbol?.kind == 8 || node.syntaxKind == "field_identifier" -> 6
+                symbol?.kind == 22 -> 9
+                symbol?.kind == 13 && sameSourceUri(symbol.uri, document.uri) &&
+                    symbol.selection.startOffset in parameterSelections -> 8
+                symbol?.kind == 13 -> 7
+                else -> continue // unresolved ordinary identifiers retain lexical highlighting
+            }
+            val line = node.span.startLine - 1
+            val column = node.span.startColumn - 1
+            val deltaLine = line - previousLine
+            encoded += listOf(deltaLine, if (deltaLine == 0) column - previousColumn else column,
+                node.span.size(), kind, if (declaration != null) 1 else 0)
+            previousLine = line
+            previousColumn = column
+        }
+        return "{\"data\":[${encoded.joinToString(",") }]}"
     }
 
     private fun workspaceSymbols(query: String): String {
@@ -627,6 +810,8 @@ class CPlusLspServer(
         return readDocuments().values.asSequence()
             .flatMap { document -> document.symbols.asSequence().map { displaySymbol(it, document.uri) } }
             .filter { normalized.isEmpty() || it.name.lowercase().contains(normalized) }
+            .filter { !it.local }
+            .distinctBy { listOf(it.uri, it.name, it.kind, it.selection.startOffset, it.detail) }
             .sortedWith(compareBy<LspSymbol> { it.name.lowercase() }.thenBy { it.uri }.thenBy { it.selection.startOffset })
             .joinToString(",", "[", "]") { it.toJson() }
     }
@@ -649,8 +834,12 @@ class CPlusLspServer(
             visible.filter { it.name == typeName && it.kind == 23 }.map { it.scope }
         }.orEmpty()
         val symbols = visible.asSequence().filter { symbol ->
-            receiver == null || symbol.ownerName == receiver ||
-                (symbol.name != receiver && receiverScopes.any { it.contains(symbol.selection) })
+            if (receiver != null) symbol.ownerName?.let(::resolveTypeAlias) == receiver ||
+                (symbol.kind in setOf(6, 8) && symbol.name != receiver &&
+                    receiverScopes.any { it.contains(symbol.selection) })
+            else symbol.ownerName == null && (!symbol.local ||
+                (symbol.uri == document.uri && offset != null && symbol.scope.contains(offset) &&
+                    symbol.selection.startOffset <= offset))
         }
         val keywordNames = if (receiver == null) CPLUS_KEYWORDS.asSequence() else emptySequence()
         val names = (keywordNames + symbols.map { it.name })
@@ -660,7 +849,7 @@ class CPlusLspServer(
         val items = names.joinToString(",", "[", "]") { name ->
             val symbol = symbols.firstOrNull { it.name == name }
             val detail = symbol?.toolingDetail()
-            "{\"label\":${Json.string(name)},\"kind\":${if (name in CPLUS_KEYWORDS) 14 else 6}" +
+            "{\"label\":${Json.string(name)},\"kind\":${if (name in CPLUS_KEYWORDS) 14 else symbol?.completionKind() ?: 6}" +
                 (detail?.let { ",\"detail\":${Json.string(it)}" } ?: "") + "}"
         }
         return "{\"isIncomplete\":false,\"items\":$items}"
@@ -669,13 +858,84 @@ class CPlusLspServer(
     private fun hover(request: Json.Object): String {
         val document = request.uri()?.let(readDocuments()::get) ?: return "null"
         val symbol = symbolAt(request) ?: return "null"
-        val value = "`${symbol.toolingDetail()}`"
-        return "{\"contents\":{\"kind\":\"markdown\",\"value\":${Json.string(value)}},\"range\":${symbol.rangeJson()}}"
+        val value = "```c\n${symbol.toolingDetail()}\n```"
+        val span = document.wordSpan(request.position()) ?: return "null"
+        return "{\"contents\":{\"kind\":\"markdown\",\"value\":${Json.string(value)}},\"range\":${span.toRangeJson()}}"
     }
 
     private fun definition(request: Json.Object): String {
         val symbol = symbolAt(request) ?: return "[]"
         return "[{\"uri\":${Json.string(symbol.uri)},\"range\":${symbol.selection.toRangeJson()}}]"
+    }
+
+    /** Signatures are declaration-backed; unresolved/ambiguous calls are not fabricated. */
+    private fun signatureHelp(request: Json.Object): String {
+        val document = request.uri()?.let(readDocuments()::get) ?: return "null"
+        val offset = document.snapshot.offsetAt(request.position()) ?: return "null"
+        val text = document.snapshot.text
+        val masked = maskToolingText(text)
+        var depth = 0
+        var open = -1
+        for (index in (offset - 1) downTo 0) {
+            when (masked[index]) {
+                ')' -> depth++
+                '(' -> if (depth == 0) { open = index; break } else depth--
+            }
+        }
+        if (open < 0) return "null"
+        val match = Regex("($IDENTIFIER)\\s*$").find(masked.substring(0, open)) ?: return "null"
+        val name = match.groupValues[1]
+        val receiver = receiverType(document, match.range.first)
+        val candidates = visibleSymbols(document).filter {
+            it.name == name && it.kind in setOf(6, 12) &&
+                if (receiver == null) it.ownerName == null else it.ownerName == resolveTypeAlias(receiver)
+        }.toList()
+        if (candidates.isEmpty()) return "null"
+        val arguments = splitCallArguments(text.substring(open + 1, offset))
+        val active = if (text.substring(open + 1, offset).isBlank()) 0 else arguments.size - 1
+        val signatures = candidates.joinToString(",", "[", "]") { symbol ->
+            val labels = parameterLabels(symbol).let { if (isInstanceMethod(symbol)) it.drop(1) else it }
+            "{\"label\":${Json.string(symbol.detail)},\"parameters\":[" +
+                labels.joinToString(",") { "{\"label\":${Json.string(it)}}" } + "]}"
+        }
+        val selected = selectCallable(document, candidates, arguments)
+        val selectedIndex = candidates.indexOf(selected).coerceAtLeast(0)
+        return "{\"signatures\":$signatures,\"activeSignature\":$selectedIndex,\"activeParameter\":$active}"
+    }
+
+    private fun parameterLabels(symbol: LspSymbol): List<String> {
+        val open = symbol.detail.indexOf('(')
+        val close = matchingClosingParen(symbol.detail, open)
+        if (close < 0) return emptyList()
+        val text = symbol.detail.substring(open + 1, close).trim()
+        return if (text == "void") emptyList() else splitCallArguments(text)
+    }
+
+    private fun foldingRanges(uri: String?): String {
+        val document = uri?.let(readDocuments()::get) ?: return "[]"
+        return document.editorAst.root.flatten().filter {
+            it.kind in setOf(CPlusAstKind.BLOCK, CPlusAstKind.FIELD_LIST, CPlusAstKind.ENUMERATOR_LIST,
+                CPlusAstKind.COMMENT, CPlusAstKind.PREPROCESSOR) && it.span.endLine > it.span.startLine
+        }.distinctBy { it.span.startLine to it.span.endLine }.joinToString(",", "[", "]") {
+            "{\"startLine\":${it.span.startLine - 1},\"endLine\":${it.span.endLine - 1}," +
+                "\"kind\":${Json.string(if (it.kind == CPlusAstKind.COMMENT) "comment" else "region")}}"
+        }
+    }
+
+    private fun testCodeLenses(uri: String?): String {
+        val document = uri?.let(readDocuments()::get) ?: return "[]"
+        return document.editorAst.root.flatten().filter { it.kind == CPlusAstKind.TEST }
+            .mapNotNull { node ->
+                val header = document.snapshot.text.substring(node.span.startOffset, node.span.endOffset).substringBefore('{')
+                val spelling = header.removePrefix("@test").trim()
+                val name = if (spelling.startsWith('"')) {
+                    (runCatching { Json.parse(spelling) }.getOrNull() as? Json.StringValue)?.value
+                } else spelling.takeIf { it.isNotEmpty() }
+                name?.let {
+                    "{\"range\":${node.span.toRangeJson()},\"command\":{\"title\":\"Run test\"," +
+                        "\"command\":\"cplus.runTest\",\"arguments\":[${Json.string(document.uri)},${Json.string(it)}]}}"
+                }
+            }.joinToString(",", "[", "]")
     }
 
     /**
@@ -713,6 +973,8 @@ class CPlusLspServer(
         val selected = symbolAt(request) ?: return "[]"
         val visible = visibleSymbols(document).toList()
         return referenceLocations(document, selected, selected.name, visible)
+            .filter { sameSourceUri(it.uri, document.uri) }
+            .distinctBy { it.span.startOffset }
             .sortedWith(compareBy<LspReference> { it.uri }.thenBy { it.span.startOffset })
             .joinToString(",", "[", "]") { reference ->
                 "{\"range\":${reference.span.toRangeJson()},\"kind\":${referenceHighlightKind(reference, selected)}}"
@@ -755,14 +1017,15 @@ class CPlusLspServer(
                     .map { occurrence ->
                         val node = occurrence.node
                         val mapped = candidate.mappedSource?.toOriginalSpan(node.span) ?: node.span
-                        val uri = mapped.file?.let { file ->
+                        val origin = mapped.file?.let { file ->
                             if (file.startsWith("file:", ignoreCase = true)) file
                             else runCatching { Path.of(file).toUri().toString() }.getOrNull()
                         } ?: candidate.uri
+                        val uri = readDocuments().keys.firstOrNull { sameSourceUri(it, origin) } ?: origin
                         LspReference(
                             uri,
                             mapped,
-                            occurrence.copy(callArity = callArity(candidate.snapshot.text, node.span.startOffset)),
+                            occurrence.copy(callArity = callArity(candidate.parsedText, node.span.startOffset)),
                             candidate
                         )
                     }
@@ -783,7 +1046,7 @@ class CPlusLspServer(
         // only the pointer variable being initialized is written.
         if (selected.kind == 6 || selected.kind == 12) return 2
 
-        val text = reference.document.snapshot.text
+        val text = readDocuments()[reference.uri]?.snapshot?.text ?: reference.document.snapshot.text
         val start = reference.span.startOffset.coerceIn(0, text.length)
         val end = reference.span.endOffset.coerceIn(start, text.length)
         val beforeText = text.substring(0, start)
@@ -798,13 +1061,11 @@ class CPlusLspServer(
         // after the pointer identifier.
         val unaryDereference = beforeText.trimEnd().endsWith('*') &&
             !beforeText.trimEnd().endsWith("**")
-        val compoundAssignment = before.trimEnd().endsWithAny(
-            "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="
-        )
+        val compoundAssignment = Regex("^(?:\\+|-|\\*|/|%|&|\\||\\^|<<|>>)=").containsMatchIn(after)
         val increment = before.trimEnd().endsWith("++") || before.trimEnd().endsWith("--") ||
             after.trimStart().startsWith("++") || after.trimStart().startsWith("--")
         val assignment = !unaryDereference && after.startsWith("=") && !after.startsWith("==")
-        return if (compoundAssignment && !before.trimEnd().endsWith("==") || increment || assignment) 3 else 2
+        return if (compoundAssignment || increment || assignment) 3 else 2
     }
 
     private fun referenceMatches(
@@ -827,26 +1088,40 @@ class CPlusLspServer(
             }
             if (!callSite && !valueSite) return false
             if (selected.ownerName != null) {
-                val receiver = receiverType(reference.document, occurrence.node.span.startOffset)
+                val receiver = receiverType(reference.document, span.startOffset)
                 if (receiver != null && resolveTypeAlias(receiver) != selected.ownerName) return false
             }
             val callArity = occurrence.callArity
             // C-plus instance calls omit the implicit receiver even though the
             // lowered declaration contains it as the first parameter.
             val selectedArity = callParameterArity(selected)
-            return !callSite || callArity == null || selectedArity == null || callArity == selectedArity
+            if (callSite && callArity != null && selectedArity != null && callArity != selectedArity) return false
+            val arguments = callArguments(reference.document.parsedText, occurrence.node.span.startOffset)
+            if (arguments != null) {
+                val candidates = visibleSymbols(reference.document).filter {
+                    it.name == target && it.kind == selected.kind && it.ownerName == selected.ownerName
+                }.toList()
+                val resolved = selectCallable(reference.document, candidates, arguments) ?: return false
+                return resolved.uri == selected.uri && resolved.selection.startOffset == selected.selection.startOffset
+            }
+            return true
         }
         if (selected.kind == 8 && selected.ownerName != null) {
             // Field references are selected by the receiver's resolved owner;
             // falling back to declaration order would leak same-named fields.
-            val receiver = receiverType(reference.document, occurrence.node.span.startOffset)
+            val receiver = receiverType(reference.document, span.startOffset)
             return receiver != null && resolveTypeAlias(receiver) == selected.ownerName
         }
         if (selected.kind in TYPE_SYMBOL_KINDS && occurrence.node.syntaxKind == "type_identifier") {
-            return true
+            val shadow = visibleSymbols(reference.document).filter {
+                it.name == target && it.uri == uri && it.scope.contains(span) &&
+                    it.selection.startOffset <= span.startOffset
+            }.minWithOrNull(compareBy<LspSymbol> { it.scope.size() }.thenByDescending { it.selection.startOffset })
+            return shadow == null || shadow.kind in TYPE_SYMBOL_KINDS && shadow.uri == selected.uri &&
+                shadow.selection.startOffset == selected.selection.startOffset
         }
         val scoped = declarations
-            .filter { it.scope.contains(span) && it.selection.startOffset <= span.startOffset }
+            .filter { it.uri == uri && it.scope.contains(span) && it.selection.startOffset <= span.startOffset }
             .minWithOrNull(compareBy<LspSymbol> { it.scope.size() }.thenByDescending { it.selection.startOffset })
             ?: declarations
                 .filter { it.uri == uri && it.selection.startOffset <= span.startOffset }
@@ -935,6 +1210,7 @@ class CPlusLspServer(
     }
 
     private fun callArguments(text: String, offset: Int): List<String>? {
+        val masked = maskToolingText(text)
         var cursor = offset.coerceIn(0, text.length)
         while (cursor < text.length && text[cursor].isIdentifierPart()) cursor++
         while (cursor < text.length && text[cursor].isWhitespace()) cursor++
@@ -944,7 +1220,7 @@ class CPlusLspServer(
         val arguments = mutableListOf<String>()
         var index = cursor + 1
         while (index < text.length) {
-            when (text[index]) {
+            when (masked[index]) {
                 '(' , '[', '{' -> depth++
                 ')' -> if (depth == 0) {
                     val last = text.substring(start, index).trim()
@@ -1164,10 +1440,12 @@ class CPlusLspServer(
             ?: Regex("(?:struct\\s+|union\\s+|enum\\s+)?([A-Za-z_][A-Za-z0-9_]*)")
                 .find(cleaned)?.groupValues?.get(1)
             ?: return null
+        val alias = activeSemanticDocument.get()?.let { visibleSymbols(it) }
+            ?.firstOrNull { it.kind == 26 && it.name == base }?.resolvedType
         return TypeShape(
-            base,
-            pointerDepth,
-            arrayDepth,
+            alias?.name ?: base,
+            pointerDepth + (alias?.pointerDepth ?: 0),
+            arrayDepth + (alias?.declaratorLayers?.count { it == CPlusDeclaratorLayer.ARRAY } ?: 0),
             pointeeConst = pointeeConst,
             pointeeVolatile = pointeeVolatile
         )
@@ -1434,7 +1712,7 @@ class CPlusLspServer(
             .plus(reachable.asSequence().filter { it != document.uri }
             .mapNotNull(readDocuments()::get)
             .flatMap { candidate -> candidate.symbols.asSequence().map { displaySymbol(it, candidate.uri) } })
-            .distinctBy { it.uri to it.selection.startOffset }
+            .distinctBy { listOf(it.uri, it.name, it.kind, it.selection.startOffset, it.detail) }
     }
 
     /**
@@ -1446,7 +1724,7 @@ class CPlusLspServer(
     private fun displaySymbol(symbol: LspSymbol, fallbackUri: String): LspSymbol {
         val displayUri = readDocuments().keys.firstOrNull { candidate ->
             sameSourceUri(candidate, symbol.uri)
-        } ?: fallbackUri
+        } ?: symbol.uri.takeIf { it.isNotBlank() } ?: fallbackUri
         return if (displayUri == symbol.uri) symbol else symbol.copy(uri = displayUri)
     }
 
@@ -1467,12 +1745,16 @@ class CPlusLspServer(
     }
 
     private fun receiverAccess(document: LspDocument, offset: Int): ReceiverAccess? {
-        val prefix = document.snapshot.text.substring(0, offset)
+        // A request inside `object.par` has the same receiver as one just
+        // after `object.`. Strip only the unfinished identifier, not the access.
+        var memberStart = offset
+        while (memberStart > 0 && document.snapshot.text[memberStart - 1].isIdentifierPart()) memberStart--
+        val prefix = document.snapshot.text.substring(0, memberStart)
         val explicitReceiverMatch = Regex(
             "(\\((?:&|\\*)[A-Za-z_][A-Za-z0-9_]*\\))\\s*(->|\\.)\\s*$"
         ).find(prefix)
         val match = explicitReceiverMatch ?: Regex(
-            "((?:[A-Za-z_][A-Za-z0-9_]*|\\([^\\n]*\\))(?:(?:\\s*(?:->|\\.)\\s*[A-Za-z_][A-Za-z0-9_]*)|(?:\\s*\\([^()]*\\)))*)\\s*(->|\\.)\\s*$"
+            "((?:[A-Za-z_][A-Za-z0-9_]*|\\([^\\n]*\\))(?:(?:\\s*(?:->|\\.)\\s*[A-Za-z_][A-Za-z0-9_]*)|(?:\\s*\\([^()]*\\))|(?:\\s*\\[[^]\\n]*\\]))*)\\s*(->|\\.)\\s*$"
         ).find(prefix) ?: return null
         val receiver = match.groupValues[1].trim()
         val operator = match.groupValues[2]
@@ -1515,6 +1797,15 @@ class CPlusLspServer(
                 ?.ownerName
             return owner?.let { DeclaredType(it, 1, 0) }
         }
+        val subscript = Regex("^(.+)\\[[^\\]]*\\]$").matchEntire(value)
+        if (subscript != null) {
+            val parent = receiverValue(document, subscript.groupValues[1], offset) ?: return null
+            return when {
+                parent.arrayDepth > 0 -> parent.copy(arrayDepth = parent.arrayDepth - 1)
+                parent.pointerDepth > 0 -> parent.copy(pointerDepth = parent.pointerDepth - 1)
+                else -> null
+            }
+        }
         val call = callParts(value)
         if (call != null) {
             return functionCallReturnType(document, call.first, offset, call.second)
@@ -1522,7 +1813,8 @@ class CPlusLspServer(
         if (value.matches(IDENTIFIER)) {
             val variable = visibleSymbols(document)
                 .asSequence()
-                .filter { it.name == value && it.kind == 13 && it.selection.startOffset <= offset }
+                .filter { it.name == value && it.kind == 13 && (!it.local ||
+                    it.uri == document.uri && it.scope.contains(offset) && it.selection.startOffset <= offset) }
                 .sortedWith(compareBy<LspSymbol> { !it.scope.contains(offset) }
                     .thenByDescending { it.selection.startOffset })
                 .firstOrNull()
@@ -1646,7 +1938,7 @@ class CPlusLspServer(
         val result = mutableListOf<String>()
         var depth = 0
         var start = 0
-        arguments.forEachIndexed { index, character ->
+        maskToolingText(arguments).forEachIndexed { index, character ->
             when (character) {
                 '(', '[', '{' -> depth++
                 ')', ']', '}' -> if (depth > 0) depth--
@@ -1679,8 +1971,8 @@ class CPlusLspServer(
         var current = typeName
         val seen = mutableSetOf<String>()
         while (seen.add(current)) {
-            val alias = readDocuments().values.asSequence()
-                .flatMap { it.symbols.asSequence() }
+            val alias = (activeSemanticDocument.get()?.let { visibleSymbols(it) } ?: readDocuments().values.asSequence()
+                .flatMap { it.symbols.asSequence() })
                 .firstOrNull { it.kind == 26 && it.name == current } ?: break
             val underlying = Regex("typedef\\s+(?:struct\\s+|union\\s+)?([A-Za-z_][A-Za-z0-9_]*)")
                 .find(alias.detail)?.groupValues?.get(1) ?: break
@@ -1713,6 +2005,10 @@ class CPlusLspServer(
         } else {
             Regex("\\bvolatile\\b").containsMatchIn(rawBeforeName)
         }
+        symbol.resolvedType?.let { resolved ->
+            return DeclaredType(resolved.name, resolved.pointerDepth,
+                resolved.declaratorLayers.count { it == CPlusDeclaratorLayer.ARRAY }, pointeeConst, pointeeVolatile)
+        }
         val beforeName = rawBeforeName
             .replace(Regex("\\b(const|volatile|restrict)\\b"), " ")
             .trim()
@@ -1741,11 +2037,19 @@ class CPlusLspServer(
     private fun respondForDocument(id: Json?, request: Json.Object, state: RequestState, result: () -> String) {
         val encodedId = id?.encode()
         if (state.cancelled.get() || wasCancelled(encodedId)) return
-        val payload = result()
+        val payload = withSemanticDocument(request.uri()?.let(readDocuments()::get), result)
         // Cancellation may arrive while parsing or indexing is in progress. Do
         // not publish a response that became obsolete during that work.
         if (state.cancelled.get() || wasCancelled(encodedId)) return
         respond(id, payload)
+    }
+
+    private fun <T> withSemanticDocument(document: LspDocument?, block: () -> T): T {
+        val previous = activeSemanticDocument.get()
+        activeSemanticDocument.set(document)
+        return try { block() } finally {
+            if (previous == null) activeSemanticDocument.remove() else activeSemanticDocument.set(previous)
+        }
     }
 
     private fun wasCancelled(encodedId: String?): Boolean =
@@ -1808,6 +2112,7 @@ class CPlusLspServer(
             }
         }
         val length = contentLength ?: return null
+        require(length in 0..(16 * 1024 * 1024)) { "invalid or oversized LSP frame: $length bytes" }
         val bytes = ByteArray(length)
         var offset = 0
         while (offset < length) {
@@ -1833,23 +2138,7 @@ class CPlusLspServer(
 private data class ReceiverAccess(val typeName: String?, val operator: String)
 
 internal fun CPlusAst.unsupportedAstDiagnostics(): List<ParserDiagnostic> {
-    val diagnostics = mutableListOf<ParserDiagnostic>()
-
-    fun visit(node: CPlusAstNode, coveredByUnsupportedParent: Boolean) {
-        val unsupported = node.named && (node.kind == CPlusAstKind.OTHER || node.opaque)
-        if (unsupported && !coveredByUnsupportedParent) {
-            diagnostics += ParserDiagnostic(
-                code = "CPLUS_UNSUPPORTED_AST",
-                message = "AST fragment '${node.syntaxKind}' has no compiler mapping; code generation continues",
-                severity = ParserDiagnosticSeverity.WARNING,
-                span = node.span
-            )
-        }
-        node.children.forEach { child -> visit(child, coveredByUnsupportedParent || unsupported) }
-    }
-
-    visit(root, false)
-    return diagnostics
+    return toolingMappingDiagnostics()
 }
 
 private class RequestState(val key: String, val readView: ReadView) {
@@ -1889,9 +2178,29 @@ private data class LspDocument(
     val parsedText: String,
     val mappedSource: MappedText?,
     val ast: CPlusAst,
-    val diagnostics: List<ParserDiagnostic> = emptyList()
+    val diagnostics: List<ParserDiagnostic> = emptyList(),
+    val editorAst: CPlusAst = ast,
+    val activeImports: List<String>? = null,
+    private val indexedSymbols: List<LspSymbol>? = null
 ) {
-    val symbols: List<LspSymbol> = LspSymbolIndex.build(uri, parsedText, mappedSource, ast)
+    val runtimeSymbols: List<LspSymbol> = indexedSymbols ?: LspSymbolIndex.build(uri, parsedText, mappedSource, ast)
+    val symbols: List<LspSymbol> = runtimeSymbols +
+        LspSymbolIndex.toolingDeclarations(uri, editorAst)
+
+    /** One immutable hierarchy per snapshot; never rescan every owner for every request. */
+    val symbolTreeJson: String by lazy {
+        val local = symbols.filter { sameSourceUri(it.uri, uri) }
+        val owners = local.filter { it.kind in setOf(6, 10, 12, 23) }
+        val children = LinkedHashMap<LspSymbol?, MutableList<LspSymbol>>()
+        for (symbol in local) {
+            val owner = owners.asSequence().filter {
+                it !== symbol && it.span.contains(symbol.selection) && it.span.size() > symbol.span.size()
+            }.minByOrNull { it.span.size() }
+            children.getOrPut(owner) { mutableListOf() }.add(symbol)
+        }
+        fun encode(symbol: LspSymbol): String = symbol.toDocumentJson(children[symbol].orEmpty().map(::encode))
+        children[null].orEmpty().joinToString(",", "[", "]", transform = ::encode)
+    }
 
     fun wordAt(position: LspPosition?): String {
         val offset = snapshot.offsetAt(position) ?: return ""
@@ -1900,6 +2209,15 @@ private data class LspDocument(
         while (start > 0 && snapshot.text[start - 1].isIdentifierPart()) start--
         while (end < snapshot.text.length && snapshot.text[end].isIdentifierPart()) end++
         return snapshot.text.substring(start, end)
+    }
+
+    fun wordSpan(position: LspPosition?): SourceSpan? {
+        val offset = snapshot.offsetAt(position) ?: return null
+        var start = offset
+        var end = offset
+        while (start > 0 && snapshot.text[start - 1].isIdentifierPart()) start--
+        while (end < snapshot.text.length && snapshot.text[end].isIdentifierPart()) end++
+        return snapshot.sourceFile.span(start, end)
     }
 
     fun symbolAt(position: LspPosition?): LspSymbol? {
@@ -1944,7 +2262,9 @@ private data class LspSymbol(
     val scope: SourceSpan,
     val ownerName: String? = null,
     val access: String? = null,
-    val annotations: Set<String> = emptySet()
+    val annotations: Set<String> = emptySet(),
+    val local: Boolean = false,
+    val resolvedType: CPlusResolvedType? = null
 ) {
     fun rangeJson(): String = span.toRangeJson()
     fun toolingDetail(): String = buildString {
@@ -1964,19 +2284,66 @@ private data class LspSymbol(
         append("],\"location\":{\"uri\":")
         append(Json.string(uri)).append(",\"range\":").append(span.toRangeJson()).append("}}")
     }
+    fun toDocumentJson(children: List<String>): String = toJson().dropLast(1) +
+        ",\"range\":${span.toRangeJson()},\"selectionRange\":${selection.toRangeJson()}," +
+        "\"children\":[${children.joinToString(",")}] }"
+
+    fun completionKind(): Int = when (kind) {
+        6 -> 2; 12 -> 3; 8 -> 5; 13 -> 6; 10 -> 13; 22 -> 20; 23 -> 22; 26 -> 7
+        else -> 6
+    }
 }
 
 private object LspSymbolIndex {
+    /** Templates/tests retain their original declaration identity alongside instantiated output. */
+    fun toolingDeclarations(uri: String, ast: CPlusAst): List<LspSymbol> {
+        val text = ast.source.text
+        val result = mutableListOf<LspSymbol>()
+        for (construct in CPlusComptimeIndexer().index(ast).constructs) {
+            val symbolName = construct.symbol ?: continue
+            if (!construct.moduleScope || !construct.activeThisPass ||
+                construct.syntaxKind !in setOf("cplus_comptime_function_definition", "cplus_legacy_type_generator",
+                    "cplus_legacy_function_generator", "cplus_comptime_value")) continue
+            val node = ast.root.flatten().firstOrNull { it.span == construct.span && it.syntaxKind == construct.syntaxKind } ?: continue
+            val selection = node.children.firstOrNull { it.fieldName == "name" }?.span ?: construct.span
+            val end = construct.bodySpan?.startOffset ?: construct.span.endOffset
+            result += LspSymbol(uri, symbolName.removePrefix("@"),
+                if (construct.syntaxKind == "cplus_comptime_value") 14 else 12,
+                text.substring(construct.span.startOffset, end).replace(Regex("\\s+"), " ").trim(),
+                construct.span, selection, ast.root.span, annotations = setOf("comptime"))
+        }
+        for (node in ast.root.flatten().filter { it.kind == CPlusAstKind.TEST }) {
+            val name = node.children.firstOrNull { it.fieldName == "name" } ?: continue
+            val spelling = text.substring(name.span.startOffset, name.span.endOffset).trim().trim('"')
+            result += LspSymbol(uri, spelling, 12, "@test \"$spelling\"", node.span, name.span, ast.root.span,
+                annotations = setOf("test"))
+        }
+        return result
+    }
+
     fun build(uri: String, parsedText: String, mappedSource: MappedText?, ast: CPlusAst): List<LspSymbol> {
         val symbols = mutableListOf<LspSymbol>()
-        val semanticSymbols = runCatching { CPlusSemanticAnalyzer().analyze(ast).symbols }.getOrDefault(emptyList())
+        val semantics = runCatching { CPlusSemanticAnalyzer().analyze(ast) }.getOrNull()
+        val semanticSymbols = semantics?.symbols.orEmpty()
         val declarationKinds = setOf(
             CPlusAstKind.STRUCT_DECLARATION, CPlusAstKind.UNION_DECLARATION,
             CPlusAstKind.ENUM_DECLARATION, CPlusAstKind.TYPE_ALIAS,
             CPlusAstKind.FUNCTION_DECLARATION, CPlusAstKind.METHOD_DECLARATION,
-            CPlusAstKind.VARIABLE_DECLARATION, CPlusAstKind.FIELD_DECLARATION
+            CPlusAstKind.VARIABLE_DECLARATION, CPlusAstKind.FIELD_DECLARATION,
+            CPlusAstKind.PARAMETER, CPlusAstKind.ENUMERATOR
         )
-        fun mapSpan(span: SourceSpan): SourceSpan = mappedSource?.toOriginalSpan(span) ?: span
+        fun mapSpan(span: SourceSpan): SourceSpan {
+            val mapped = mappedSource ?: return span
+            val start = mapped.originAt(span.startOffset)
+            val last = mapped.originAt(span.endOffset - 1)
+            // Expansion passes may create distinct SourceFile objects for the
+            // same origin. Their object identity must not collapse lexical scopes.
+            if (start != null && last != null && sameSourceFile(start.file.name, last.file.name) &&
+                start.file.text == last.file.text && last.offset >= start.offset) {
+                return start.file.span(start.offset, last.offset + 1)
+            }
+            return mapped.toOriginalSpan(span)
+        }
         fun semanticKind(kind: CPlusAstKind): CPlusSymbolKind? = when (kind) {
             CPlusAstKind.STRUCT_DECLARATION, CPlusAstKind.UNION_DECLARATION -> CPlusSymbolKind.STRUCT
             CPlusAstKind.TYPE_ALIAS -> CPlusSymbolKind.TYPE_ALIAS
@@ -2001,7 +2368,8 @@ private object LspSymbolIndex {
                 ) || node.syntaxKind in setOf("compound_statement", "cplus_block")
             ) node.span else scope
             if (node.kind in declarationKinds) {
-                val nameNode = namedNode(node, node.kind)
+                val nameNodes = node.declaredIdentifiers().ifEmpty { listOfNotNull(namedNode(node, node.kind)) }
+                for (nameNode in nameNodes) {
                 val name = nameNode?.let { parsedText.substring(it.span.startOffset, it.span.endOffset) }?.trim()
                     ?.takeIf { it.matches(IDENTIFIER) }
                 if (name != null) {
@@ -2012,6 +2380,7 @@ private object LspSymbolIndex {
                         CPlusAstKind.METHOD_DECLARATION -> 6
                         CPlusAstKind.FUNCTION_DECLARATION -> 12
                         CPlusAstKind.FIELD_DECLARATION -> 8
+                        CPlusAstKind.ENUMERATOR -> 22
                         else -> 13
                     }
                     val mappedDeclaration = mapSpan(node.span)
@@ -2026,13 +2395,21 @@ private object LspSymbolIndex {
                     val semantic = semanticSymbol(node, node.kind, name, owner)
                     symbols += LspSymbol(
                         symbolUri, name, kind,
-                        parsedText.substring(node.span.startOffset, node.span.endOffset)
-                            .replace(Regex("\\s+"), " ").trim().take(160),
+                        declarationDetail(node, nameNode, parsedText),
                         mapSpan(node.span), mapSpan(nameNode.span), mapSpan(nestedScope),
                         owner,
                         semantic?.access,
-                        semantic?.annotations.orEmpty()
+                        semantic?.annotations.orEmpty(),
+                        local = scope != ast.root.span && node.kind in setOf(CPlusAstKind.PARAMETER, CPlusAstKind.VARIABLE_DECLARATION),
+                        resolvedType = when (node.kind) {
+                            CPlusAstKind.TYPE_ALIAS -> semantics?.typeAliases?.get(name)
+                            CPlusAstKind.PARAMETER, CPlusAstKind.VARIABLE_DECLARATION -> semantics?.scopedValueTypes
+                                ?.filter { it.name == name && it.declarationSpan.contains(nameNode.span) }
+                                ?.minByOrNull { it.declarationSpan.size() }?.type ?: semantics?.valueTypes?.get(name)
+                            else -> null
+                        }
                     )
+                }
                 }
             }
             val childOwner = if (node.kind == CPlusAstKind.STRUCT_DECLARATION ||
@@ -2043,7 +2420,19 @@ private object LspSymbolIndex {
             node.children.forEach { visit(it, nestedScope, childOwner) }
         }
         visit(ast.root, ast.root.span)
-        return symbols.distinctBy { it.name to it.selection.startOffset }.toList()
+        return symbols.distinctBy { listOf(it.uri, it.name, it.kind, it.selection.startOffset, it.detail) }.toList()
+    }
+
+    private fun declarationDetail(node: CPlusAstNode, nameNode: CPlusAstNode, text: String): String {
+        val body = node.children.firstOrNull { it.fieldName == "body" && it.kind == CPlusAstKind.BLOCK }
+        val end = body?.span?.startOffset ?: node.span.endOffset
+        val declarators = node.children.filter { it.fieldName == "declarator" }
+        val declarator = declarators.firstOrNull { it.span.contains(nameNode.span) }
+        val spelling = if (declarators.size > 1 && declarator != null) {
+            text.substring(node.span.startOffset, declarators.first().span.startOffset) +
+                text.substring(declarator.span.startOffset, declarator.span.endOffset)
+        } else text.substring(node.span.startOffset, end)
+        return spelling.replace(Regex("\\s+"), " ").trim().take(2048)
     }
 
     private fun namedNode(node: CPlusAstNode, kind: CPlusAstKind): CPlusAstNode? {
@@ -2054,7 +2443,7 @@ private object LspSymbolIndex {
         }
         return when (kind) {
             CPlusAstKind.TYPE_ALIAS -> node.flatten().lastOrNull { it.kind == CPlusAstKind.IDENTIFIER }
-            CPlusAstKind.FIELD_DECLARATION, CPlusAstKind.VARIABLE_DECLARATION ->
+            CPlusAstKind.FIELD_DECLARATION, CPlusAstKind.VARIABLE_DECLARATION, CPlusAstKind.PARAMETER ->
                 node.flatten().firstOrNull {
                     it.kind == CPlusAstKind.IDENTIFIER && it.fieldName == "declarator"
                 } ?: node.flatten().lastOrNull { it.kind == CPlusAstKind.IDENTIFIER }
@@ -2092,8 +2481,10 @@ private fun sameSourceUri(left: String, right: String): Boolean {
     val leftPath = runCatching { Path.of(URI(left)).toAbsolutePath().normalize() }.getOrNull()
     val rightPath = runCatching { Path.of(URI(right)).toAbsolutePath().normalize() }.getOrNull()
     if (leftPath == null || rightPath == null) return false
-    val leftComparable = runCatching { leftPath.toRealPath() }.getOrDefault(leftPath)
-    val rightComparable = runCatching { rightPath.toRealPath() }.getOrDefault(rightPath)
+    // Unsaved leaves need canonical parent identity too: `/link/new.cp` and
+    // `/real/new.cp` are the same overlay even before new.cp exists on disk.
+    val leftComparable = runCatching { leftPath.toFile().canonicalFile.toPath() }.getOrDefault(leftPath)
+    val rightComparable = runCatching { rightPath.toFile().canonicalFile.toPath() }.getOrDefault(rightPath)
     return leftComparable == rightComparable
 }
 
@@ -2105,9 +2496,35 @@ private fun CPlusAstNode.flatten(): Sequence<CPlusAstNode> = sequence {
 private fun CPlusAstNode.identifierOccurrences(
     ancestors: List<String> = emptyList()
 ): Sequence<LspIdentifierOccurrence> = sequence {
-    if (kind == CPlusAstKind.IDENTIFIER) yield(LspIdentifierOccurrence(this@identifierOccurrences, ancestors))
-    val nextAncestors = ancestors + syntaxKind
-    children.forEach { child -> yieldAll(child.identifierOccurrences(nextAncestors)) }
+    for (use in identifierUses()) yield(LspIdentifierOccurrence(use.node, ancestors + use.ancestors.map { it.syntaxKind }))
+}
+
+/** Preserve offsets while hiding delimiters in comments and literals. */
+private fun maskToolingText(text: String): String {
+    val output = text.toCharArray()
+    var index = 0
+    while (index < text.length) {
+        val start = index
+        when {
+            text.startsWith("//", index) -> {
+                index = text.indexOf('\n', index).takeIf { it >= 0 } ?: text.length
+            }
+            text.startsWith("/*", index) -> {
+                index = text.indexOf("*/", index + 2).takeIf { it >= 0 }?.plus(2) ?: text.length
+            }
+            text[index] == '\'' || text[index] == '"' -> {
+                val quote = text[index++]
+                while (index < text.length) {
+                    val char = text[index++]
+                    if (char == '\\') index = (index + 1).coerceAtMost(text.length)
+                    else if (char == quote) break
+                }
+            }
+            else -> { index++; continue }
+        }
+        for (masked in start until index) if (output[masked] != '\n' && output[masked] != '\r') output[masked] = ' '
+    }
+    return String(output)
 }
 
 private val TYPE_SYMBOL_KINDS = setOf(10, 23, 26)
@@ -2218,9 +2635,14 @@ private val IMPORT_RECOVERY_LITERAL = Regex(
 private const val MAX_WORKSPACE_IMPORTS = 256
 private const val MAX_TRACKED_REQUEST_IDS = 4096
 private val CPLUS_KEYWORDS = setOf(
-    "pub", "priv", "static", "borrowed", "owned", "mut", "self", "comptime", "type", "function",
+    "pub", "priv", "static", "stat", "borrowed", "owned", "mut", "scratch", "hot", "warm", "cold", "self", "comptime", "type", "function",
+    "import", "flags", "code", "variable", "var", "fn", "os", "align", "fields", "name", "size",
     "defer", "try", "catch", "throws", "test", "assert", "assertEquals", "if", "else", "for", "while",
-    "return", "struct", "union", "enum", "typedef", "const", "volatile", "sizeof"
+    "return", "struct", "union", "enum", "typedef", "const", "volatile", "sizeof",
+    "auto", "break", "case", "char", "continue", "default", "do", "double", "extern", "float", "goto",
+    "inline", "int", "long", "register", "restrict", "short", "signed", "switch", "unsigned", "void",
+    "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic", "_Imaginary", "_Noreturn",
+    "_Static_assert", "_Thread_local", "bool", "size_t", "ptrdiff_t", "wchar_t", "char16_t", "char32_t"
 )
 
 private fun SourceSpan.toRangeJson(): String =
@@ -2245,7 +2667,8 @@ private fun SourceSnapshot.offsetAt(position: LspPosition?): Int? {
         if (newline < 0) return null
         lineStart = newline + 1
     }
-    return (lineStart + position.character).coerceAtMost(text.length)
+    val end = text.indexOf('\n', lineStart).takeIf { it >= 0 } ?: text.length
+    return (lineStart + position.character).coerceAtMost(end)
 }
 
 private fun Json.Object.uri(): String? {

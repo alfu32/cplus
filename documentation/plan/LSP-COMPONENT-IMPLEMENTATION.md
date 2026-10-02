@@ -1,5 +1,10 @@
 # C-plus LSP Implementation Plan
 
+Current implementation batch: [FRONTEND-TOOLING-SPRINT.md](FRONTEND-TOOLING-SPRINT.md).
+The 2026-10-02 sprint separates principal implementation tasks from host/UI
+acceptance. Historical `DONE`/`OPEN` rows below retain their evidence meaning;
+they are not a demand for an unbounded additional semantic edge-case project.
+
 This is the implementation roadmap for editor intelligence. It is a plan first
 and a status ledger second. The language server is a CLI component, not a new
 Gradle module: `cplus lsp` owns one parser runtime and exposes it to all editor

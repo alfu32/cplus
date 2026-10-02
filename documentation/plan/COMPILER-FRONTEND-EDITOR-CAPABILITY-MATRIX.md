@@ -14,6 +14,19 @@ node types directly.
 
 ## Deliberate boundaries
 
+The [2026-10-02 implementation sprint](FRONTEND-TOOLING-SPRINT.md) adds the
+following LSP consumers without replacing these parser/fallback services:
+
+| Consumer | Added LSP integration | Acceptance status |
+|---|---|---|
+| VS Code | References, highlights, workspace symbols, hierarchical symbols, signatures, folding, test lenses, semantic tokens, cancellation, deadlines, file watches, environment overrides | TypeScript and adapter tests; real-editor acceptance remains separate |
+| IntelliJ | Project working directory, explicit language ID, settings-triggered restart, lifecycle logging/notification, bounded unexpected-exit recovery | Kotlin compile and settings/recovery-state tests; forced-exit UI replay remains separate |
+| Vim | Unsaved edit synchronization, hover/definition/references, aggregated diagnostics, Unicode navigation, bounded frame handling | Headless discovery and tooling invariants; full native-protocol replay remains separate |
+
+The LSP now receives unsaved imports through the compiler's read-only source
+provider; saved-only import graphs below refer to standalone graph commands,
+not the live LSP dependency closure.
+
 - Editor presentation is not required to be visually identical across hosts.
 - Parser-backed results are accepted only for the exact current document snapshot.
 - Unsaved-buffer parsing is supported where the adapter sends buffer text; disk-backed

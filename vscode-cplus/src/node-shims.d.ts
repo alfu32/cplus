@@ -9,7 +9,7 @@ declare module "node:child_process" {
     export function execFile(
         command: string,
         args: string[],
-        options: { cwd?: string; maxBuffer?: number },
+        options: { cwd?: string; maxBuffer?: number; env?: Record<string, string | undefined> },
         callback: (error: Error | null, stdout: string, stderr: string) => void
     ): ExecFileChildProcess;
 }

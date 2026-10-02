@@ -18,6 +18,16 @@ With no explicit command, discovery checks project `.cplus`, project
 `c-plus-bin`, the project root, `CPLUS_HOME`, user-local `~/.local/bin`, and
 `~/.local/share/c-plus`, then falls back to `cpc` on `PATH`.
 
+The LSP bridge sends unsaved changes and offers `:CPlusLspHover`,
+`:CPlusLspDefinition`, and `:CPlusLspReferences`. Hover/navigation results are
+discarded if the buffer changed while waiting. Diagnostic quickfix entries are
+aggregated across documents; references use a separate location list. Set
+`g:cplus_environment` to a dictionary (for example `{'CC': 'clang'}`) to supply
+job environment overrides. Values are literal; extend `PATH` with Vim's `$PATH`
+expression rather than a quoted shell expansion. Automatic crash recovery is
+limited to one attempt until `:CPlusLspRestart` resets it.
+See [the LSP contract](../documentation/spec/SPEC.lsp.md).
+
 Install by adding this directory to Vim's `runtimepath`, for example:
 
 ```vim

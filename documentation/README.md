@@ -6,6 +6,7 @@ The `spec/` directory contains the living specifications:
 - [`SPEC.comptime.md`](spec/SPEC.comptime.md) defines comptime, imports, generics, reflection, and materialization.
 - [`SPEC.errors.md`](spec/SPEC.errors.md) specifies `@throws` annotations and `@try`/`@catch` lowering.
 - [`SPEC.compiler.md`](spec/SPEC.compiler.md) describes the CLI, diagnostics, passes, and build layout.
+- [`SPEC.lsp.md`](spec/SPEC.lsp.md) defines language-server services, snapshot/import lifetime, diagnostics, and editor configuration.
 - [`../stdlib/README.md`](../stdlib/README.md) is the consolidated user guide and API catalog for every module currently in `stdlib/`.
 - [`spec/stdlib/`](spec/stdlib/) contains deeper subsystem specifications for allocators, collections, and strings.
 
@@ -15,3 +16,4 @@ Implementation plans and design decisions are recorded under [`plan/`](plan/).
 
 - [`plan/COMPILER-FRONTEND-ARCHITECTURE.md`](plan/COMPILER-FRONTEND-ARCHITECTURE.md) describes the target parser/compiler architecture and component lifetimes.
 - [`plan/COMPILER-FRONTEND-IMPLEMENTATION.md`](plan/COMPILER-FRONTEND-IMPLEMENTATION.md) tracks migration phases, acceptance gates, and component retirement.
+- [`plan/FRONTEND-TOOLING-SPRINT.md`](plan/FRONTEND-TOOLING-SPRINT.md) separates the current finite implementation batch from later host/UI validation.

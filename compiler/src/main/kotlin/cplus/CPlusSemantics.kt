@@ -811,6 +811,7 @@ class CPlusSemanticAnalyzer {
                     .map { it.text(ast.source.text) }.takeIf { it.isNotEmpty() }
                 CPlusCatchBinding(codes, typeName, parameterName, clause.span)
             }.toList()
+        val globalVariables = mutableMapOf<String, ResolvedCType?>()
         fun visit(node: CPlusAstNode, variables: Map<String, ResolvedCType?>, enclosingType: String?) {
             if (node.syntaxKind in comptimeOnlySyntax) return
             val ownerType = if (node.syntaxKind in setOf("struct_specifier", "union_specifier")) {
@@ -991,6 +992,16 @@ class CPlusSemanticAnalyzer {
                 return
             }
 
+            // Most nodes only read their environment. Copying all file-scope
+            // variables for every identifier/literal makes broad modules
+            // quadratic. File declarations are already registered in the first
+            // pass; only local declarations and parameter scopes need a copy.
+            val introducesNames = node.syntaxKind in setOf("declaration", "function_definition",
+                "cplus_function_declaration", "cplus_method_definition")
+            if (!introducesNames || node.syntaxKind == "declaration" && variables === globalVariables) {
+                node.children.forEach { visit(it, variables, ownerType) }
+                return
+            }
             val visibleVariables = variables.toMutableMap()
             if (node.syntaxKind in setOf("function_definition", "cplus_function_declaration", "cplus_method_definition")) {
                 val parameterList = node.descendantsAndSelf().firstOrNull { it.syntaxKind == "parameter_list" }
@@ -1029,7 +1040,6 @@ class CPlusSemanticAnalyzer {
             }
             node.children.forEach { visit(it, visibleVariables, ownerType) }
         }
-        val globalVariables = mutableMapOf<String, ResolvedCType?>()
         fun collectFileScopeVariables(node: CPlusAstNode) {
             when (node.syntaxKind) {
                 "declaration" -> registerVariable(node, ast.source.text, globalVariables, ::canonicalType) { name, type ->

@@ -1656,7 +1656,7 @@ class CPlusLspServerTest {
             "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
                 "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
-                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":7,\"character\":${source.lines()[7].length}}}}",
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":7,\"character\":${source.lines()[7].indexOf("values.") + "values.".length}}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":null}"
         ).joinToString("") { frame(it) }
         val output = ByteArrayOutputStream()
@@ -1686,7 +1686,7 @@ class CPlusLspServerTest {
             "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
                 "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
-                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$line,\"character\":${source.lines()[line].length - 1}}}}",
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$line,\"character\":${source.lines()[line].indexOf("value.") + "value.".length}}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/definition\",\"params\":{" +
                 "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$definitionLine,\"character\":${source.lines()[definitionLine].indexOf("get")}}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
@@ -1721,11 +1721,11 @@ class CPlusLspServerTest {
             "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
                 "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"${encode(source)}\"}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{" +
-                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$completionLine,\"character\":${source.lines()[completionLine].length - 1}}}}",
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":$completionLine,\"character\":${source.lines()[completionLine].indexOf("value.") + "value.".length}}}}",
             "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{" +
                 "\"textDocument\":{\"uri\":\"$uri\",\"version\":2},\"contentChanges\":[{\"text\":\"${encode(changed)}\"}]}}",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/completion\",\"params\":{" +
-                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":0,\"character\":${changed.lines().first().length - 1}}}}",
+                "\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":0,\"character\":${changed.lines().first().indexOf("value.") + "value.".length}}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":null}"
         ).joinToString("") { frame(it) }
         val output = ByteArrayOutputStream()

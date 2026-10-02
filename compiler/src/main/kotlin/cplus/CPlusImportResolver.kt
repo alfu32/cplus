@@ -6,7 +6,11 @@ import java.nio.file.Path
 import java.nio.file.Paths
 
 /** Shared path policy for source imports in the compiler and parser migration pipeline. */
-class CPlusImportResolver(private val importPaths: CPlusImportPaths = CPlusImportPaths()) {
+class CPlusImportResolver(
+    private val importPaths: CPlusImportPaths = CPlusImportPaths(),
+    /** Allows editor-owned, not-yet-saved files to participate in resolution. */
+    private val sourceAvailable: (Path) -> Boolean = Files::isRegularFile
+) {
     fun resolve(
         source: SourceFile,
         requestedPath: String,
@@ -50,7 +54,7 @@ class CPlusImportResolver(private val importPaths: CPlusImportPaths = CPlusImpor
                 if (confined && !resolved.startsWith(normalizedRoot)) {
                     throw CPlusImportResolutionException("import path escapes its configured root: '$requestedPath'")
                 }
-                if (Files.isRegularFile(resolved)) {
+                if (sourceAvailable(resolved)) {
                     // Keep emitted absolute C includes and SourceId values
                     // stable on platforms whose temporary directory is a
                     // symlink (macOS commonly exposes /var through /private).

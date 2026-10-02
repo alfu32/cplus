@@ -31,7 +31,7 @@ data class CPlusAstLoweringPipelineResult(
     val synthesizedNodes: List<CPlusAstNode> = emptyList()
 ) {
     val successful: Boolean
-        get() = loweringDiagnostics.isEmpty() && parserDiagnostics.isEmpty()
+        get() = loweringDiagnostics.isEmpty() && parserDiagnostics.none { it.severity == ParserDiagnosticSeverity.ERROR }
 }
 
 /**
@@ -57,6 +57,8 @@ class CPlusAstLoweringPipeline {
         var source = initialSource
         val trace = mutableListOf<CPlusAstLoweringTrace>()
         val synthesizedDeclarations = mutableListOf<CPlusSynthesizedDeclaration>()
+        val parserWarnings = initialAst.diagnostics.filter { it.severity == ParserDiagnosticSeverity.WARNING }
+            .map { it.copy(span = initialSource.toOriginalSpan(it.span)) }.toMutableList()
 
         fun synthesizedNodesIn(currentAst: CPlusAst): List<CPlusAstNode> {
             return currentAst.synthesizedDeclarationNodes(synthesizedDeclarations, source)
@@ -76,7 +78,7 @@ class CPlusAstLoweringPipeline {
                     source,
                     ast,
                     lowered.diagnostics,
-                    emptyList(),
+                    parserWarnings.toList(),
                     trace,
                     synthesizedDeclarations,
                     synthesizedNodesIn(ast)
@@ -89,12 +91,12 @@ class CPlusAstLoweringPipeline {
             if (lowered.source.text != source.text) {
                 source = lowered.source
                 val parsed = reparse(source)
-                if (parsed.diagnostics.isNotEmpty()) {
+                if (parsed.diagnostics.any { it.severity == ParserDiagnosticSeverity.ERROR }) {
                     return CPlusAstLoweringPipelineResult(
                         source,
                         ast,
                         emptyList(),
-                        parsed.diagnostics.map { diagnostic ->
+                        parserWarnings + parsed.diagnostics.map { diagnostic ->
                             diagnostic.copy(span = source.toOriginalSpan(diagnostic.span))
                         },
                         trace,
@@ -102,6 +104,7 @@ class CPlusAstLoweringPipeline {
                         synthesizedNodesIn(ast)
                     )
                 }
+                parserWarnings += parsed.diagnostics.map { it.copy(span = source.toOriginalSpan(it.span)) }
                 ast = CPlusAstAdapter().adapt(parsed)
             } else {
                 source = lowered.source
@@ -112,7 +115,7 @@ class CPlusAstLoweringPipeline {
             source,
             ast,
             emptyList(),
-            emptyList(),
+            parserWarnings.distinctBy { listOf(it.code, it.span, it.message) },
             trace,
             synthesizedDeclarations,
             synthesizedNodesIn(ast)
