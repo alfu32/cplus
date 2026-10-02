@@ -329,9 +329,10 @@ The complete `:cli:test` suite passes after migrating its fixtures to this
 grammar. This closes the operator-contract slice but does not close the
 interactive IntelliJ lifecycle gates.
 
-The live Tree-sitter grammar-proof corpus now contains 76 supported `.cp`/`.c+`
+The live Tree-sitter grammar-proof corpus now contains 77 supported `.cp`/`.c+`
 files after the stdlib React and UI modules were added; the exact inventory
-assertion was refreshed from 71 to 76 before rerunning the full migration gate.
+assertion was refreshed from 76 to 77 after the latest stdlib expansion; the full
+migration gate must be rerun after the refresh.
 
 The command-option boundary is now explicit for parser and language-server
 entry points: parser selection remains `parse --backend legacy|tree-sitter`,
