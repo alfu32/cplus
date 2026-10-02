@@ -47,7 +47,18 @@ comptime import "stdlib:/memory/xmem.cp";
         }
 
         pub int add(borrowed mut *self, T value) {
-            return self->push(&value);
+            if (self == NULL || !self->initialized) return 1;
+            if (self->length == self->capacity) {
+                if (self->capacity > ((size_t)-1) / 2) return 1;
+                size_t next_capacity = self->capacity == 0 ? 4 : self->capacity * 2;
+                if (next_capacity > ((size_t)-1) / sizeof(T)) return 1;
+                T* resized = realloc_warm(self->items, next_capacity * sizeof(T));
+                if (resized == NULL) return 1;
+                self->items = resized;
+                self->capacity = next_capacity;
+            }
+            self->items[self->length++] = value;
+            return 0;
         }
 
         pub int each(borrowed mut *self, int (*callback)(borrowed mut T* item, size_t index)) {
