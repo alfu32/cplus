@@ -191,17 +191,6 @@ comptime int expected_answer = 42;
     @assert(scores.capacity() == 0);
 }
 
-@test "dynamic list add accepts values directly" {
-    int_list_t values;
-    @assert(values.init() == 0);
-    @assert(values.add(7) == 0);
-    @assert(values.add(11) == 0);
-    @assert(values.size() == 2);
-    @assert(*values.get(0) == 7);
-    @assert(*values.get(1) == 11);
-    values.destroy();
-}
-
 @test "generic mapper materializes a result list" {
     named_value_list_t records;
     int_list_t ranks;
@@ -340,4 +329,15 @@ comptime int expected_answer = 42;
     char hash[32];
     plain_record__hash(&value, hash);
     @assert(strcmp(hash, "1:2:3") == 0);
+}
+
+@test "dynamic list add stores value directly" {
+    int_list_t values;
+    @assert(values.init() == 0);
+    @assert(values.add(11) == 0);
+    @assert(values.add(29) == 0);
+    @assert(values.size() == 2);
+    @assert(*values.get(0) == 11);
+    @assert(*values.get(1) == 29);
+    values.destroy();
 }

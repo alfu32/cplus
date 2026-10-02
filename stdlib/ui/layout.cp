@@ -28,6 +28,30 @@ typedef struct ui_drawable_box_t {
     borrowed const ui_graphics_style_t* style;
     borrowed const char* text;
     ui_drawable_index_list_t children;
+
+    pub int init(
+        borrowed mut *self,
+        uint64_t node_id,
+        size_t parent_drawable,
+        ui_rect_t rect,
+        borrowed const ui_graphics_style_t* style,
+        borrowed const char* text
+    ) {
+        if (self == NULL) return 1;
+        memset(self, 0, sizeof(*self));
+        self->node_id = node_id;
+        self->parent_drawable = parent_drawable;
+        self->rect = rect;
+        self->style = style;
+        self->text = text;
+        return self->children.init();
+    }
+
+    pub void destroy(borrowed mut *self) {
+        if (self == NULL) return;
+        self->children.destroy();
+        memset(self, 0, sizeof(*self));
+    }
 } ui_drawable_box_t;
 
 typedef struct ui_drawable_image_t {
@@ -43,189 +67,293 @@ typedef struct ui_drawable_t {
         ui_drawable_box_t box;
         ui_drawable_image_t image;
     } as;
+
+    pub void destroy(borrowed mut *self) {
+        if (self == NULL) return;
+        if (self->kind == UI_DRAWABLE_BOX) {
+            ui_drawable_box_t* box = &self->as.box;
+            box->destroy();
+        }
+        memset(self, 0, sizeof(*self));
+    }
 } ui_drawable_t;
+
 comptime typedef dynamic_list(ui_drawable_t) ui_drawable_list_t;
-
-typedef struct ui_layout_result_t ui_layout_result_t;
-
-static int ui__layout_result_init_impl(borrowed mut ui_layout_result_t* result);
-static void ui__layout_result_destroy_impl(borrowed mut ui_layout_result_t* result);
-static int ui__layout_run_impl(borrowed mut ui_layout_result_t* result, borrowed const ui_vnode_t* root, double viewport_width, double viewport_height);
 
 typedef struct ui_layout_result_t {
     ui_drawable_list_t drawables;
 
-    pub int init(borrowed mut *self) { return ui__layout_result_init_impl(self); }
-    pub void destroy(borrowed mut *self) { ui__layout_result_destroy_impl(self); }
-    pub int run(borrowed mut *self, borrowed const ui_vnode_t* root, double viewport_width, double viewport_height) {
-        return ui__layout_run_impl(self, root, viewport_width, viewport_height);
+    pub int init(borrowed mut *self) {
+        if (self == NULL) return 1;
+        memset(self, 0, sizeof(*self));
+        return self->drawables.init();
+    }
+
+    pub void clear(borrowed mut *self) {
+        if (self == NULL) return;
+        for (size_t i = 0; i < self->drawables.length; i++) {
+            self->drawables.items[i].destroy();
+        }
+        self->drawables.clear();
+    }
+
+    pub void destroy(borrowed mut *self) {
+        if (self == NULL) return;
+        self->clear();
+        self->drawables.destroy();
+        memset(self, 0, sizeof(*self));
     }
 } ui_layout_result_t;
 
-static ui_rect_t ui__layout_resolve_rect(borrowed const ui_vnode_t* node, ui_rect_t viewport, ui_rect_t parent, borrowed const ui_rect_t* sibling) {
-    ui_rect_t base = parent;
-    if (node->style.layout.position == UI_POSITION_FIXED) base = viewport;
-    else if (node->style.layout.position == UI_POSITION_RELATIVE_SIBLING && sibling != NULL) base = *sibling;
-    ui_rect_t result;
-    result.x = base.x + node->style.layout.left;
-    result.y = base.y + node->style.layout.top;
-    result.width = node->style.layout.width;
-    result.height = node->style.layout.height;
-    return result;
-}
+typedef struct ui_layout_step_t {
+    int error;
+    int has_anchor;
+    ui_rect_t anchor;
+    size_t first_drawable;
 
-static int ui__layout_result_init_impl(borrowed mut ui_layout_result_t* result) {
-    if (result == NULL) return 1;
-    memset(result, 0, sizeof(*result));
-    return result->drawables.init();
-}
+    static pub ui_layout_step_t empty(void) {
+        ui_layout_step_t step;
+        memset(&step, 0, sizeof(step));
+        step.first_drawable = (size_t)-1;
+        return step;
+    }
 
-static void ui__layout_result_destroy_impl(borrowed mut ui_layout_result_t* result) {
-    if (result == NULL) return;
-    for (size_t i = 0; i < result->drawables.length; i++) {
-        ui_drawable_t* drawable = &result->drawables.items[i];
-        if (drawable->kind == UI_DRAWABLE_BOX) {
-            ui_drawable_index_list_t* children = &drawable->as.box.children;
-            children->destroy();
+    static pub ui_layout_step_t failed(void) {
+        ui_layout_step_t step = ui_layout_step_t.empty();
+        step.error = 1;
+        return step;
+    }
+} ui_layout_step_t;
+
+typedef struct ui_layout_t {
+    ui_rect_t viewport;
+    ui_layout_result_t result;
+
+    priv ui_layout_step_t layout_node(
+        borrowed mut *self,
+        borrowed const ui_vnode_t* node,
+        ui_rect_t parent_rect,
+        borrowed const ui_rect_t* sibling_rect,
+        size_t parent_drawable
+    );
+
+    priv ui_layout_step_t layout_children(
+        borrowed mut *self,
+        borrowed const ui_vnode_list_t* children,
+        ui_rect_t parent_rect,
+        borrowed const ui_rect_t* initial_sibling,
+        size_t parent_drawable
+    );
+
+    static priv ui_rect_t resolve_rect(
+        borrowed const ui_vnode_t* node,
+        ui_rect_t viewport,
+        ui_rect_t parent,
+        borrowed const ui_rect_t* sibling
+    ) {
+        ui_rect_t base = parent;
+        if (node->style.layout.position_value == UI_POSITION_FIXED) {
+            base = viewport;
+        } else if (node->style.layout.position_value == UI_POSITION_RELATIVE_SIBLING && sibling != NULL) {
+            base = *sibling;
         }
-    }
-    result->drawables.destroy();
-    memset(result, 0, sizeof(*result));
-}
 
-static int ui__layout_attach_child(borrowed mut ui_layout_result_t* result, size_t parent_drawable, size_t child_drawable) {
-    if (parent_drawable == (size_t)-1) return 0;
-    if (parent_drawable >= result->drawables.length) return 1;
-    ui_drawable_t* parent = &result->drawables.items[parent_drawable];
-    if (parent->kind != UI_DRAWABLE_BOX) return 0;
-    ui_drawable_index_list_t* children = &parent->as.box.children;
-    return children->add(child_drawable);
-}
-
-static int ui__layout_node(
-    borrowed const ui_vnode_t* node,
-    ui_rect_t viewport,
-    ui_rect_t parent_rect,
-    borrowed const ui_rect_t* sibling_rect,
-    size_t parent_drawable,
-    borrowed mut ui_layout_result_t* result,
-    borrowed mut ui_rect_t* out_anchor,
-    borrowed mut int* out_has_anchor,
-    borrowed mut size_t* out_first_drawable
-);
-
-static int ui__layout_transparent_children(
-    borrowed const ui_vnode_list_t* children,
-    ui_rect_t viewport,
-    ui_rect_t parent_rect,
-    borrowed const ui_rect_t* initial_sibling,
-    size_t parent_drawable,
-    borrowed mut ui_layout_result_t* result,
-    borrowed mut ui_rect_t* out_anchor,
-    borrowed mut int* out_has_anchor,
-    borrowed mut size_t* out_first_drawable
-) {
-    ui_rect_t previous;
-    int has_previous = initial_sibling != NULL;
-    if (initial_sibling != NULL) previous = *initial_sibling;
-    *out_has_anchor = 0;
-    *out_first_drawable = (size_t)-1;
-    for (size_t i = 0; i < children->length; i++) {
-        ui_rect_t child_anchor;
-        int child_has_anchor = 0;
-        size_t child_first = (size_t)-1;
-        if (ui__layout_node(children->items[i], viewport, parent_rect, has_previous ? &previous : NULL, parent_drawable, result, &child_anchor, &child_has_anchor, &child_first) != 0) return 1;
-        if (*out_first_drawable == (size_t)-1 && child_first != (size_t)-1) *out_first_drawable = child_first;
-        if (child_has_anchor) { previous = child_anchor; has_previous = 1; *out_anchor = child_anchor; *out_has_anchor = 1; }
-    }
-    return 0;
-}
-
-static int ui__layout_node(
-    borrowed const ui_vnode_t* node,
-    ui_rect_t viewport,
-    ui_rect_t parent_rect,
-    borrowed const ui_rect_t* sibling_rect,
-    size_t parent_drawable,
-    borrowed mut ui_layout_result_t* result,
-    borrowed mut ui_rect_t* out_anchor,
-    borrowed mut int* out_has_anchor,
-    borrowed mut size_t* out_first_drawable
-) {
-    *out_has_anchor = 0;
-    *out_first_drawable = (size_t)-1;
-    if (node == NULL) return 0;
-
-    if (node->kind == UI_VNODE_COMPONENT) {
-        if (node->as.component.rendered == NULL) return 0;
-        return ui__layout_node(node->as.component.rendered, viewport, parent_rect, sibling_rect, parent_drawable, result, out_anchor, out_has_anchor, out_first_drawable);
-    }
-    if (node->kind == UI_VNODE_FRAGMENT || node->kind == UI_VNODE_CONTEXT_PROVIDER) {
-        return ui__layout_transparent_children(&node->children, viewport, parent_rect, sibling_rect, parent_drawable, result, out_anchor, out_has_anchor, out_first_drawable);
+        ui_rect_t rect;
+        rect.x = base.x + node->style.layout.left_value;
+        rect.y = base.y + node->style.layout.top_value;
+        rect.width = node->style.layout.width_value;
+        rect.height = node->style.layout.height_value;
+        return rect;
     }
 
-    ui_rect_t rect = ui__layout_resolve_rect(node, viewport, parent_rect, sibling_rect);
-    ui_drawable_t drawable;
-    memset(&drawable, 0, sizeof(drawable));
-    size_t index = result->drawables.length;
+    priv int attach_child(
+        borrowed mut *self,
+        size_t parent_drawable,
+        size_t child_drawable
+    ) {
+        if (parent_drawable == (size_t)-1) return 0;
+        if (parent_drawable >= self->result.drawables.length) return 1;
 
-    if (node->kind == UI_VNODE_IMAGE) {
+        ui_drawable_t* parent = &self->result.drawables.items[parent_drawable];
+        if (parent->kind != UI_DRAWABLE_BOX) return 0;
+
+        ui_drawable_index_list_t* children = &parent->as.box.children;
+        return children->add(child_drawable);
+    }
+
+    priv int emit_box(
+        borrowed mut *self,
+        borrowed const ui_vnode_t* node,
+        ui_rect_t rect,
+        size_t parent_drawable,
+        borrowed mut size_t* out_index
+    ) {
+        ui_drawable_t drawable;
+        memset(&drawable, 0, sizeof(drawable));
+        drawable.kind = UI_DRAWABLE_BOX;
+
+        ui_drawable_box_t* box = &drawable.as.box;
+        borrowed const char* text = node->kind == UI_VNODE_TEXT ? node->text_value.data : NULL;
+        if (box->init(node->id, parent_drawable, rect, &node->style.graphics, text) != 0) return 1;
+
+        size_t index = self->result.drawables.length;
+        if (self->result.drawables.add(drawable) != 0) {
+            box->destroy();
+            return 1;
+        }
+        if (self->attach_child(parent_drawable, index) != 0) return 1;
+        if (out_index != NULL) *out_index = index;
+        return 0;
+    }
+
+    priv int emit_image(
+        borrowed mut *self,
+        borrowed const ui_vnode_t* node,
+        ui_rect_t rect,
+        size_t parent_drawable,
+        borrowed mut size_t* out_index
+    ) {
+        ui_drawable_t drawable;
+        memset(&drawable, 0, sizeof(drawable));
         drawable.kind = UI_DRAWABLE_IMAGE;
         drawable.as.image.node_id = node->id;
         drawable.as.image.parent_drawable = parent_drawable;
         drawable.as.image.rect = rect;
         drawable.as.image.bitmap = node->as.image.bitmap;
-    } else {
-        drawable.kind = UI_DRAWABLE_BOX;
-        drawable.as.box.node_id = node->id;
-        drawable.as.box.parent_drawable = parent_drawable;
-        drawable.as.box.rect = rect;
-        drawable.as.box.style = &node->style.graphics;
-        drawable.as.box.text = node->kind == UI_VNODE_TEXT ? node->text : NULL;
-        ui_drawable_index_list_t* children = &drawable.as.box.children;
-        if (children->init() != 0) return 1;
+
+        size_t index = self->result.drawables.length;
+        if (self->result.drawables.add(drawable) != 0) return 1;
+        if (self->attach_child(parent_drawable, index) != 0) return 1;
+        if (out_index != NULL) *out_index = index;
+        return 0;
     }
 
-    if (result->drawables.add(drawable) != 0) {
-        if (drawable.kind == UI_DRAWABLE_BOX) {
-            ui_drawable_index_list_t* children = &drawable.as.box.children;
-            children->destroy();
-        }
-        return 1;
-    }
-    if (ui__layout_attach_child(result, parent_drawable, index) != 0) return 1;
+    priv ui_layout_step_t layout_children(
+        borrowed mut *self,
+        borrowed const ui_vnode_list_t* children,
+        ui_rect_t parent_rect,
+        borrowed const ui_rect_t* initial_sibling,
+        size_t parent_drawable
+    ) {
+        ui_layout_step_t result = ui_layout_step_t.empty();
+        if (children == NULL) return result;
 
-    *out_anchor = rect;
-    *out_has_anchor = 1;
-    *out_first_drawable = index;
+        ui_rect_t previous;
+        int has_previous = initial_sibling != NULL;
+        if (initial_sibling != NULL) previous = *initial_sibling;
 
-    if (drawable.kind == UI_DRAWABLE_BOX && node->children.length > 0) {
-        ui_rect_t ignored_anchor;
-        int ignored_has_anchor = 0;
-        size_t ignored_first = (size_t)-1;
-        if (ui__layout_transparent_children(&node->children, viewport, rect, NULL, index, result, &ignored_anchor, &ignored_has_anchor, &ignored_first) != 0) return 1;
-    }
-    return 0;
-}
+        for (size_t i = 0; i < children->length; i++) {
+            borrowed const ui_rect_t* sibling = has_previous ? &previous : NULL;
+            ui_layout_step_t child = self->layout_node(
+                children->items[i],
+                parent_rect,
+                sibling,
+                parent_drawable
+            );
+            if (child.error != 0) return child;
 
-static int ui__layout_run_impl(borrowed mut ui_layout_result_t* result, borrowed const ui_vnode_t* root, double viewport_width, double viewport_height) {
-    if (root == NULL || result == NULL) return 1;
-    if (result->drawables.items == NULL && result->drawables.capacity == 0 && result->drawables.length == 0) {
-        if (result->init() != 0) return 1;
-    } else {
-        for (size_t i = 0; i < result->drawables.length; i++) {
-            if (result->drawables.items[i].kind == UI_DRAWABLE_BOX) {
-                ui_drawable_index_list_t* children = &result->drawables.items[i].as.box.children;
-                children->destroy();
+            if (result.first_drawable == (size_t)-1 && child.first_drawable != (size_t)-1) {
+                result.first_drawable = child.first_drawable;
+            }
+            if (child.has_anchor) {
+                previous = child.anchor;
+                has_previous = 1;
+                result.anchor = child.anchor;
+                result.has_anchor = 1;
             }
         }
-        result->drawables.length = 0;
+        return result;
     }
-    ui_rect_t viewport = {0.0, 0.0, viewport_width, viewport_height};
-    ui_rect_t anchor;
-    int has_anchor = 0;
-    size_t first = (size_t)-1;
-    return ui__layout_node(root, viewport, viewport, NULL, (size_t)-1, result, &anchor, &has_anchor, &first);
-}
+
+    priv ui_layout_step_t layout_node(
+        borrowed mut *self,
+        borrowed const ui_vnode_t* node,
+        ui_rect_t parent_rect,
+        borrowed const ui_rect_t* sibling_rect,
+        size_t parent_drawable
+    ) {
+        ui_layout_step_t result = ui_layout_step_t.empty();
+        if (node == NULL) return result;
+
+        if (node->kind == UI_VNODE_COMPONENT) {
+            if (node->as.component.rendered == NULL) return result;
+            return self->layout_node(
+                node->as.component.rendered,
+                parent_rect,
+                sibling_rect,
+                parent_drawable
+            );
+        }
+
+        if (node->kind == UI_VNODE_FRAGMENT || node->kind == UI_VNODE_CONTEXT_PROVIDER) {
+            return self->layout_children(
+                &node->children,
+                parent_rect,
+                sibling_rect,
+                parent_drawable
+            );
+        }
+
+        ui_rect_t rect = ui_layout_t.resolve_rect(node, self->viewport, parent_rect, sibling_rect);
+        size_t index = (size_t)-1;
+
+        if (node->kind == UI_VNODE_IMAGE) {
+            if (self->emit_image(node, rect, parent_drawable, &index) != 0) return ui_layout_step_t.failed();
+        } else {
+            if (self->emit_box(node, rect, parent_drawable, &index) != 0) return ui_layout_step_t.failed();
+        }
+
+        result.has_anchor = 1;
+        result.anchor = rect;
+        result.first_drawable = index;
+
+        if (node->kind != UI_VNODE_IMAGE && node->children.length > 0) {
+            ui_layout_step_t children = self->layout_children(
+                &node->children,
+                rect,
+                NULL,
+                index
+            );
+            if (children.error != 0) return children;
+        }
+
+        return result;
+    }
+
+    pub int init(borrowed mut *self) {
+        if (self == NULL) return 1;
+        memset(self, 0, sizeof(*self));
+        return self->result.init();
+    }
+
+    pub int run(
+        borrowed mut *self,
+        borrowed const ui_vnode_t* root,
+        double viewport_width,
+        double viewport_height
+    ) {
+        if (self == NULL || root == NULL) return 1;
+
+        self->result.clear();
+        self->viewport.x = 0.0;
+        self->viewport.y = 0.0;
+        self->viewport.width = viewport_width;
+        self->viewport.height = viewport_height;
+
+        ui_layout_step_t step = self->layout_node(
+            root,
+            self->viewport,
+            NULL,
+            (size_t)-1
+        );
+        return step.error;
+    }
+
+    pub void destroy(borrowed mut *self) {
+        if (self == NULL) return;
+        self->result.destroy();
+        memset(self, 0, sizeof(*self));
+    }
+} ui_layout_t;
 
 #endif

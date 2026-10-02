@@ -6,86 +6,54 @@
 #include <stdlib.h>
 #include <string.h>
 
-comptime import "stdlib:/ui/vdom.cp";
+comptime import "stdlib:/ui/driver.cp";
 
-static void* ui__react_memdup(borrowed const void* value, size_t size) {
-    if (value == NULL || size == 0) return NULL;
-    void* copy = malloc(size);
-    if (copy != NULL) memcpy(copy, value, size);
-    return copy;
-}
+/* ---------- state ---------- */
 
-static void ui__vnode_destroy_compat(owned ui_vnode_t* node) {
-    if (node != NULL) node->destroy();
-}
+typedef struct ui_state_t {
+    owned void* bytes;
+    size_t size;
+    borrowed int* dirty;
 
-typedef ui_component_instance_t* ui_component_instance_ref_t;
-comptime typedef dynamic_list(ui_component_instance_ref_t) ui_component_instance_list_t;
-
-typedef enum ui_patch_type_t {
-    UI_PATCH_MOUNT = 1,
-    UI_PATCH_UNMOUNT,
-    UI_PATCH_MOVE,
-    UI_PATCH_SET_ATTRIBUTE,
-    UI_PATCH_REMOVE_ATTRIBUTE,
-    UI_PATCH_SET_TEXT
-} ui_patch_type_t;
-
-typedef struct ui_patch_t {
-    ui_patch_type_t type;
-    uint64_t node_id;
-    uint64_t parent_id;
-    size_t index;
-    ui_vnode_kind_t kind;
-    borrowed const char* tag;
-    borrowed const char* text;
-    borrowed const char* name;
-    ui_value_t value;
-} ui_patch_t;
-
-typedef struct ui_driver_t {
-    borrowed void* user;
-    int (*begin_frame)(borrowed void* user);
-    int (*apply_patch)(borrowed void* user, borrowed const ui_patch_t* patch);
-    int (*end_frame)(borrowed void* user);
-    int (*poll_event)(borrowed void* user, borrowed mut ui_event_t* out_event);
-    uint64_t (*now_ms)(borrowed void* user);
-    int (*wait)(borrowed void* user, uint64_t timeout_ms);
-} ui_driver_t;
-
-typedef void (*ui_cleanup_fn)(borrowed void* user);
-typedef ui_cleanup_fn (*ui_effect_fn)(borrowed void* user);
-typedef void (*ui_timer_fn)(borrowed mut ui_runtime_t* runtime, borrowed void* user);
-
-typedef struct ui_future_t ui_future_t;
-typedef struct ui_state_t ui_state_t;
-
-static int ui__context_init_impl(borrowed mut ui_context_t* context, borrowed const char* name, borrowed const void* default_value, size_t size);
-static void ui__context_destroy_impl(borrowed mut ui_context_t* context);
-static borrowed const void* ui__use_context_raw_impl(borrowed ui_render_context_t* render, borrowed ui_context_t* context, size_t expected_size);
-static int ui__future_init_impl(borrowed mut ui_future_t* future);
-static int ui__future_resolve_impl(borrowed mut ui_future_t* future, borrowed const void* value, size_t size);
-static int ui__future_reject_impl(borrowed mut ui_future_t* future, int error_code);
-static int ui__future_cancel_impl(borrowed mut ui_future_t* future);
-static void ui__future_destroy_impl(borrowed mut ui_future_t* future);
-
-typedef struct ui_context_t {
-    const char* name;
-    owned void* default_value;
-    size_t value_size;
-
-    pub int init(borrowed mut *self, borrowed const char* name, borrowed const void* default_value, size_t size) {
-        return ui__context_init_impl(self, name, default_value, size);
+    pub int init(
+        borrowed mut *self,
+        borrowed const void* initial_value,
+        size_t size,
+        borrowed int* dirty
+    ) {
+        if (self == NULL || size == 0 || initial_value == NULL || dirty == NULL) return 1;
+        memset(self, 0, sizeof(*self));
+        self->bytes = malloc(size);
+        if (self->bytes == NULL) return 1;
+        memcpy(self->bytes, initial_value, size);
+        self->size = size;
+        self->dirty = dirty;
+        return 0;
     }
-    pub void destroy(borrowed mut *self) { ui__context_destroy_impl(self); }
-} ui_context_t;
 
-typedef struct ui_provider_frame_t {
-    borrowed ui_context_t* context;
-    borrowed const void* value;
-    size_t value_size;
-    borrowed struct ui_provider_frame_t* parent;
-} ui_provider_frame_t;
+    pub borrowed void* value(borrowed *self) {
+        return self == NULL ? NULL : self->bytes;
+    }
+
+    pub int set(borrowed mut *self, borrowed const void* value, size_t size) {
+        if (self == NULL || value == NULL || self->bytes == NULL || size != self->size) return 1;
+        if (memcmp(self->bytes, value, size) == 0) return 0;
+        memcpy(self->bytes, value, size);
+        if (self->dirty != NULL) *self->dirty = 1;
+        return 0;
+    }
+
+    pub void destroy(borrowed mut *self) {
+        if (self == NULL) return;
+        free(self->bytes);
+        memset(self, 0, sizeof(*self));
+    }
+} ui_state_t;
+
+/* ---------- futures ---------- */
+
+typedef int* ui_dirty_ref_t;
+comptime typedef dynamic_list(ui_dirty_ref_t) ui_dirty_ref_list_t;
 
 typedef enum ui_future_status_t {
     UI_FUTURE_PENDING = 0,
@@ -98,15 +66,170 @@ typedef struct ui_future_t {
     ui_future_status_t status;
     owned void* value;
     size_t value_size;
-    int error_code;
-    ui_component_instance_list_t subscribers;
+    int error;
+    ui_dirty_ref_list_t subscribers;
 
-    pub int init(borrowed mut *self) { return ui__future_init_impl(self); }
-    pub int resolve(borrowed mut *self, borrowed const void* value, size_t size) { return ui__future_resolve_impl(self, value, size); }
-    pub int reject(borrowed mut *self, int error_code) { return ui__future_reject_impl(self, error_code); }
-    pub int cancel(borrowed mut *self) { return ui__future_cancel_impl(self); }
-    pub void destroy(borrowed mut *self) { ui__future_destroy_impl(self); }
+    priv void notify(borrowed mut *self) {
+        if (self == NULL) return;
+        for (size_t i = 0; i < self->subscribers.length; i++) {
+            int* dirty = self->subscribers.items[i];
+            if (dirty != NULL) *dirty = 1;
+        }
+    }
+
+    pub int init(borrowed mut *self) {
+        if (self == NULL) return 1;
+        memset(self, 0, sizeof(*self));
+        self->status = UI_FUTURE_PENDING;
+        return self->subscribers.init();
+    }
+
+    pub int subscribe(borrowed mut *self, borrowed int* dirty) {
+        if (self == NULL || dirty == NULL) return 1;
+        for (size_t i = 0; i < self->subscribers.length; i++) {
+            if (self->subscribers.items[i] == dirty) return 0;
+        }
+        return self->subscribers.add(dirty);
+    }
+
+    pub void unsubscribe(borrowed mut *self, borrowed int* dirty) {
+        if (self == NULL || dirty == NULL) return;
+        for (size_t i = 0; i < self->subscribers.length; i++) {
+            if (self->subscribers.items[i] != dirty) continue;
+            for (size_t j = i + 1; j < self->subscribers.length; j++) {
+                self->subscribers.items[j - 1] = self->subscribers.items[j];
+            }
+            self->subscribers.length--;
+            return;
+        }
+    }
+
+    pub int resolve(borrowed mut *self, borrowed const void* value, size_t size) {
+        if (self == NULL || self->status != UI_FUTURE_PENDING) return 1;
+        if (size > 0 && value == NULL) return 1;
+
+        if (size > 0) {
+            self->value = malloc(size);
+            if (self->value == NULL) return 1;
+            memcpy(self->value, value, size);
+        }
+        self->value_size = size;
+        self->status = UI_FUTURE_RESOLVED;
+        self->notify();
+        return 0;
+    }
+
+    pub int reject(borrowed mut *self, int error) {
+        if (self == NULL || self->status != UI_FUTURE_PENDING) return 1;
+        self->error = error;
+        self->status = UI_FUTURE_REJECTED;
+        self->notify();
+        return 0;
+    }
+
+    pub int cancel(borrowed mut *self) {
+        if (self == NULL || self->status != UI_FUTURE_PENDING) return 1;
+        self->status = UI_FUTURE_CANCELLED;
+        self->notify();
+        return 0;
+    }
+
+    pub borrowed const void* get(borrowed const *self) {
+        if (self == NULL || self->status != UI_FUTURE_RESOLVED) return NULL;
+        return self->value;
+    }
+
+    pub void destroy(borrowed mut *self) {
+        if (self == NULL) return;
+        free(self->value);
+        self->subscribers.destroy();
+        memset(self, 0, sizeof(*self));
+    }
 } ui_future_t;
+
+/* ---------- effects ---------- */
+
+typedef void (*ui_cleanup_fn)(borrowed void* user);
+typedef ui_cleanup_fn (*ui_effect_fn)(borrowed void* user);
+
+typedef struct ui_effect_hook_t {
+    ui_effect_fn effect;
+    borrowed void* user;
+    owned void* dependencies;
+    size_t dependency_size;
+    ui_cleanup_fn cleanup;
+    int pending;
+
+    static priv owned void* copy_dependencies(borrowed const void* dependencies, size_t size) {
+        if (size == 0) return NULL;
+        if (dependencies == NULL) return NULL;
+        void* copy = malloc(size);
+        if (copy != NULL) memcpy(copy, dependencies, size);
+        return copy;
+    }
+
+    pub int init(
+        borrowed mut *self,
+        ui_effect_fn effect,
+        borrowed void* user,
+        borrowed const void* dependencies,
+        size_t dependency_size
+    ) {
+        if (self == NULL || effect == NULL || (dependency_size > 0 && dependencies == NULL)) return 1;
+        memset(self, 0, sizeof(*self));
+        self->effect = effect;
+        self->user = user;
+        self->dependency_size = dependency_size;
+        if (dependency_size > 0) {
+            self->dependencies = ui_effect_hook_t.copy_dependencies(dependencies, dependency_size);
+            if (self->dependencies == NULL) return 1;
+        }
+        self->pending = 1;
+        return 0;
+    }
+
+    pub int update(
+        borrowed mut *self,
+        ui_effect_fn effect,
+        borrowed void* user,
+        borrowed const void* dependencies,
+        size_t dependency_size
+    ) {
+        if (self == NULL || effect == NULL || (dependency_size > 0 && dependencies == NULL)) return 1;
+
+        int changed = self->effect != effect || self->user != user || self->dependency_size != dependency_size;
+        if (!changed && dependency_size > 0) {
+            changed = memcmp(self->dependencies, dependencies, dependency_size) != 0;
+        }
+        if (!changed) return 0;
+
+        void* copy = ui_effect_hook_t.copy_dependencies(dependencies, dependency_size);
+        if (dependency_size > 0 && copy == NULL) return 1;
+        free(self->dependencies);
+        self->dependencies = copy;
+        self->dependency_size = dependency_size;
+        self->effect = effect;
+        self->user = user;
+        self->pending = 1;
+        return 0;
+    }
+
+    pub void flush(borrowed mut *self) {
+        if (self == NULL || !self->pending) return;
+        if (self->cleanup != NULL) self->cleanup(self->user);
+        self->cleanup = self->effect == NULL ? NULL : self->effect(self->user);
+        self->pending = 0;
+    }
+
+    pub void destroy(borrowed mut *self) {
+        if (self == NULL) return;
+        if (self->cleanup != NULL) self->cleanup(self->user);
+        free(self->dependencies);
+        memset(self, 0, sizeof(*self));
+    }
+} ui_effect_hook_t;
+
+/* ---------- hooks and contexts ---------- */
 
 typedef enum ui_hook_kind_t {
     UI_HOOK_STATE = 1,
@@ -114,599 +237,665 @@ typedef enum ui_hook_kind_t {
     UI_HOOK_FUTURE
 } ui_hook_kind_t;
 
-static int ui__state_set_raw_impl(borrowed mut ui_state_t* state, borrowed const void* value, size_t size);
-typedef struct ui_state_t {
-    owned void* value;
-    size_t size;
-    borrowed ui_runtime_t* runtime;
-    borrowed ui_component_instance_t* owner;
-
-    pub int set_raw(borrowed mut *self, borrowed const void* value, size_t size) {
-        return ui__state_set_raw_impl(self, value, size);
-    }
-} ui_state_t;
-
 typedef struct ui_hook_t {
     ui_hook_kind_t kind;
     union {
         ui_state_t state;
-        struct {
-            ui_effect_fn effect;
-            ui_cleanup_fn cleanup;
-            borrowed void* user;
-            owned unsigned char* deps;
-            size_t deps_size;
-            int pending;
-        } effect;
-        struct { borrowed ui_future_t* future; } future;
+        ui_effect_hook_t effect;
+        borrowed ui_future_t* future;
     } as;
+
+    pub void destroy(borrowed mut *self, borrowed int* dirty) {
+        if (self == NULL) return;
+        if (self->kind == UI_HOOK_STATE) {
+            ui_state_t* state = &self->as.state;
+            state->destroy();
+        } else if (self->kind == UI_HOOK_EFFECT) {
+            ui_effect_hook_t* effect = &self->as.effect;
+            effect->destroy();
+        } else if (self->kind == UI_HOOK_FUTURE && self->as.future != NULL) {
+            ui_future_t* future = self->as.future;
+            future->unsubscribe(dirty);
+        }
+        memset(self, 0, sizeof(*self));
+    }
 } ui_hook_t;
+
 comptime typedef dynamic_list(ui_hook_t) ui_hook_list_t;
 
-struct ui_component_instance_t {
-    ui_component_fn component;
+typedef struct ui_context_t {
+    string name;
+    owned void* default_value;
+    size_t value_size;
+
+    pub int init(
+        borrowed mut *self,
+        borrowed const char* name,
+        borrowed const void* default_value,
+        size_t value_size
+    ) {
+        if (self == NULL || default_value == NULL || value_size == 0) return 1;
+        memset(self, 0, sizeof(*self));
+        if (self->name.init() != 0) return 1;
+        if (self->name.assign(name == NULL ? "" : name) != 0) {
+            self->name.destroy();
+            return 1;
+        }
+        self->default_value = malloc(value_size);
+        if (self->default_value == NULL) {
+            self->name.destroy();
+            return 1;
+        }
+        memcpy(self->default_value, default_value, value_size);
+        self->value_size = value_size;
+        return 0;
+    }
+
+    pub borrowed const void* value(borrowed const *self) {
+        return self == NULL ? NULL : self->default_value;
+    }
+
+    pub void destroy(borrowed mut *self) {
+        if (self == NULL) return;
+        self->name.destroy();
+        free(self->default_value);
+        memset(self, 0, sizeof(*self));
+    }
+} ui_context_t;
+
+typedef struct ui_context_binding_t {
+    borrowed ui_context_t* context;
+    borrowed const void* value;
+    size_t value_size;
+} ui_context_binding_t;
+
+comptime typedef dynamic_list(ui_context_binding_t) ui_context_binding_list_t;
+
+typedef struct ui_component_instance_t {
     ui_hook_list_t hooks;
-    size_t hook_cursor;
     int dirty;
-    int mounted;
-    borrowed ui_runtime_t* runtime;
-    borrowed ui_vnode_t* owner;
-};
+    int rendered_once;
+
+    static pub owned ui_component_instance_t* create(void) {
+        ui_component_instance_t* instance = calloc(1, sizeof(ui_component_instance_t));
+        if (instance == NULL) return NULL;
+        if (instance->hooks.init() != 0) {
+            free(instance);
+            return NULL;
+        }
+        instance->dirty = 1;
+        return instance;
+    }
+
+    pub void flush_effects(borrowed mut *self) {
+        if (self == NULL) return;
+        for (size_t i = 0; i < self->hooks.length; i++) {
+            ui_hook_t* hook = &self->hooks.items[i];
+            if (hook->kind == UI_HOOK_EFFECT) {
+                ui_effect_hook_t* effect = &hook->as.effect;
+                effect->flush();
+            }
+        }
+    }
+
+    pub void destroy(owned *self) {
+        if (self == NULL) return;
+        for (size_t i = 0; i < self->hooks.length; i++) self->hooks.items[i].destroy(&self->dirty);
+        self->hooks.destroy();
+        free(self);
+    }
+} ui_component_instance_t;
+
+typedef struct ui_render_context_t {
+    borrowed ui_component_instance_t* component;
+    borrowed ui_context_binding_list_t* bindings;
+    size_t hook_index;
+    int failed;
+
+    pub void init(
+        borrowed mut *self,
+        borrowed ui_component_instance_t* component,
+        borrowed ui_context_binding_list_t* bindings
+    ) {
+        memset(self, 0, sizeof(*self));
+        self->component = component;
+        self->bindings = bindings;
+    }
+
+    priv borrowed ui_hook_t* next_hook(borrowed mut *self, ui_hook_kind_t kind) {
+        if (self == NULL || self->component == NULL || self->failed) return NULL;
+        size_t index = self->hook_index++;
+
+        if (index < self->component->hooks.length) {
+            ui_hook_t* hook = &self->component->hooks.items[index];
+            if (hook->kind != kind) {
+                self->failed = 1;
+                return NULL;
+            }
+            return hook;
+        }
+
+        if (self->component->rendered_once) {
+            self->failed = 1;
+            return NULL;
+        }
+
+        ui_hook_t hook;
+        memset(&hook, 0, sizeof(hook));
+        hook.kind = kind;
+        if (self->component->hooks.add(hook) != 0) {
+            self->failed = 1;
+            return NULL;
+        }
+        return &self->component->hooks.items[self->component->hooks.length - 1];
+    }
+
+    pub borrowed ui_state_t* use_state(
+        borrowed mut *self,
+        borrowed const void* initial_value,
+        size_t value_size
+    ) {
+        ui_hook_t* hook = self->next_hook(UI_HOOK_STATE);
+        if (hook == NULL) return NULL;
+        if (hook->as.state.bytes == NULL) {
+            ui_state_t* state = &hook->as.state;
+            if (state->init(initial_value, value_size, &self->component->dirty) != 0) {
+                self->failed = 1;
+                return NULL;
+            }
+        } else if (hook->as.state.size != value_size) {
+            self->failed = 1;
+            return NULL;
+        }
+        return &hook->as.state;
+    }
+
+    pub int use_effect(
+        borrowed mut *self,
+        ui_effect_fn effect,
+        borrowed void* user,
+        borrowed const void* dependencies,
+        size_t dependency_size
+    ) {
+        ui_hook_t* hook = self->next_hook(UI_HOOK_EFFECT);
+        if (hook == NULL) return 1;
+        ui_effect_hook_t* effect_hook = &hook->as.effect;
+        if (effect_hook->effect == NULL) {
+            if (effect_hook->init(effect, user, dependencies, dependency_size) != 0) {
+                self->failed = 1;
+                return 1;
+            }
+        } else if (effect_hook->update(effect, user, dependencies, dependency_size) != 0) {
+            self->failed = 1;
+            return 1;
+        }
+        return 0;
+    }
+
+    pub borrowed const void* use_context(
+        borrowed *self,
+        borrowed const ui_context_t* context
+    ) {
+        if (self == NULL || context == NULL) return NULL;
+        if (self->bindings != NULL) {
+            for (size_t i = self->bindings->length; i > 0; i--) {
+                borrowed const ui_context_binding_t* binding = &self->bindings->items[i - 1];
+                if (binding->context == context) return binding->value;
+            }
+        }
+        return context->default_value;
+    }
+
+    pub borrowed ui_future_t* use_future(borrowed mut *self, borrowed ui_future_t* future) {
+        if (future == NULL) {
+            self->failed = 1;
+            return NULL;
+        }
+        ui_hook_t* hook = self->next_hook(UI_HOOK_FUTURE);
+        if (hook == NULL) return NULL;
+
+        if (hook->as.future != future) {
+            if (hook->as.future != NULL) {
+                ui_future_t* previous = hook->as.future;
+                previous->unsubscribe(&self->component->dirty);
+            }
+            if (future->subscribe(&self->component->dirty) != 0) {
+                self->failed = 1;
+                return NULL;
+            }
+            hook->as.future = future;
+        }
+        return future;
+    }
+
+    pub int finish(borrowed mut *self) {
+        if (self == NULL || self->component == NULL || self->failed) return 1;
+        if (self->component->rendered_once && self->hook_index != self->component->hooks.length) {
+            self->failed = 1;
+            return 1;
+        }
+        self->component->rendered_once = 1;
+        return 0;
+    }
+} ui_render_context_t;
+
+/* ---------- timers ---------- */
+
+typedef void (*ui_timer_callback_fn)(borrowed mut ui_runtime_t* runtime, borrowed void* user);
 
 typedef struct ui_timer_t {
     uint64_t id;
     uint64_t due_ms;
     uint64_t interval_ms;
-    ui_timer_fn callback;
+    ui_timer_callback_fn callback;
     borrowed void* user;
     int active;
 } ui_timer_t;
+
 comptime typedef dynamic_list(ui_timer_t) ui_timer_list_t;
 
-static borrowed ui_state_t* ui__use_state_raw_impl(borrowed mut ui_render_context_t* render, size_t size, borrowed const void* initial_value);
-static int ui__use_effect_raw_impl(borrowed mut ui_render_context_t* render, ui_effect_fn effect, borrowed void* user, borrowed const void* deps, size_t deps_size);
-static borrowed ui_future_t* ui__use_future_impl(borrowed mut ui_render_context_t* render, borrowed mut ui_future_t* future);
-typedef struct ui_render_context_t {
-    borrowed ui_runtime_t* runtime;
-    borrowed ui_component_instance_t* instance;
-    borrowed ui_provider_frame_t* providers;
-    int error;
+/* ---------- runtime ---------- */
 
-    pub borrowed ui_state_t* use_state_raw(borrowed mut *self, size_t size, borrowed const void* initial_value) {
-        return ui__use_state_raw_impl(self, size, initial_value);
-    }
-    pub borrowed const void* use_context_raw(borrowed mut *self, borrowed ui_context_t* context, size_t expected_size) {
-        return ui__use_context_raw_impl(self, context, expected_size);
-    }
-    pub int use_effect_raw(borrowed mut *self, ui_effect_fn effect, borrowed void* user, borrowed const void* deps, size_t deps_size) {
-        return ui__use_effect_raw_impl(self, effect, user, deps, deps_size);
-    }
-    pub borrowed ui_future_t* use_future(borrowed mut *self, borrowed mut ui_future_t* future) {
-        return ui__use_future_impl(self, future);
-    }
-} ui_render_context_t;
-
-static int ui__runtime_dispatch_impl(borrowed mut ui_runtime_t* runtime, borrowed const ui_event_t* event);
-static int ui__runtime_init_impl(borrowed mut ui_runtime_t* runtime, ui_driver_t driver);
-static int ui__runtime_mount_impl(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* root);
-static int ui__runtime_update_root_impl(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* next_root);
-static uint64_t ui__runtime_set_timeout_impl(borrowed mut ui_runtime_t* runtime, uint64_t delay_ms, ui_timer_fn callback, borrowed void* user);
-static uint64_t ui__runtime_set_interval_impl(borrowed mut ui_runtime_t* runtime, uint64_t interval_ms, ui_timer_fn callback, borrowed void* user);
-static int ui__runtime_cancel_timer_impl(borrowed mut ui_runtime_t* runtime, uint64_t id);
-static int ui__runtime_tick_impl(borrowed mut ui_runtime_t* runtime);
-static int ui__runtime_run_impl(borrowed mut ui_runtime_t* runtime);
-static void ui__runtime_stop_impl(borrowed mut ui_runtime_t* runtime);
-static void ui__runtime_destroy_impl(borrowed mut ui_runtime_t* runtime);
 typedef struct ui_runtime_t {
     ui_driver_t driver;
     owned ui_vnode_t* root;
     ui_timer_list_t timers;
     uint64_t next_node_id;
     uint64_t next_timer_id;
-    int dirty;
     int running;
-    int last_error;
 
-    pub int init(borrowed mut *self, ui_driver_t driver) { return ui__runtime_init_impl(self, driver); }
-    pub int mount(borrowed mut *self, owned ui_vnode_t* root) { return ui__runtime_mount_impl(self, root); }
-    pub int update_root(borrowed mut *self, owned ui_vnode_t* root) { return ui__runtime_update_root_impl(self, root); }
-    pub int dispatch(borrowed mut *self, borrowed const ui_event_t* event) { return ui__runtime_dispatch_impl(self, event); }
-    pub uint64_t set_timeout(borrowed mut *self, uint64_t delay_ms, ui_timer_fn callback, borrowed void* user) { return ui__runtime_set_timeout_impl(self, delay_ms, callback, user); }
-    pub uint64_t set_interval(borrowed mut *self, uint64_t interval_ms, ui_timer_fn callback, borrowed void* user) { return ui__runtime_set_interval_impl(self, interval_ms, callback, user); }
-    pub int cancel_timer(borrowed mut *self, uint64_t id) { return ui__runtime_cancel_timer_impl(self, id); }
-    pub int tick(borrowed mut *self) { return ui__runtime_tick_impl(self); }
-    pub int run(borrowed mut *self) { return ui__runtime_run_impl(self); }
-    pub void stop(borrowed mut *self) { ui__runtime_stop_impl(self); }
-    pub void destroy(borrowed mut *self) { ui__runtime_destroy_impl(self); }
-} ui_runtime_t;
+    static priv int same_identity(
+        borrowed const ui_vnode_t* previous,
+        borrowed const ui_vnode_t* next
+    ) {
+        if (previous == NULL || next == NULL || previous->kind != next->kind) return 0;
 
-static int ui__context_init_impl(borrowed mut ui_context_t* context, borrowed const char* name, borrowed const void* default_value, size_t size) {
-    if (context == NULL || default_value == NULL || size == 0) return 1;
-    memset(context, 0, sizeof(*context));
-    context->name = name;
-    context->default_value = ui__react_memdup(default_value, size);
-    context->value_size = size;
-    return context->default_value == NULL;
-}
+        borrowed const char* previous_key = previous->key_value.data == NULL ? "" : previous->key_value.data;
+        borrowed const char* next_key = next->key_value.data == NULL ? "" : next->key_value.data;
+        if (strcmp(previous_key, next_key) != 0) return 0;
 
-static void ui__context_destroy_impl(borrowed mut ui_context_t* context) {
-    if (context == NULL) return;
-    free(context->default_value); memset(context, 0, sizeof(*context));
-}
-
-static borrowed const void* ui__use_context_raw_impl(borrowed ui_render_context_t* render, borrowed ui_context_t* context, size_t expected_size) {
-    if (render == NULL || context == NULL || expected_size != context->value_size) { if (render) render->error = 1; return NULL; }
-    ui_provider_frame_t* frame = render->providers;
-    while (frame != NULL) {
-        if (frame->context == context) {
-            if (frame->value_size != expected_size) { render->error = 1; return NULL; }
-            return frame->value;
+        if (previous->kind == UI_VNODE_ELEMENT) {
+            borrowed const char* previous_tag = previous->tag_value.data == NULL ? "" : previous->tag_value.data;
+            borrowed const char* next_tag = next->tag_value.data == NULL ? "" : next->tag_value.data;
+            return strcmp(previous_tag, next_tag) == 0;
         }
-        frame = frame->parent;
+        if (previous->kind == UI_VNODE_COMPONENT) return previous->as.component.render == next->as.component.render;
+        if (previous->kind == UI_VNODE_CONTEXT_PROVIDER) return previous->as.provider.context == next->as.provider.context;
+        return 1;
     }
-    return context->default_value;
-}
 
-static int ui__future_subscribe(borrowed mut ui_future_t* future, borrowed ui_component_instance_t* instance) {
-    if (future == NULL || instance == NULL) return 1;
-    for (size_t i = 0; i < future->subscribers.length; i++) if (future->subscribers.items[i] == instance) return 0;
-    return future->subscribers.add(instance);
-}
+    static priv int key_claimed(
+        borrowed const ui_vnode_list_t* children,
+        size_t before_index,
+        borrowed const ui_vnode_t* candidate
+    ) {
+        if (children == NULL || candidate == NULL) return 0;
+        borrowed const char* candidate_key = candidate->key_value.data == NULL ? "" : candidate->key_value.data;
+        if (candidate_key[0] == '\0') return 0;
 
-static void ui__future_unsubscribe(borrowed mut ui_future_t* future, borrowed ui_component_instance_t* instance) {
-    if (future == NULL || instance == NULL) return;
-    for (size_t i = 0; i < future->subscribers.length; i++) {
-        if (future->subscribers.items[i] == instance) {
-            if (i + 1 < future->subscribers.length) memmove(&future->subscribers.items[i], &future->subscribers.items[i + 1], (future->subscribers.length - i - 1) * sizeof(ui_component_instance_ref_t));
-            future->subscribers.length--;
-            return;
+        for (size_t i = 0; i < before_index && i < children->length; i++) {
+            borrowed const ui_vnode_t* child = children->items[i];
+            if (child == NULL) continue;
+            borrowed const char* key = child->key_value.data == NULL ? "" : child->key_value.data;
+            if (strcmp(key, candidate_key) == 0 && ui_runtime_t.same_identity(child, candidate)) return 1;
+        }
+        return 0;
+    }
+
+    priv void transfer_identity(
+        borrowed mut *self,
+        borrowed mut ui_vnode_t* previous,
+        borrowed mut ui_vnode_t* next
+    ) {
+        if (!ui_runtime_t.same_identity(previous, next)) return;
+
+        next->id = previous->id;
+        if (previous->kind == UI_VNODE_COMPONENT) {
+            next->as.component.instance = previous->as.component.instance;
+            previous->as.component.instance = NULL;
+            if (next->as.component.instance != NULL) next->as.component.instance->dirty = 1;
+            next->as.component.rendered = previous->as.component.rendered;
+            previous->as.component.rendered = NULL;
+        }
+
+        size_t previous_count = previous->children.length;
+        for (size_t next_index = 0; next_index < next->children.length; next_index++) {
+            ui_vnode_t* next_child = next->children.items[next_index];
+            if (next_child == NULL) continue;
+
+            borrowed const char* next_key = next_child->key_value.data == NULL ? "" : next_child->key_value.data;
+            size_t match = (size_t)-1;
+
+            if (next_key[0] != '\0') {
+                if (ui_runtime_t.key_claimed(&next->children, next_index, next_child)) continue;
+
+                for (size_t previous_index = 0; previous_index < previous_count; previous_index++) {
+                    ui_vnode_t* previous_child = previous->children.items[previous_index];
+                    if (previous_child == NULL) continue;
+                    borrowed const char* previous_key = previous_child->key_value.data == NULL ? "" : previous_child->key_value.data;
+                    if (strcmp(previous_key, next_key) == 0 && ui_runtime_t.same_identity(previous_child, next_child)) {
+                        match = previous_index;
+                        break;
+                    }
+                }
+            } else if (next_index < previous_count) {
+                ui_vnode_t* previous_child = previous->children.items[next_index];
+                if (previous_child != NULL) {
+                    borrowed const char* previous_key = previous_child->key_value.data == NULL ? "" : previous_child->key_value.data;
+                    if (previous_key[0] == '\0' && ui_runtime_t.same_identity(previous_child, next_child)) match = next_index;
+                }
+            }
+
+            if (match != (size_t)-1) self->transfer_identity(previous->children.items[match], next_child);
         }
     }
-}
 
-static int ui__future_init_impl(borrowed mut ui_future_t* future) {
-    if (future == NULL) return 1;
-    memset(future, 0, sizeof(*future));
-    future->status = UI_FUTURE_PENDING;
-    return future->subscribers.init();
-}
+    priv void release_components(borrowed mut *self, borrowed mut ui_vnode_t* node) {
+        if (node == NULL) return;
+        (void)self;
 
-static void ui__future_wake(borrowed mut ui_future_t* future) {
-    for (size_t i = 0; i < future->subscribers.length; i++) {
-        ui_component_instance_t* instance = future->subscribers.items[i];
-        if (instance != NULL && instance->runtime != NULL) { instance->dirty = 1; instance->runtime->dirty = 1; }
+        if (node->kind == UI_VNODE_COMPONENT) {
+            if (node->as.component.rendered != NULL) self->release_components(node->as.component.rendered);
+            if (node->as.component.instance != NULL) {
+                ui_component_instance_t* instance = node->as.component.instance;
+                node->as.component.instance = NULL;
+                instance->destroy();
+            }
+        }
+
+        for (size_t i = 0; i < node->children.length; i++) self->release_components(node->children.items[i]);
     }
-}
 
-static int ui__future_resolve_impl(borrowed mut ui_future_t* future, borrowed const void* value, size_t size) {
-    if (future == NULL || future->status != UI_FUTURE_PENDING || (size > 0 && value == NULL)) return 1;
-    if (size > 0) { future->value = ui__react_memdup(value, size); if (future->value == NULL) return 1; }
-    future->value_size = size; future->status = UI_FUTURE_RESOLVED; ui__future_wake(future); return 0;
-}
-
-static int ui__future_reject_impl(borrowed mut ui_future_t* future, int error_code) {
-    if (future == NULL || future->status != UI_FUTURE_PENDING) return 1;
-    future->error_code = error_code; future->status = UI_FUTURE_REJECTED; ui__future_wake(future); return 0;
-}
-
-static int ui__future_cancel_impl(borrowed mut ui_future_t* future) {
-    if (future == NULL || future->status != UI_FUTURE_PENDING) return 1;
-    future->status = UI_FUTURE_CANCELLED; ui__future_wake(future); return 0;
-}
-
-static void ui__future_destroy_impl(borrowed mut ui_future_t* future) {
-    if (future == NULL) return;
-    free(future->value); future->subscribers.destroy(); memset(future, 0, sizeof(*future));
-}
-
-static ui_hook_t* ui__next_hook(borrowed mut ui_render_context_t* render, ui_hook_kind_t kind) {
-    if (render == NULL || render->instance == NULL) return NULL;
-    ui_component_instance_t* instance = render->instance;
-    size_t index = instance->hook_cursor++;
-    if (index < instance->hooks.length) {
-        ui_hook_t* hook = &instance->hooks.items[index];
-        if (hook->kind != kind) { render->error = 1; return NULL; }
-        return hook;
+    priv void dispose(borrowed mut *self, owned ui_vnode_t* node) {
+        if (node == NULL) return;
+        self->release_components(node);
+        node->destroy();
     }
-    ui_hook_t hook; memset(&hook, 0, sizeof(hook)); hook.kind = kind;
-    if (instance->hooks.add(hook) != 0) { render->error = 1; return NULL; }
-    return &instance->hooks.items[index];
-}
 
-static borrowed ui_state_t* ui__use_state_raw_impl(borrowed mut ui_render_context_t* render, size_t size, borrowed const void* initial_value) {
-    if (size == 0 || initial_value == NULL) { if (render) render->error = 1; return NULL; }
-    size_t before = render->instance->hook_cursor;
-    ui_hook_t* hook = ui__next_hook(render, UI_HOOK_STATE);
-    if (hook == NULL) return NULL;
-    if (before >= render->instance->hooks.length - 1 && hook->as.state.value == NULL) {
-        hook->as.state.value = ui__react_memdup(initial_value, size);
-        if (hook->as.state.value == NULL) { render->error = 1; return NULL; }
-        hook->as.state.size = size; hook->as.state.runtime = render->runtime; hook->as.state.owner = render->instance;
+    priv int refresh_node(
+        borrowed mut *self,
+        borrowed mut ui_vnode_t* node,
+        borrowed mut ui_context_binding_list_t* bindings,
+        borrowed mut int* changed
+    ) {
+        if (node == NULL) return 0;
+
+        if (node->kind == UI_VNODE_COMPONENT) {
+            if (node->as.component.instance == NULL) {
+                node->as.component.instance = ui_component_instance_t.create();
+                if (node->as.component.instance == NULL) return 1;
+            }
+
+            ui_component_instance_t* instance = node->as.component.instance;
+            if (instance->dirty || node->as.component.rendered == NULL) {
+                ui_render_context_t context;
+                context.init(instance, bindings);
+                ui_vnode_t* next_rendered = node->as.component.render(&context, node->as.component.props);
+                if (next_rendered == NULL || context.finish() != 0) {
+                    if (next_rendered != NULL) next_rendered->destroy();
+                    return 1;
+                }
+
+                if (node->as.component.rendered != NULL) {
+                    self->transfer_identity(node->as.component.rendered, next_rendered);
+                    self->dispose(node->as.component.rendered);
+                }
+                node->as.component.rendered = next_rendered;
+                instance->dirty = 0;
+                *changed = 1;
+            }
+            return self->refresh_node(node->as.component.rendered, bindings, changed);
+        }
+
+        if (node->kind == UI_VNODE_CONTEXT_PROVIDER) {
+            ui_context_binding_t binding;
+            binding.context = node->as.provider.context;
+            binding.value = node->as.provider.value;
+            binding.value_size = node->as.provider.value_size;
+            if (bindings->add(binding) != 0) return 1;
+            for (size_t i = 0; i < node->children.length; i++) {
+                if (self->refresh_node(node->children.items[i], bindings, changed) != 0) {
+                    bindings->length--;
+                    return 1;
+                }
+            }
+            bindings->length--;
+            return 0;
+        }
+
+        if (node->kind != UI_VNODE_FRAGMENT && node->id == 0) {
+            node->id = self->next_node_id++;
+            *changed = 1;
+        }
+
+        for (size_t i = 0; i < node->children.length; i++) {
+            if (self->refresh_node(node->children.items[i], bindings, changed) != 0) return 1;
+        }
+        return 0;
     }
-    if (hook->as.state.size != size) { render->error = 1; return NULL; }
-    return &hook->as.state;
-}
 
-static int ui__state_set_raw_impl(borrowed mut ui_state_t* state, borrowed const void* value, size_t size) {
-    if (state == NULL || value == NULL || size != state->size) return 1;
-    if (memcmp(state->value, value, size) == 0) return 0;
-    memcpy(state->value, value, size);
-    if (state->owner != NULL) state->owner->dirty = 1;
-    if (state->runtime != NULL) state->runtime->dirty = 1;
-    return 0;
-}
-
-static int ui__use_effect_raw_impl(borrowed mut ui_render_context_t* render, ui_effect_fn effect, borrowed void* user, borrowed const void* deps, size_t deps_size) {
-    if (effect == NULL) { render->error = 1; return 1; }
-    ui_hook_t* hook = ui__next_hook(render, UI_HOOK_EFFECT);
-    if (hook == NULL) return 1;
-    int changed = hook->as.effect.effect == NULL;
-    if (!changed) {
-        if (hook->as.effect.deps_size != deps_size) changed = 1;
-        else if (deps_size > 0 && memcmp(hook->as.effect.deps, deps, deps_size) != 0) changed = 1;
+    priv void flush_effects(borrowed mut *self, borrowed mut ui_vnode_t* node) {
+        if (node == NULL) return;
+        (void)self;
+        if (node->kind == UI_VNODE_COMPONENT) {
+            if (node->as.component.instance != NULL) {
+                ui_component_instance_t* instance = node->as.component.instance;
+                instance->flush_effects();
+            }
+            self->flush_effects(node->as.component.rendered);
+        }
+        for (size_t i = 0; i < node->children.length; i++) self->flush_effects(node->children.items[i]);
     }
-    if (changed) {
-        unsigned char* copy = NULL;
-        if (deps_size > 0) { copy = ui__react_memdup(deps, deps_size); if (copy == NULL) { render->error = 1; return 1; } }
-        free(hook->as.effect.deps); hook->as.effect.deps = copy; hook->as.effect.deps_size = deps_size; hook->as.effect.pending = 1;
-    }
-    hook->as.effect.effect = effect; hook->as.effect.user = user;
-    return 0;
-}
 
-static borrowed ui_future_t* ui__use_future_impl(borrowed mut ui_render_context_t* render, borrowed mut ui_future_t* future) {
-    if (future == NULL) { render->error = 1; return NULL; }
-    ui_hook_t* hook = ui__next_hook(render, UI_HOOK_FUTURE);
-    if (hook == NULL) return NULL;
-    if (hook->as.future.future != future) {
-        if (hook->as.future.future != NULL) ui__future_unsubscribe(hook->as.future.future, render->instance);
-        if (ui__future_subscribe(future, render->instance) != 0) { render->error = 1; return NULL; }
-        hook->as.future.future = future;
-    }
-    return future;
-}
-
-static void ui__instance_destroy(borrowed mut ui_component_instance_t* instance) {
-    if (instance == NULL) return;
-    for (size_t i = 0; i < instance->hooks.length; i++) {
-        ui_hook_t* hook = &instance->hooks.items[i];
-        if (hook->kind == UI_HOOK_STATE) free(hook->as.state.value);
-        else if (hook->kind == UI_HOOK_EFFECT) { if (hook->as.effect.cleanup) hook->as.effect.cleanup(hook->as.effect.user); free(hook->as.effect.deps); }
-        else if (hook->kind == UI_HOOK_FUTURE) ui__future_unsubscribe(hook->as.future.future, instance);
-    }
-    instance->hooks.destroy(); free(instance);
-}
-
-static ui_component_instance_t* ui__instance_new(borrowed ui_runtime_t* runtime, borrowed ui_vnode_t* owner, ui_component_fn component) {
-    ui_component_instance_t* instance = calloc(1, sizeof(*instance));
-    if (instance == NULL) return NULL;
-    if (instance->hooks.init() != 0) { free(instance); return NULL; }
-    instance->component = component; instance->runtime = runtime; instance->owner = owner; instance->dirty = 1;
-    return instance;
-}
-
-static ui_vnode_t* ui__render_component(borrowed mut ui_runtime_t* runtime, borrowed mut ui_vnode_t* node, borrowed ui_provider_frame_t* providers) {
-    ui_component_instance_t* instance = node->as.component.instance;
-    if (instance == NULL) {
-        instance = ui__instance_new(runtime, node, node->as.component.render);
-        if (instance == NULL) { runtime->last_error = 1; return NULL; }
-        node->as.component.instance = instance;
-        node->as.component.instance_destroy = ui__instance_destroy;
-    }
-    instance->owner = node; instance->hook_cursor = 0;
-    ui_render_context_t render; render.runtime = runtime; render.instance = instance; render.providers = providers; render.error = 0;
-    ui_vnode_t* result = node->as.component.render(&render, node->as.component.props);
-    if (render.error || result == NULL || instance->hook_cursor != instance->hooks.length) {
-        runtime->last_error = 1;
-        if (result != NULL) if (result != NULL) result->destroy();
+    priv borrowed ui_vnode_t* find_node(borrowed mut *self, borrowed mut ui_vnode_t* node, uint64_t id) {
+        (void)self;
+        if (node == NULL) return NULL;
+        if (node->id == id && id != 0) return node;
+        if (node->kind == UI_VNODE_COMPONENT) {
+            ui_vnode_t* found = self->find_node(node->as.component.rendered, id);
+            if (found != NULL) return found;
+        }
+        for (size_t i = 0; i < node->children.length; i++) {
+            ui_vnode_t* found = self->find_node(node->children.items[i], id);
+            if (found != NULL) return found;
+        }
         return NULL;
     }
-    instance->dirty = 0; instance->mounted = 1;
-    return result;
-}
 
-static int ui__emit(borrowed mut ui_runtime_t* runtime, borrowed const ui_patch_t* patch) {
-    if (runtime->driver.apply_patch == NULL) return 0;
-    int result = runtime->driver.apply_patch(runtime->driver.user, patch);
-    if (result != 0) runtime->last_error = result;
-    return result;
-}
+    priv int process_timers(borrowed mut *self) {
+        uint64_t now = self->driver.now();
+        for (size_t i = 0; i < self->timers.length; i++) {
+            ui_timer_t* timer = &self->timers.items[i];
+            if (!timer->active || timer->callback == NULL || now < timer->due_ms) continue;
 
-static int ui__begin(borrowed mut ui_runtime_t* runtime) { return runtime->driver.begin_frame ? runtime->driver.begin_frame(runtime->driver.user) : 0; }
-static int ui__end(borrowed mut ui_runtime_t* runtime) { return runtime->driver.end_frame ? runtime->driver.end_frame(runtime->driver.user) : 0; }
-
-static ui_attr_t* ui__find_attr(borrowed ui_vnode_t* node, borrowed const char* name) {
-    for (size_t i = 0; i < node->attrs.length; i++) if (strcmp(node->attrs.items[i].name, name) == 0) return &node->attrs.items[i];
-    return NULL;
-}
-
-static int ui__mount(borrowed mut ui_runtime_t* runtime, borrowed mut ui_vnode_t* node, uint64_t parent_id, size_t index, borrowed ui_provider_frame_t* providers) {
-    if (node == NULL) return 0;
-    node->id = runtime->next_node_id++;
-    ui_patch_t patch; memset(&patch, 0, sizeof(patch)); patch.type = UI_PATCH_MOUNT; patch.node_id = node->id; patch.parent_id = parent_id; patch.index = index; patch.kind = node->kind; patch.tag = node->tag; patch.text = node->text;
-    if (ui__emit(runtime, &patch) != 0) return 1;
-    for (size_t i = 0; i < node->attrs.length; i++) {
-        memset(&patch, 0, sizeof(patch)); patch.type = UI_PATCH_SET_ATTRIBUTE; patch.node_id = node->id; patch.name = node->attrs.items[i].name; patch.value = node->attrs.items[i].value;
-        if (ui__emit(runtime, &patch) != 0) return 1;
-    }
-    if (node->kind == UI_VNODE_COMPONENT) {
-        node->as.component.rendered = ui__render_component(runtime, node, providers);
-        if (node->as.component.rendered == NULL) return 1;
-        return ui__mount(runtime, node->as.component.rendered, node->id, 0, providers);
-    }
-    if (node->kind == UI_VNODE_CONTEXT_PROVIDER) {
-        ui_provider_frame_t frame; frame.context = node->as.provider.context; frame.value = node->as.provider.value; frame.value_size = node->as.provider.value_size; frame.parent = providers;
-        for (size_t i = 0; i < node->children.length; i++) if (ui__mount(runtime, node->children.items[i], node->id, i, &frame) != 0) return 1;
-        return 0;
-    }
-    for (size_t i = 0; i < node->children.length; i++) if (ui__mount(runtime, node->children.items[i], node->id, i, providers) != 0) return 1;
-    return 0;
-}
-
-static int ui__unmount(borrowed mut ui_runtime_t* runtime, borrowed ui_vnode_t* node) {
-    if (node == NULL) return 0;
-    ui_patch_t patch; memset(&patch, 0, sizeof(patch)); patch.type = UI_PATCH_UNMOUNT; patch.node_id = node->id;
-    return ui__emit(runtime, &patch);
-}
-
-static int ui__same_identity(borrowed ui_vnode_t* a, borrowed ui_vnode_t* b) {
-    if (a->kind != b->kind) return 0;
-    if ((a->key == NULL) != (b->key == NULL)) return 0;
-    if (a->key && strcmp(a->key, b->key) != 0) return 0;
-    if (a->kind == UI_VNODE_ELEMENT) return strcmp(a->tag, b->tag) == 0;
-    if (a->kind == UI_VNODE_COMPONENT) return a->as.component.render == b->as.component.render;
-    if (a->kind == UI_VNODE_CONTEXT_PROVIDER) return a->as.provider.context == b->as.provider.context;
-    return 1;
-}
-
-static int ui__reconcile(borrowed mut ui_runtime_t* runtime, borrowed mut ui_vnode_t* old_node, borrowed mut ui_vnode_t* new_node, uint64_t parent_id, size_t index, borrowed ui_provider_frame_t* providers);
-
-static int ui__reconcile_children(borrowed mut ui_runtime_t* runtime, borrowed mut ui_vnode_t* old_node, borrowed mut ui_vnode_t* new_node, borrowed ui_provider_frame_t* providers) {
-    size_t old_count = old_node->children.length;
-    size_t new_count = new_node->children.length;
-    unsigned char* used = old_count == 0 ? NULL : calloc(old_count, 1);
-    if (old_count > 0 && used == NULL) return 1;
-    for (size_t ni = 0; ni < new_count; ni++) {
-        ui_vnode_t* next = new_node->children.items[ni];
-        size_t oi = (size_t)-1;
-        if (next != NULL && next->key != NULL) {
-            for (size_t j = 0; j < old_count; j++) {
-                ui_vnode_t* prev = old_node->children.items[j];
-                if (!used[j] && prev != NULL && prev->key != NULL && ui__same_identity(prev, next)) { oi = j; break; }
-            }
-        } else if (ni < old_count && !used[ni]) {
-            ui_vnode_t* prev = old_node->children.items[ni];
-            if (prev == NULL || prev->key == NULL) oi = ni;
-        }
-        if (oi == (size_t)-1) {
-            if (ui__mount(runtime, next, new_node->id, ni, providers) != 0) { free(used); return 1; }
-            continue;
-        }
-        used[oi] = 1;
-        ui_vnode_t* prev = old_node->children.items[oi];
-        if (oi != ni && prev != NULL) {
-            ui_patch_t move; memset(&move, 0, sizeof(move)); move.type = UI_PATCH_MOVE; move.node_id = prev->id; move.parent_id = new_node->id; move.index = ni;
-            if (ui__emit(runtime, &move) != 0) { free(used); return 1; }
-        }
-        if (ui__reconcile(runtime, prev, next, new_node->id, ni, providers) != 0) { free(used); return 1; }
-    }
-    for (size_t oi = 0; oi < old_count; oi++) {
-        if (!used[oi] && ui__unmount(runtime, old_node->children.items[oi]) != 0) { free(used); return 1; }
-    }
-    free(used);
-    return 0;
-}
-
-static int ui__reconcile(borrowed mut ui_runtime_t* runtime, borrowed mut ui_vnode_t* old_node, borrowed mut ui_vnode_t* new_node, uint64_t parent_id, size_t index, borrowed ui_provider_frame_t* providers) {
-    if (old_node == NULL) return ui__mount(runtime, new_node, parent_id, index, providers);
-    if (new_node == NULL) return ui__unmount(runtime, old_node);
-    if (!ui__same_identity(old_node, new_node)) { if (ui__unmount(runtime, old_node) != 0) return 1; return ui__mount(runtime, new_node, parent_id, index, providers); }
-    new_node->id = old_node->id;
-    ui_patch_t patch; memset(&patch, 0, sizeof(patch));
-    if (new_node->kind == UI_VNODE_TEXT) {
-        if (strcmp(old_node->text, new_node->text) != 0) { patch.type = UI_PATCH_SET_TEXT; patch.node_id = new_node->id; patch.text = new_node->text; if (ui__emit(runtime, &patch) != 0) return 1; }
-        return 0;
-    }
-    for (size_t i = 0; i < old_node->attrs.length; i++) {
-        ui_attr_t* next = ui__find_attr(new_node, old_node->attrs.items[i].name);
-        if (next == NULL) { memset(&patch,0,sizeof(patch)); patch.type = UI_PATCH_REMOVE_ATTRIBUTE; patch.node_id = new_node->id; patch.name = old_node->attrs.items[i].name; if (ui__emit(runtime,&patch)!=0) return 1; }
-    }
-    for (size_t i = 0; i < new_node->attrs.length; i++) {
-        ui_attr_t* prev = ui__find_attr(old_node, new_node->attrs.items[i].name);
-        if (prev == NULL || !prev->value.equals(&new_node->attrs.items[i].value)) { memset(&patch,0,sizeof(patch)); patch.type = UI_PATCH_SET_ATTRIBUTE; patch.node_id = new_node->id; patch.name = new_node->attrs.items[i].name; patch.value = new_node->attrs.items[i].value; if (ui__emit(runtime,&patch)!=0) return 1; }
-    }
-    if (new_node->kind == UI_VNODE_COMPONENT) {
-        new_node->as.component.instance = old_node->as.component.instance; old_node->as.component.instance = NULL;
-        new_node->as.component.instance_destroy = old_node->as.component.instance_destroy; old_node->as.component.instance_destroy = NULL;
-        new_node->as.component.instance->owner = new_node;
-        new_node->as.component.rendered = ui__render_component(runtime, new_node, providers);
-        if (new_node->as.component.rendered == NULL) return 1;
-        return ui__reconcile(runtime, old_node->as.component.rendered, new_node->as.component.rendered, new_node->id, 0, providers);
-    }
-    ui_provider_frame_t frame; ui_provider_frame_t* child_providers = providers;
-    if (new_node->kind == UI_VNODE_CONTEXT_PROVIDER) { frame.context = new_node->as.provider.context; frame.value = new_node->as.provider.value; frame.value_size = new_node->as.provider.value_size; frame.parent = providers; child_providers = &frame; }
-    return ui__reconcile_children(runtime, old_node, new_node, child_providers);
-}
-
-static void ui__flush_effects_node(borrowed ui_vnode_t* node) {
-    if (node == NULL) return;
-    if (node->kind == UI_VNODE_COMPONENT && node->as.component.instance != NULL) {
-        ui_component_instance_t* instance = node->as.component.instance;
-        for (size_t i = 0; i < instance->hooks.length; i++) {
-            ui_hook_t* hook = &instance->hooks.items[i];
-            if (hook->kind == UI_HOOK_EFFECT && hook->as.effect.pending) {
-                if (hook->as.effect.cleanup) hook->as.effect.cleanup(hook->as.effect.user);
-                hook->as.effect.cleanup = hook->as.effect.effect(hook->as.effect.user);
-                hook->as.effect.pending = 0;
+            timer->callback(self, timer->user);
+            if (timer->interval_ms == 0) {
+                timer->active = 0;
+            } else {
+                do timer->due_ms += timer->interval_ms;
+                while (timer->due_ms <= now);
             }
         }
-        ui__flush_effects_node(node->as.component.rendered);
+        return 0;
     }
-    for (size_t i = 0; i < node->children.length; i++) ui__flush_effects_node(node->children.items[i]);
-}
 
-static int ui__refresh_dirty(borrowed mut ui_runtime_t* runtime, borrowed mut ui_vnode_t* node, borrowed ui_provider_frame_t* providers) {
-    if (node == NULL) return 0;
-    if (node->kind == UI_VNODE_COMPONENT) {
-        ui_component_instance_t* instance = node->as.component.instance;
-        if (instance != NULL && instance->dirty) {
-            ui_vnode_t* old_rendered = node->as.component.rendered;
-            ui_vnode_t* next = ui__render_component(runtime, node, providers);
-            if (next == NULL) return 1;
-            node->as.component.rendered = next;
-            if (ui__reconcile(runtime, old_rendered, next, node->id, 0, providers) != 0) return 1;
-            if (old_rendered != NULL) old_rendered->destroy();
+    priv uint64_t wait_timeout(borrowed *self) {
+        uint64_t now = self->driver.now();
+        uint64_t timeout = 16;
+        for (size_t i = 0; i < self->timers.length; i++) {
+            borrowed const ui_timer_t* timer = &self->timers.items[i];
+            if (!timer->active) continue;
+            if (timer->due_ms <= now) return 0;
+            uint64_t remaining = timer->due_ms - now;
+            if (remaining < timeout) timeout = remaining;
         }
-        return ui__refresh_dirty(runtime, node->as.component.rendered, providers);
+        return timeout;
     }
-    ui_provider_frame_t frame; ui_provider_frame_t* child_providers = providers;
-    if (node->kind == UI_VNODE_CONTEXT_PROVIDER) { frame.context = node->as.provider.context; frame.value = node->as.provider.value; frame.value_size = node->as.provider.value_size; frame.parent = providers; child_providers = &frame; }
-    for (size_t i = 0; i < node->children.length; i++) if (ui__refresh_dirty(runtime, node->children.items[i], child_providers) != 0) return 1;
-    return 0;
-}
 
-static ui_vnode_t* ui__find_node(borrowed ui_vnode_t* node, uint64_t id) {
-    if (node == NULL) return NULL;
-    if (node->id == id) return node;
-    if (node->kind == UI_VNODE_COMPONENT) { ui_vnode_t* found = ui__find_node(node->as.component.rendered, id); if (found) return found; }
-    for (size_t i = 0; i < node->children.length; i++) { ui_vnode_t* found = ui__find_node(node->children.items[i], id); if (found) return found; }
-    return NULL;
-}
+    pub int init(borrowed mut *self, ui_driver_t driver) {
+        if (self == NULL) return 1;
+        memset(self, 0, sizeof(*self));
+        self->driver = driver;
+        self->next_node_id = 1;
+        self->next_timer_id = 1;
+        return self->timers.init();
+    }
 
-static int ui__runtime_dispatch_impl(borrowed mut ui_runtime_t* runtime, borrowed const ui_event_t* event) {
-    if (runtime == NULL || event == NULL) return 1;
-    if (event->type == UI_EVENT_QUIT) { runtime->running = 0; return 0; }
-    ui_vnode_t* node = ui__find_node(runtime->root, event->target_id);
-    if (node == NULL) return 0;
-    for (size_t i = 0; i < node->attrs.length; i++) {
-        ui_value_t* value = &node->attrs.items[i].value;
-        if (value->kind == UI_VALUE_HANDLER && value->as.handler.type == event->type && value->as.handler.callback != NULL) {
-            int result = value->as.handler.callback(event, value->as.handler.user);
-            if (result != 0) return result;
+    pub int mount(borrowed mut *self, owned ui_vnode_t* root) {
+        if (self == NULL || root == NULL) return 1;
+        if (self->root != NULL) self->dispose(self->root);
+        self->root = root;
+
+        ui_context_binding_list_t bindings;
+        if (bindings.init() != 0) return 1;
+        int changed = 1;
+        int error = self->refresh_node(self->root, &bindings, &changed);
+        bindings.destroy();
+        if (error != 0) return error;
+
+        error = self->driver.render(self->root);
+        if (error == 0) self->flush_effects(self->root);
+        return error;
+    }
+
+    pub int update(borrowed mut *self, owned ui_vnode_t* next_root) {
+        if (self == NULL || next_root == NULL) return 1;
+        if (self->root == NULL) return self->mount(next_root);
+
+        self->transfer_identity(self->root, next_root);
+        self->dispose(self->root);
+        self->root = next_root;
+
+        ui_context_binding_list_t bindings;
+        if (bindings.init() != 0) return 1;
+        int changed = 1;
+        int error = self->refresh_node(self->root, &bindings, &changed);
+        bindings.destroy();
+        if (error != 0) return error;
+
+        error = self->driver.render(self->root);
+        if (error == 0) self->flush_effects(self->root);
+        return error;
+    }
+
+    pub int dispatch(borrowed mut *self, borrowed const ui_event_t* event) {
+        if (self == NULL || event == NULL) return 1;
+        if (event->type == UI_EVENT_QUIT) {
+            self->running = 0;
+            return 0;
         }
-    }
-    return 0;
-}
+        if (event->target_id == 0 || self->root == NULL) return 0;
 
-static int ui__runtime_init_impl(borrowed mut ui_runtime_t* runtime, ui_driver_t driver) {
-    if (runtime == NULL || driver.apply_patch == NULL || driver.poll_event == NULL || driver.now_ms == NULL) return 1;
-    memset(runtime, 0, sizeof(*runtime)); runtime->driver = driver; runtime->next_node_id = 1; runtime->next_timer_id = 1; runtime->running = 1;
-    return runtime->timers.init();
-}
+        ui_vnode_t* target = self->find_node(self->root, event->target_id);
+        if (target == NULL) return 0;
 
-static int ui__runtime_mount_impl(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* root) {
-    if (runtime == NULL || root == NULL || runtime->root != NULL) return 1;
-    if (ui__begin(runtime) != 0) return 1;
-    runtime->root = root;
-    int result = ui__mount(runtime, root, 0, 0, NULL);
-    if (ui__end(runtime) != 0) result = 1;
-    if (result == 0) ui__flush_effects_node(root);
-    return result;
-}
-
-static int ui__runtime_update_root_impl(borrowed mut ui_runtime_t* runtime, owned ui_vnode_t* next_root) {
-    if (runtime == NULL || next_root == NULL || runtime->root == NULL) return 1;
-    ui_vnode_t* old = runtime->root;
-    if (ui__begin(runtime) != 0) return 1;
-    int result = ui__reconcile(runtime, old, next_root, 0, 0, NULL);
-    if (ui__end(runtime) != 0) result = 1;
-    if (result == 0) { runtime->root = next_root; if (old != NULL) old->destroy(); ui__flush_effects_node(next_root); }
-    else if (next_root != NULL) next_root->destroy();
-    return result;
-}
-
-static uint64_t ui__runtime_set_timeout_impl(borrowed mut ui_runtime_t* runtime, uint64_t delay_ms, ui_timer_fn callback, borrowed void* user) {
-    if (runtime == NULL || callback == NULL) return 0;
-    ui_timer_t timer; timer.id = runtime->next_timer_id++; timer.due_ms = runtime->driver.now_ms(runtime->driver.user) + delay_ms; timer.interval_ms = 0; timer.callback = callback; timer.user = user; timer.active = 1;
-    return runtime->timers.add(timer) == 0 ? timer.id : 0;
-}
-
-static uint64_t ui__runtime_set_interval_impl(borrowed mut ui_runtime_t* runtime, uint64_t interval_ms, ui_timer_fn callback, borrowed void* user) {
-    if (runtime == NULL || callback == NULL || interval_ms == 0) return 0;
-    ui_timer_t timer; timer.id = runtime->next_timer_id++; timer.due_ms = runtime->driver.now_ms(runtime->driver.user) + interval_ms; timer.interval_ms = interval_ms; timer.callback = callback; timer.user = user; timer.active = 1;
-    return runtime->timers.add(timer) == 0 ? timer.id : 0;
-}
-
-static int ui__runtime_cancel_timer_impl(borrowed mut ui_runtime_t* runtime, uint64_t id) {
-    if (runtime == NULL || id == 0) return 1;
-    for (size_t i = 0; i < runtime->timers.length; i++) if (runtime->timers.items[i].id == id) { runtime->timers.items[i].active = 0; return 0; }
-    return 1;
-}
-
-static void ui__run_timers(borrowed mut ui_runtime_t* runtime) {
-    uint64_t now = runtime->driver.now_ms(runtime->driver.user);
-    for (size_t i = 0; i < runtime->timers.length; i++) {
-        ui_timer_t* timer = &runtime->timers.items[i];
-        if (timer->active && now >= timer->due_ms) {
-            if (timer->interval_ms == 0) timer->active = 0;
-            else { do { timer->due_ms += timer->interval_ms; } while (timer->due_ms <= now); }
-            timer->callback(runtime, timer->user);
+        for (size_t i = 0; i < target->attrs.length; i++) {
+            ui_value_t* value = &target->attrs.items[i].value;
+            if (value->kind != UI_VALUE_HANDLER) continue;
+            if (value->as.handler.type != event->type || value->as.handler.callback == NULL) continue;
+            int error = value->as.handler.callback(event, value->as.handler.user);
+            if (error != 0) return error;
         }
+        return 0;
     }
-}
 
-static uint64_t ui__next_wait(borrowed ui_runtime_t* runtime) {
-    uint64_t now = runtime->driver.now_ms(runtime->driver.user);
-    uint64_t best = 1000;
-    for (size_t i = 0; i < runtime->timers.length; i++) {
-        ui_timer_t* timer = &runtime->timers.items[i];
-        if (!timer->active) continue;
-        if (timer->due_ms <= now) return 0;
-        uint64_t delta = timer->due_ms - now;
-        if (delta < best) best = delta;
+    pub uint64_t set_timeout(
+        borrowed mut *self,
+        uint64_t delay_ms,
+        ui_timer_callback_fn callback,
+        borrowed void* user
+    ) {
+        if (self == NULL || callback == NULL) return 0;
+        ui_timer_t timer;
+        memset(&timer, 0, sizeof(timer));
+        timer.id = self->next_timer_id++;
+        timer.due_ms = self->driver.now() + delay_ms;
+        timer.callback = callback;
+        timer.user = user;
+        timer.active = 1;
+        return self->timers.add(timer) == 0 ? timer.id : 0;
     }
-    return best;
-}
 
-static int ui__runtime_tick_impl(borrowed mut ui_runtime_t* runtime) {
-    if (runtime == NULL) return 1;
-    ui_event_t event;
-    for (;;) {
-        memset(&event, 0, sizeof(event));
-        int polled = runtime->driver.poll_event(runtime->driver.user, &event);
-        if (polled < 0) return polled;
-        if (polled == 0) break;
-        int dispatched = ui__runtime_dispatch_impl(runtime, &event);
-        if (dispatched != 0) return dispatched;
+    pub uint64_t set_interval(
+        borrowed mut *self,
+        uint64_t interval_ms,
+        ui_timer_callback_fn callback,
+        borrowed void* user
+    ) {
+        if (self == NULL || callback == NULL || interval_ms == 0) return 0;
+        ui_timer_t timer;
+        memset(&timer, 0, sizeof(timer));
+        timer.id = self->next_timer_id++;
+        timer.due_ms = self->driver.now() + interval_ms;
+        timer.interval_ms = interval_ms;
+        timer.callback = callback;
+        timer.user = user;
+        timer.active = 1;
+        return self->timers.add(timer) == 0 ? timer.id : 0;
     }
-    ui__run_timers(runtime);
-    if (runtime->dirty && runtime->root != NULL) {
-        runtime->dirty = 0;
-        if (ui__begin(runtime) != 0) return 1;
-        int result = ui__refresh_dirty(runtime, runtime->root, NULL);
-        if (ui__end(runtime) != 0) result = 1;
-        if (result != 0) return result;
-        ui__flush_effects_node(runtime->root);
-    }
-    return runtime->last_error;
-}
 
-static int ui__runtime_run_impl(borrowed mut ui_runtime_t* runtime) {
-    if (runtime == NULL) return 1;
-    runtime->running = 1;
-    while (runtime->running) {
-        int result = ui__runtime_tick_impl(runtime);
-        if (result != 0) return result;
-        if (runtime->driver.wait != NULL) {
-            result = runtime->driver.wait(runtime->driver.user, ui__next_wait(runtime));
-            if (result != 0) return result;
+    pub int cancel_timer(borrowed mut *self, uint64_t id) {
+        if (self == NULL || id == 0) return 1;
+        for (size_t i = 0; i < self->timers.length; i++) {
+            if (self->timers.items[i].id == id && self->timers.items[i].active) {
+                self->timers.items[i].active = 0;
+                return 0;
+            }
         }
+        return 1;
     }
-    return 0;
-}
 
-static void ui__runtime_stop_impl(borrowed mut ui_runtime_t* runtime) { if (runtime) runtime->running = 0; }
+    pub int tick(borrowed mut *self) {
+        if (self == NULL) return 1;
 
-static void ui__runtime_destroy_impl(borrowed mut ui_runtime_t* runtime) {
-    if (runtime == NULL) return;
-    if (runtime->root != NULL) runtime->root->destroy(); runtime->root = NULL; runtime->timers.destroy(); memset(runtime, 0, sizeof(*runtime));
-}
+        ui_event_t event;
+        for (;;) {
+            memset(&event, 0, sizeof(event));
+            int polled = self->driver.poll(&event);
+            if (polled < 0) return 1;
+            if (polled == 0) break;
+            if (self->dispatch(&event) != 0) return 1;
+        }
 
-#define use_state(context, T, initial_value) ui_render_context__use_state_raw((context), sizeof(T), &(T){(initial_value)})
-#define state_value(T, state) (*(T*)((state)->value))
-#define state_set(T, state, new_value) ui_state__set_raw((state), &(T){(new_value)}, sizeof(T))
-#define use_context(context, T, context_object) ((const T*)ui_render_context__use_context_raw((context), (context_object), sizeof(T)))
-#define use_effect(context, effect_fn, user_ptr, deps_ptr, deps_size) ui_render_context__use_effect_raw((context), (effect_fn), (user_ptr), (deps_ptr), (deps_size))
-#define use_future(context, future_ptr) ui_render_context__use_future((context), (future_ptr))
+        if (self->process_timers() != 0) return 1;
+        if (self->root == NULL) return 0;
+
+        ui_context_binding_list_t bindings;
+        if (bindings.init() != 0) return 1;
+        int changed = 0;
+        int error = self->refresh_node(self->root, &bindings, &changed);
+        bindings.destroy();
+        if (error != 0) return error;
+
+        if (changed) {
+            error = self->driver.render(self->root);
+            if (error == 0) self->flush_effects(self->root);
+        }
+        return error;
+    }
+
+    pub int run(borrowed mut *self) {
+        if (self == NULL) return 1;
+        self->running = 1;
+        while (self->running) {
+            if (self->tick() != 0) return 1;
+            if (!self->running) break;
+            if (self->driver.wait(self->wait_timeout()) != 0) return 1;
+        }
+        return 0;
+    }
+
+    pub void stop(borrowed mut *self) {
+        if (self != NULL) self->running = 0;
+    }
+
+    pub void destroy(borrowed mut *self) {
+        if (self == NULL) return;
+        if (self->root != NULL) self->dispose(self->root);
+        self->root = NULL;
+        self->timers.destroy();
+        memset(self, 0, sizeof(*self));
+    }
+} ui_runtime_t;
 
 #endif
