@@ -235,9 +235,18 @@ val buildHostKTreeSitter = tasks.register("buildHostKTreeSitter") {
                 RUNTIME_OUTPUT_DIRECTORY_RELEASE "${normalized(outputRoot)}"
                 LIBRARY_OUTPUT_DIRECTORY_RELEASE "${normalized(outputRoot)}"
                 ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${normalized(outputRoot)}"
-                PREFIX ""
                 DEFINE_SYMBOL ""
             )
+            # Windows JNI resources use the JVM loader's unprefixed DLL name,
+            # while macOS uses the conventional lib*.dylib name.  Do not use
+            # one PREFIX setting for both platforms: PREFIX "" produces
+            # ktreesitter.dylib on macOS, but the resource contract is
+            # libktreesitter.dylib.
+            if(WIN32)
+                set_target_properties(ktreesitter PROPERTIES PREFIX "")
+            else()
+                set_target_properties(ktreesitter PROPERTIES PREFIX "lib")
+            endif()
             """.trimIndent()
         )
 
