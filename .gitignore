@@ -20,3 +20,4 @@ dist
 c-plus-bin
 /lib/
 tinycc-cli*.jar
+stdlib.old
