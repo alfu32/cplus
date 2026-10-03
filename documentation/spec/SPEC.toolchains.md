@@ -45,7 +45,8 @@ https://github.com/alfu32/cplus-sysroots/releases/latest/download/<reference>.zi
 ```
 
 The implementation validates the release JSON metadata, the published SHA-256
-asset, and the extracted `MANIFEST.json` before accepting a bundle.
+asset, and the extracted `MANIFEST.json` before accepting a bundle. It writes
+the resolved release tag and digest to the nearest project `cplus.lock`.
 
 ## CLI contract
 
@@ -100,7 +101,14 @@ Bundles are stored as:
    ZIP-slip protection.
 6. Require `MANIFEST.json` and verify its `reference` field.
 7. Replace the selected local bundle only after validation succeeds.
-8. Remove temporary files on success and failure.
+8. Record the release tag, digest, target, and kind in `cplus.lock`, with
+   toolchain references sorted alphabetically.
+9. Remove temporary files on success and failure.
+
+If a lock entry already exists, `install` uses its release tag and rejects a
+changed published checksum. `update` intentionally resolves the current
+latest release and refreshes the lock entry. This keeps ordinary installs
+reproducible while making updates explicit.
 
 No bundle is accepted merely because its download returned HTTP 200. The
 catalog prevents arbitrary references from being requested, and the manifest
@@ -130,9 +138,11 @@ The selected target may be a canonical sysroot triple or a C-plus spelling such
 as `linux-x86_64`, `macos-aarch64`, or `windows-x86_64`. Explicit sysroot
 options always take precedence over discovery.
 
-## Future extensions
+## Signature status and future extensions
 
-- signature verification and trusted release pinning;
-- release/version selection instead of only `latest`;
+- SHA-256 integrity verification and release pinning are implemented. The
+  current upstream release publishes checksums but no detached signature or
+  trusted public-key contract, so cryptographic signature verification cannot
+  yet be performed without inventing a trust root.
 - explicit remove, repair, and garbage-collection commands;
 - CI fixtures against a published sysroots release.

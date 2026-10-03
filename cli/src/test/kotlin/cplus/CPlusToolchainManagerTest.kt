@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
+import kotlin.io.path.readText
 
 class CPlusToolchainManagerTest {
     @Test
@@ -65,6 +66,47 @@ class CPlusToolchainManagerTest {
             assertEquals("arm64-apple-darwin", CPlusToolchainManager.canonicalTriple("macos-aarch64"))
         } finally {
             if (previous == null) System.clearProperty("cplus.toolchains") else System.setProperty("cplus.toolchains", previous)
+            Files.walk(root).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun writesToolchainLockEntriesInAlphabeticalOrderAndReadsThemBack() {
+        val root = Files.createTempDirectory("cplus-lock")
+        try {
+            val path = root.resolve("cplus.lock")
+            CPlusLockfile.writeToolchains(
+                path,
+                mapOf(
+                    "z-target-rt" to CPlusToolchainLockEntry("0.1.1", "z-digest"),
+                    "a-target-dev" to CPlusToolchainLockEntry("0.1.1", "a-digest", "a-target", "dev")
+                )
+            )
+            val text = path.readText()
+            assertTrue(text.indexOf("a-target-dev") < text.indexOf("z-target-rt"), text)
+            assertEquals("0.1.1", CPlusLockfile.read(path)["a-target-dev"]?.release)
+            assertEquals("a-digest", CPlusLockfile.read(path)["a-target-dev"]?.sha256)
+        } finally {
+            Files.walk(root).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun writesPackageLockDependenciesInAlphabeticalOrder() {
+        val root = Files.createTempDirectory("cplus-package-lock")
+        try {
+            val path = root.resolve("cplus.lock")
+            CPlusLockfile.writeDependencies(
+                path,
+                mapOf(
+                    "zeta" to CPlusPackageReference("zeta", "https://example.test/zeta.zip"),
+                    "alpha" to CPlusPackageReference("alpha", "../alpha", "1.0.0")
+                )
+            )
+            val text = path.readText()
+            assertTrue(text.indexOf("alpha") < text.indexOf("zeta"), text)
+            assertTrue("version = \"1.0.0\"" in text, text)
+        } finally {
             Files.walk(root).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
     }

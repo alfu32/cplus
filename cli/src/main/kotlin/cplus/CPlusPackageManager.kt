@@ -67,6 +67,7 @@ internal object CPlusPackageManager {
                 val target = modules.resolve(name)
                 Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE)
             }
+            CPlusLockfile.writeDependencies(root.resolve("cplus.lock"), manifest.dependencies)
             return packages.keys.map { modules.resolve(it) }
         } finally {
             deleteTree(stage)

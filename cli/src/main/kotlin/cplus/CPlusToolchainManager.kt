@@ -30,14 +30,14 @@ internal object CPlusToolchainManager {
     fun install(reference: String): List<Path> {
         val remote = listRemote()
         val selected = selectReferences(reference, remote)
-        val installed = selected.map { installExact(it) }
+        val installed = selected.map { installExact(it, refresh = false) }
         return installed
     }
 
     fun update(reference: String?): List<Path> {
         val remote = listRemote()
         val selected = if (reference == null || reference == "all") remote else selectReferences(reference, remote)
-        return selected.map { installExact(it) }
+        return selected.map { installExact(it, refresh = true) }
     }
 
     internal fun developmentSysrootFor(target: String?): Path? {
@@ -61,15 +61,14 @@ internal object CPlusToolchainManager {
         return matches
     }
 
-    private fun installExact(reference: String): Path {
+    private fun installExact(reference: String, refresh: Boolean): Path {
         val target = storageRoot().resolve(reference).normalize()
         val archive = Files.createTempFile("cplus-toolchain-", ".zip")
         try {
-            val url = releaseBase + reference + ".zip"
-            val metadata = fetchText(releaseBase + reference + ".json")
-            if (!metadata.contains("\"reference\": \"" + reference + "\"")) {
-                throw IllegalArgumentException("toolchain metadata reference does not match: " + reference)
-            }
+            val lockPath = projectRoot()?.resolve("cplus.lock")
+            val locked = if (refresh) null else lockPath?.let(CPlusLockfile::read)?.get(reference)
+            val pinnedBase = locked?.let { pinnedReleaseBase(it.release) }
+            val url = (pinnedBase ?: releaseBase) + reference + ".zip"
             val response = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(Duration.ofSeconds(20)).build().send(
                 HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(5)).GET().build(),
                 HttpResponse.BodyHandlers.ofFile(archive)
@@ -77,9 +76,19 @@ internal object CPlusToolchainManager {
             if (response.statusCode() !in 200..299) {
                 throw IllegalArgumentException("toolchain download failed (" + response.statusCode() + "): " + url)
             }
-            val expectedDigest = fetchText(url + ".sha256").trim().split(Regex("\\s+"), limit = 2).firstOrNull()
+            val release = locked?.release ?: releaseFrom(response.uri())
+                ?: throw IllegalArgumentException("toolchain download did not identify a release: $reference")
+            val base = pinnedBase ?: pinnedReleaseBase(release)
+            val metadata = fetchText(base + reference + ".json")
+            if (!metadata.contains("\"reference\": \"" + reference + "\"")) {
+                throw IllegalArgumentException("toolchain metadata reference does not match: " + reference)
+            }
+            val expectedDigest = fetchText(base + reference + ".zip.sha256").trim().split(Regex("\\s+"), limit = 2).firstOrNull()
                 ?.lowercase()
                 ?: throw IllegalArgumentException("toolchain checksum is empty: " + reference)
+            if (locked != null && locked.sha256.lowercase() != expectedDigest) {
+                throw IllegalArgumentException("pinned toolchain checksum changed upstream: " + reference)
+            }
             val actualDigest = sha256(archive)
             if (actualDigest != expectedDigest) {
                 throw IllegalArgumentException("toolchain checksum mismatch: " + reference)
@@ -97,6 +106,13 @@ internal object CPlusToolchainManager {
                 deleteTree(target)
                 Files.createDirectories(target.parent)
                 Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE)
+                lockPath?.let { path ->
+                    val metadataTarget = Regex("\"target\"\\s*:\\s*\"([^\"]+)\"").find(metadata)?.groupValues?.get(1)
+                    val metadataKind = Regex("\"kind\"\\s*:\\s*\"([^\"]+)\"").find(metadata)?.groupValues?.get(1)
+                    val entries = CPlusLockfile.read(path).toMutableMap()
+                    entries[reference] = CPlusToolchainLockEntry(release, actualDigest, metadataTarget, metadataKind)
+                    CPlusLockfile.writeToolchains(path, entries)
+                }
                 return target
             } finally {
                 deleteTree(staging)
@@ -104,6 +120,26 @@ internal object CPlusToolchainManager {
         } finally {
             Files.deleteIfExists(archive)
         }
+    }
+
+    internal fun lockPath(start: Path): Path = projectRoot(start)?.resolve("cplus.lock") ?: start.toAbsolutePath().normalize().resolve("cplus.lock")
+
+    private fun projectRoot(start: Path = Path.of("")): Path? {
+        var cursor: Path? = start.toAbsolutePath().normalize().let { if (Files.isDirectory(it)) it else it.parent }
+        while (cursor != null) {
+            if (Files.isRegularFile(cursor.resolve("cplus.toml"))) return cursor
+            cursor = cursor.parent
+        }
+        return null
+    }
+
+    private fun pinnedReleaseBase(release: String): String =
+        "https://github.com/alfu32/cplus-sysroots/releases/download/$release/"
+
+    private fun releaseFrom(uri: URI): String? {
+        val parts = uri.path.split('/').filter(String::isNotEmpty)
+        val index = parts.indexOf("download")
+        return parts.getOrNull(index + 1)
     }
 
     internal fun parseReferences(text: String): List<String> = text.lineSequence()

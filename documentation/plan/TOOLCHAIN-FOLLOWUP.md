@@ -23,7 +23,7 @@ selection, system compiler installation, or release publication itself.
 | TC-10 | done | Verify installation against the first published sysroots release |
 | TC-11 | done | Verify compiler sysroot discovery consumes installed bundles |
 | TC-12 | done | Verify release JSON metadata and published SHA-256 checksums |
-| TC-13 | open | Add signature verification and trusted release pinning |
+| TC-13 | partial | Pin release tags and SHA-256 digests in sorted `cplus.lock` entries; cryptographic signatures await upstream signed assets and a trusted key contract |
 | TC-14 | open | Add remove/repair/garbage-collection lifecycle commands |
 
 ## Validation plan
@@ -53,3 +53,9 @@ were installed successfully; release catalog listing, metadata validation,
 SHA-256 verification, archive extraction, local discovery, and a host compile
 using the discovered development headers all passed. Clang/GCC use full
 `--sysroot`; TCC uses a compatible include-path overlay.
+
+Package installs also update `cplus.lock`: toolchain entries and package
+dependency entries are emitted in alphabetical order, so conflicts are
+visually stable and easy to review. A locked toolchain is installed from its
+recorded release and checksum; `toolchain update` is the explicit refresh
+operation.
