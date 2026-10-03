@@ -1319,6 +1319,88 @@ class TranspilerTest {
     }
 
     @Test
+    fun packageInitCreatesOnlyAManifest() {
+        val directory = Files.createTempDirectory("cplus-pkg-init")
+        try {
+            val manifest = CPlusPackageManager.init(directory)
+            assertTrue(Files.isRegularFile(manifest))
+            assertFalse(Files.exists(directory.resolve("src")))
+            assertFalse(Files.exists(directory.resolve("modules")))
+            assertFalse(Files.exists(directory.resolve("README.md")))
+            assertTrue(Files.readString(manifest).contains("name = \"" + directory.fileName + "\""))
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun packageAddWritesAPathDependencyWithoutCreatingPackageFiles() {
+        val directory = Files.createTempDirectory("cplus-pkg-add")
+        try {
+            CPlusPackageManager.init(directory)
+            val reference = CPlusPackageManager.add(directory, "geometry=../geometry")
+            assertEquals("geometry", reference.name)
+            assertTrue(Files.readString(directory.resolve("cplus.toml")).contains("geometry = { path = \"../geometry\" }"))
+            assertFalse(Files.exists(directory.resolve("modules/geometry")))
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun packageInstallStagesValidatesAndFlattensTransitiveLocalPackages() {
+        val directory = Files.createTempDirectory("cplus-pkg-install")
+        try {
+            val app = directory.resolve("app")
+            val geometry = directory.resolve("geometry")
+            val math = directory.resolve("math")
+            CPlusPackageManager.init(app)
+            CPlusPackageManager.init(geometry)
+            CPlusPackageManager.init(math)
+            Files.writeString(geometry.resolve("cplus.toml"), """name = "geometry"
+version = "0.1.0"
+[dependencies]
+math = { path = "../math" }
+""")
+            Files.writeString(app.resolve("cplus.toml"), """name = "app"
+version = "0.1.0"
+[dependencies]
+geometry = { path = "../geometry" }
+""")
+
+            val installed = CPlusPackageManager.install(app, emptyList())
+            assertEquals(listOf(app.resolve("modules/geometry"), app.resolve("modules/math")), installed)
+            assertTrue(Files.isRegularFile(app.resolve("modules/geometry/cplus.toml")))
+            assertTrue(Files.isRegularFile(app.resolve("modules/math/cplus.toml")))
+            assertFalse(Files.list(app).use { stream -> stream.anyMatch { it.fileName.toString().startsWith(".cplus-package-staging-") } })
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun packageInstallRejectsAStagedDirectoryWithoutManifest() {
+        val directory = Files.createTempDirectory("cplus-pkg-invalid")
+        try {
+            val app = directory.resolve("app")
+            val invalid = directory.resolve("invalid")
+            CPlusPackageManager.init(app)
+            Files.createDirectories(invalid)
+            Files.writeString(app.resolve("cplus.toml"), """name = "app"
+[dependencies]
+invalid = { path = "../invalid" }
+""")
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                CPlusPackageManager.install(app, emptyList())
+            }
+            assertTrue(error.message.orEmpty().contains("cplus.toml"), error.message)
+            assertFalse(Files.exists(app.resolve("modules/invalid")))
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun runtimeTestAssertionSpellingsLowerIntoHarnessCalls() {
         val generated = CPlusTranspiler().transpileTests(
             """

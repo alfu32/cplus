@@ -13,7 +13,7 @@ private val sourceExtensions = listOf(".cp", ".c+")
 
 fun main(args: Array<String>) {
     val commandIndex = args.indexOfFirst {
-        it in setOf("help", "--help", "-h", "parse", "lsp", "graph", "transcode", "compile", "run", "test", "new", "version")
+        it in setOf("help", "--help", "-h", "parse", "lsp", "graph", "transcode", "compile", "run", "test", "new", "pkg", "version")
     }
     val globalPrefix = args.take(if (commandIndex >= 0) commandIndex else args.size)
     val verbosity = globalPrefix.firstOrNull { it.matches(Regex("-v[012]")) }?.substring(2)?.toInt() ?: 1
@@ -79,6 +79,7 @@ class CPlusCli(
             "run" -> compile(commandArguments.drop(1), runAfter = true)
             "test" -> test(commandArguments.drop(1))
             "new" -> newProject(commandArguments.drop(1))
+            "pkg" -> packageCommand(commandArguments.drop(1))
             "version" -> {
                 output.append(Version().toString()).append('\n')
                 0
@@ -862,6 +863,41 @@ class CPlusCli(
         return 0
     }
 
+    private fun packageCommand(arguments: List<String>): Int {
+        val action = arguments.firstOrNull() ?: throw IllegalArgumentException("pkg requires init, add, or install")
+        val current = Path("").toAbsolutePath().normalize()
+        return when (action) {
+            "init" -> {
+                if (arguments.size > 2) throw IllegalArgumentException("pkg init accepts at most one directory")
+                val directory = arguments.getOrNull(1)?.let(::Path) ?: current
+                val manifest = CPlusPackageManager.init(directory)
+                output.append("Initialized C-plus package at ").append(manifest.toString()).append('\n')
+                0
+            }
+            "add" -> {
+                if (arguments.size != 2) throw IllegalArgumentException("pkg add requires a dependency reference")
+                val reference = CPlusPackageManager.add(current, arguments[1])
+                output.append("Added dependency ").append(reference.name).append(" = ").append(reference.value).append('\n')
+                0
+            }
+            "install" -> {
+                val installed = CPlusPackageManager.install(current, arguments.drop(1))
+                if (installed.isEmpty()) output.append("No dependencies to install\n")
+                else installed.forEach { output.append("Installed ").append(it.toString()).append('\n') }
+                0
+            }
+            "help", "--help", "-h" -> {
+                output.append("""pkg commands:
+  cpc pkg init [folder]              create only cplus.toml
+  cpc pkg add name=path-or-url       declare a dependency in the current module
+  cpc pkg install [name=path-or-url] stage, validate, resolve, and flatten dependencies
+""".trimIndent()).append('\n')
+                0
+            }
+            else -> throw IllegalArgumentException("unknown pkg command '$action'; use 'cpc pkg help'")
+        }
+    }
+
     private fun writeText(path: Path, text: String) {
         path.toAbsolutePath().parent?.let(Files::createDirectories)
         path.writeText(text, Charsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
@@ -932,6 +968,9 @@ usage:
   cplus [global options] test filename.cp [filename2.cp ...] [test name ...]
   cplus [global options] test [run|compile|transcode] [-o output] filename.cp ... [test name ...]
   cplus [global options] new project_name|.
+  cplus [global options] pkg init [folder]
+  cplus [global options] pkg add name=path-or-url
+  cplus [global options] pkg install [name=path-or-url ...]
 
 global options:
   --stdlib directory    use this standard-library root (also settable with CPLUS_STDLIB)
@@ -952,6 +991,8 @@ defaults:
   frontend: AST-first AUTO by default with legacy compatibility fallback; use --frontend=legacy for rollback or --frontend=tree-sitter for strict AST mode
   test: runs all @test blocks by default; run, compile, and transcode are explicit modes
   new: creates a C-plus project with cplus.toml and src/main.cp
+  pkg init: creates only a package manifest; it does not create source files or directories
+  pkg install: accepts local paths, file: URLs, and HTTP(S) .zip package URLs; dependencies are staged and flattened into modules/
 
 Imports:
   comptime import "stdlib:/containers/dynamic_list.cp"

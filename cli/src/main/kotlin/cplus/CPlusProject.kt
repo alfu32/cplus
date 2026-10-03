@@ -125,8 +125,12 @@ internal data class CPlusProject(
         }
 
         private fun parseDependency(value: String, name: String, manifest: Path, line: Int): DependencySpec? {
-            val path = Regex("(?:path\\s*=\\s*)?\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"").find(value)
+            val path = Regex("path\\s*=\\s*\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"").find(value)
                 ?.groupValues?.get(1)?.let(::unescape)
+                ?: Regex("url\\s*=\\s*\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"").find(value)
+                    ?.let { "modules/$name" }
+                ?: Regex("^\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"$").find(value)
+                    ?.groupValues?.get(1)?.let(::unescape)
                 ?: throw IllegalArgumentException("dependency '$name' in $manifest:$line requires a quoted path")
             return DependencySpec(name, path)
         }
