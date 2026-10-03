@@ -13,7 +13,7 @@ private val sourceExtensions = listOf(".cp", ".c+")
 
 fun main(args: Array<String>) {
     val commandIndex = args.indexOfFirst {
-        it in setOf("help", "--help", "-h", "parse", "lsp", "graph", "transcode", "compile", "run", "test", "new", "pkg", "version")
+        it in setOf("help", "--help", "-h", "parse", "lsp", "graph", "transcode", "compile", "run", "test", "new", "pkg", "toolchain", "version")
     }
     val globalPrefix = args.take(if (commandIndex >= 0) commandIndex else args.size)
     val verbosity = globalPrefix.firstOrNull { it.matches(Regex("-v[012]")) }?.substring(2)?.toInt() ?: 1
@@ -80,6 +80,7 @@ class CPlusCli(
             "test" -> test(commandArguments.drop(1))
             "new" -> newProject(commandArguments.drop(1))
             "pkg" -> packageCommand(commandArguments.drop(1))
+            "toolchain" -> toolchainCommand(commandArguments.drop(1))
             "version" -> {
                 output.append(Version().toString()).append('\n')
                 0
@@ -898,6 +899,40 @@ class CPlusCli(
         }
     }
 
+    private fun toolchainCommand(arguments: List<String>): Int {
+        val action = arguments.firstOrNull() ?: throw IllegalArgumentException("toolchain requires list, install, or update")
+        return when (action) {
+            "list" -> {
+                val scope = arguments.getOrNull(1) ?: "local"
+                if (arguments.size > 2 || scope !in setOf("local", "remote")) {
+                    throw IllegalArgumentException("toolchain list accepts local or remote")
+                }
+                val references = if (scope == "local") CPlusToolchainManager.listLocal() else CPlusToolchainManager.listRemote()
+                references.forEach { output.append(it).append('\n') }
+                0
+            }
+            "install" -> {
+                if (arguments.size != 2) throw IllegalArgumentException("toolchain install requires a triple or triple/kind reference")
+                CPlusToolchainManager.install(arguments[1]).forEach { output.append("Installed ").append(it.toString()).append('\n') }
+                0
+            }
+            "update" -> {
+                if (arguments.size > 2) throw IllegalArgumentException("toolchain update accepts one reference or all")
+                CPlusToolchainManager.update(arguments.getOrNull(1)).forEach { output.append("Updated ").append(it.toString()).append('\n') }
+                0
+            }
+            "help", "--help", "-h" -> {
+                output.append("""toolchain commands:
+  cpc toolchain list [local|remote]   list installed or published references
+  cpc toolchain install <reference>   install one triple or its dev/rt bundles
+  cpc toolchain update [reference|all] update one triple or all published bundles
+""".trimIndent()).append('\n')
+                0
+            }
+            else -> throw IllegalArgumentException("unknown toolchain command '$action'; use 'cpc toolchain help'")
+        }
+    }
+
     private fun writeText(path: Path, text: String) {
         path.toAbsolutePath().parent?.let(Files::createDirectories)
         path.writeText(text, Charsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
@@ -971,6 +1006,9 @@ usage:
   cplus [global options] pkg init [folder]
   cplus [global options] pkg add name=path-or-url
   cplus [global options] pkg install [name=path-or-url ...]
+  cplus [global options] toolchain list [local|remote]
+  cplus [global options] toolchain install triple[/dev|/rt]
+  cplus [global options] toolchain update [triple[/dev|/rt]|all]
 
 global options:
   --stdlib directory    use this standard-library root (also settable with CPLUS_STDLIB)
@@ -993,6 +1031,7 @@ defaults:
   new: creates a C-plus project with cplus.toml and src/main.cp
   pkg init: creates only a package manifest; it does not create source files or directories
   pkg install: accepts local paths, file: URLs, and HTTP(S) .zip package URLs; dependencies are staged and flattened into modules/
+  toolchain: manages user-local dev/rt sysroot bundles published by cplus-sysroots
 
 Imports:
   comptime import "stdlib:/containers/dynamic_list.cp"

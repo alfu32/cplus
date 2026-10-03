@@ -1,0 +1,138 @@
+package cplus
+
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.time.Duration
+import java.util.zip.ZipInputStream
+
+internal object CPlusToolchainManager {
+    private const val triplesUrl = "https://raw.githubusercontent.com/alfu32/cplus-sysroots/master/triples.txt"
+    private const val releaseBase = "https://github.com/alfu32/cplus-sysroots/releases/latest/download/"
+
+    fun listLocal(): List<String> {
+        val root = storageRoot()
+        if (!Files.isDirectory(root)) return emptyList()
+        return Files.walk(root).use { paths ->
+            paths.filter { Files.isRegularFile(it) && it.fileName.toString() == "MANIFEST.json" }
+                .map { root.relativize(it.parent).toString().replace('\\', '/') }
+                .sorted().toList()
+        }
+    }
+
+    fun listRemote(): List<String> = parseReferences(fetchText(triplesUrl))
+
+    fun install(reference: String): List<Path> {
+        val remote = listRemote()
+        val selected = selectReferences(reference, remote)
+        val installed = selected.map { installExact(it) }
+        return installed
+    }
+
+    fun update(reference: String?): List<Path> {
+        val remote = listRemote()
+        val selected = if (reference == null || reference == "all") remote else selectReferences(reference, remote)
+        return selected.map { installExact(it) }
+    }
+
+    fun storageRoot(): Path {
+        System.getProperty("cplus.toolchains")?.takeIf(String::isNotBlank)?.let {
+            return Path.of(it).toAbsolutePath().normalize()
+        }
+        System.getenv("CPLUS_TOOLCHAINS")?.takeIf(String::isNotBlank)?.let {
+            return Path.of(it).toAbsolutePath().normalize()
+        }
+        val home = Path.of(System.getProperty("user.home"))
+        val os = System.getProperty("os.name").lowercase()
+        return if (os.contains("win")) {
+            val localAppData = System.getenv("LOCALAPPDATA")?.takeIf(String::isNotBlank)?.let(Path::of)
+            (localAppData ?: home.resolve("AppData/Local")).resolve("cplus/toolchains")
+        } else if (os.contains("mac") || os.contains("darwin")) {
+            home.resolve("Library/Application Support/cplus/toolchains")
+        } else {
+            val dataHome = System.getenv("XDG_DATA_HOME")?.takeIf(String::isNotBlank)?.let(Path::of)
+            (dataHome ?: home.resolve(".local/share")).resolve("cplus/toolchains")
+        }.toAbsolutePath().normalize()
+    }
+
+    internal fun selectReferences(requested: String, available: List<String>): List<String> {
+        val exact = available.filter { it == requested }
+        if (exact.isNotEmpty()) return exact
+        val base = requested.removeSuffix("/dev").removeSuffix("/rt")
+        val matches = available.filter { it == "$base/dev" || it == "$base/rt" }
+        if (matches.isEmpty()) throw IllegalArgumentException("unknown toolchain reference '$requested'; use 'cpc toolchain list remote'")
+        return matches
+    }
+
+    private fun installExact(reference: String): Path {
+        val target = storageRoot().resolve(reference).normalize()
+        val archive = Files.createTempFile("cplus-toolchain-", ".zip")
+        try {
+            val url = releaseBase + reference + ".zip"
+            val response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build().send(
+                HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(5)).GET().build(),
+                HttpResponse.BodyHandlers.ofFile(archive)
+            )
+            if (response.statusCode() !in 200..299) {
+                throw IllegalArgumentException("toolchain download failed (" + response.statusCode() + "): " + url)
+            }
+            Files.createDirectories(storageRoot())
+            val staging = Files.createTempDirectory(storageRoot(), ".staging-")
+            try {
+                unzip(archive, staging)
+                val manifest = staging.resolve("MANIFEST.json")
+                if (!Files.isRegularFile(manifest)) throw IllegalArgumentException("toolchain archive has no MANIFEST.json: " + reference)
+                val declared = Files.readString(manifest)
+                if (!declared.contains("\"reference\": \"" + reference + "\"")) {
+                    throw IllegalArgumentException("toolchain manifest reference does not match: " + reference)
+                }
+                deleteTree(target)
+                Files.createDirectories(target.parent)
+                Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE)
+                return target
+            } finally {
+                deleteTree(staging)
+            }
+        } finally {
+            Files.deleteIfExists(archive)
+        }
+    }
+
+    internal fun parseReferences(text: String): List<String> = text.lineSequence()
+        .map(String::trim)
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+        .filter { it.endsWith("/dev") || it.endsWith("/rt") }
+        .distinct().toList()
+
+    private fun fetchText(url: String): String {
+        val response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build().send(
+            HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(1)).GET().build(),
+            HttpResponse.BodyHandlers.ofString()
+        )
+        if (response.statusCode() !in 200..299) throw IllegalArgumentException("remote toolchain catalog failed (" + response.statusCode() + ")")
+        return response.body()
+    }
+
+    private fun unzip(archive: Path, destination: Path) {
+        ZipInputStream(Files.newInputStream(archive)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                val target = destination.resolve(entry.name).normalize()
+                if (!target.startsWith(destination)) throw IllegalArgumentException("unsafe path in toolchain archive: " + entry.name)
+                if (entry.isDirectory) Files.createDirectories(target) else {
+                    target.parent?.let(Files::createDirectories)
+                    Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING)
+                }
+            }
+        }
+    }
+
+    private fun deleteTree(root: Path) {
+        if (!Files.exists(root)) return
+        Files.walk(root).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+    }
+}
