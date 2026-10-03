@@ -1007,8 +1007,8 @@ usage:
   cplus [global options] pkg add name=path-or-url
   cplus [global options] pkg install [name=path-or-url ...]
   cplus [global options] toolchain list [local|remote]
-  cplus [global options] toolchain install triple[/dev|/rt]
-  cplus [global options] toolchain update [triple[/dev|/rt]|all]
+  cplus [global options] toolchain install triple[-dev|-rt]
+  cplus [global options] toolchain update [triple[-dev|-rt]|all]
 
 global options:
   --stdlib directory    use this standard-library root (also settable with CPLUS_STDLIB)

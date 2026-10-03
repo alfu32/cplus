@@ -11,7 +11,7 @@ selection, system compiler installation, or release publication itself.
 
 | ID | Status | Exit condition / current result |
 | --- | --- | --- |
-| TC-1 | done | Define upstream `triples.txt`, `/dev` and `/rt` references, and latest-release asset convention |
+| TC-1 | done | Define release `triples.txt`, `-dev` and `-rt` references, and latest-release asset convention |
 | TC-2 | done | Add user-local platform-aware storage with `CPLUS_TOOLCHAINS` override |
 | TC-3 | done | Implement `toolchain list local` from installed `MANIFEST.json` files |
 | TC-4 | done | Implement `toolchain list remote` from the upstream catalog |
@@ -20,10 +20,11 @@ selection, system compiler installation, or release publication itself.
 | TC-7 | done | Implement `toolchain update [reference|all]` |
 | TC-8 | done | Add offline unit tests for catalog parsing, selection, and local listing |
 | TC-9 | done | Document command semantics, storage, invariants, and failure behavior |
-| TC-10 | open | Verify installation against the first published sysroots release |
+| TC-10 | done | Verify installation against the first published sysroots release |
 | TC-11 | open | Verify compiler `--sysroot` discovery consumes installed bundles |
-| TC-12 | open | Add checksum/signature verification and release pinning |
-| TC-13 | open | Add remove/repair/garbage-collection lifecycle commands |
+| TC-12 | done | Verify release JSON metadata and published SHA-256 checksums |
+| TC-13 | open | Add signature verification and trusted release pinning |
+| TC-14 | open | Add remove/repair/garbage-collection lifecycle commands |
 
 ## Validation plan
 
@@ -43,10 +44,11 @@ After `cplus-sysroots` publishes its first release:
 2. Install one Linux, macOS, and Windows reference where supported.
 3. Confirm `list local` reports the installed references.
 4. Run `update <base-triple>` and `update all`.
-5. Verify the extracted manifest, sysroot paths, and compiler integration.
+5. Verify the extracted manifest, sysroot paths, checksums, and compiler integration.
 
 ### Known current limitation
 
-The release repository currently exposes `triples.txt` and the packaging
-workflow, but no latest release assets. Network installation therefore cannot
-be accepted as complete until the first release is published.
+Release `0.1.1` is now published. The Linux x86_64 runtime bundle was
+installed successfully; release catalog listing, metadata validation, SHA-256
+verification, archive extraction, and local discovery all passed. Compiler
+sysroot consumption remains the next integration gate.

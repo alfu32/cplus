@@ -7,11 +7,12 @@ import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.time.Duration
 import java.util.zip.ZipInputStream
 
 internal object CPlusToolchainManager {
-    private const val triplesUrl = "https://raw.githubusercontent.com/alfu32/cplus-sysroots/master/triples.txt"
+    private const val triplesUrl = "https://github.com/alfu32/cplus-sysroots/releases/latest/download/triples.txt"
     private const val releaseBase = "https://github.com/alfu32/cplus-sysroots/releases/latest/download/"
 
     fun listLocal(): List<String> {
@@ -62,8 +63,8 @@ internal object CPlusToolchainManager {
     internal fun selectReferences(requested: String, available: List<String>): List<String> {
         val exact = available.filter { it == requested }
         if (exact.isNotEmpty()) return exact
-        val base = requested.removeSuffix("/dev").removeSuffix("/rt")
-        val matches = available.filter { it == "$base/dev" || it == "$base/rt" }
+        val base = requested.removeSuffix("-dev").removeSuffix("-rt")
+        val matches = available.filter { it == "$base-dev" || it == "$base-rt" }
         if (matches.isEmpty()) throw IllegalArgumentException("unknown toolchain reference '$requested'; use 'cpc toolchain list remote'")
         return matches
     }
@@ -73,12 +74,23 @@ internal object CPlusToolchainManager {
         val archive = Files.createTempFile("cplus-toolchain-", ".zip")
         try {
             val url = releaseBase + reference + ".zip"
-            val response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build().send(
+            val metadata = fetchText(releaseBase + reference + ".json")
+            if (!metadata.contains("\"reference\": \"" + reference + "\"")) {
+                throw IllegalArgumentException("toolchain metadata reference does not match: " + reference)
+            }
+            val response = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(Duration.ofSeconds(20)).build().send(
                 HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(5)).GET().build(),
                 HttpResponse.BodyHandlers.ofFile(archive)
             )
             if (response.statusCode() !in 200..299) {
                 throw IllegalArgumentException("toolchain download failed (" + response.statusCode() + "): " + url)
+            }
+            val expectedDigest = fetchText(url + ".sha256").trim().split(Regex("\\s+"), limit = 2).firstOrNull()
+                ?.lowercase()
+                ?: throw IllegalArgumentException("toolchain checksum is empty: " + reference)
+            val actualDigest = sha256(archive)
+            if (actualDigest != expectedDigest) {
+                throw IllegalArgumentException("toolchain checksum mismatch: " + reference)
             }
             Files.createDirectories(storageRoot())
             val staging = Files.createTempDirectory(storageRoot(), ".staging-")
@@ -105,16 +117,29 @@ internal object CPlusToolchainManager {
     internal fun parseReferences(text: String): List<String> = text.lineSequence()
         .map(String::trim)
         .filter { it.isNotEmpty() && !it.startsWith("#") }
-        .filter { it.endsWith("/dev") || it.endsWith("/rt") }
+        .filter { it.endsWith("-dev") || it.endsWith("-rt") }
         .distinct().toList()
 
     private fun fetchText(url: String): String {
-        val response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build().send(
+        val response = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(Duration.ofSeconds(20)).build().send(
             HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(1)).GET().build(),
             HttpResponse.BodyHandlers.ofString()
         )
         if (response.statusCode() !in 200..299) throw IllegalArgumentException("remote toolchain catalog failed (" + response.statusCode() + ")")
         return response.body()
+    }
+
+    private fun sha256(path: Path): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        Files.newInputStream(path).use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun unzip(archive: Path, destination: Path) {

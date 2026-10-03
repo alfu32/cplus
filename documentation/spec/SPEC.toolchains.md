@@ -1,6 +1,6 @@
 # C-plus toolchain bundle management
 
-Status: **initial command implementation complete; remote publication is pending**
+Status: **initial command implementation validated against release 0.1.1**
 
 ## Goal
 
@@ -16,17 +16,22 @@ and runtime files that a configured compiler can consume.
 
 ## Upstream contract
 
-The catalog is fetched from:
+The release catalog is fetched from:
 
 ```text
-https://raw.githubusercontent.com/alfu32/cplus-sysroots/master/triples.txt
+https://github.com/alfu32/cplus-sysroots/releases/latest/download/triples.txt
 ```
+
+The source repository also maintains the catalog at
+`https://raw.githubusercontent.com/alfu32/cplus-sysroots/master/triples.txt`;
+the release asset is used by the CLI so the catalog and bundles come from the
+same published release.
 
 Each non-comment catalog line has this form:
 
 ```text
-<target-triple>/dev
-<target-triple>/rt
+<target-triple>-dev
+<target-triple>-rt
 ```
 
 `dev` contains development files. `rt` contains files needed by dynamically
@@ -39,8 +44,8 @@ The latest release download convention is:
 https://github.com/alfu32/cplus-sysroots/releases/latest/download/<reference>.zip
 ```
 
-The implementation validates the extracted `MANIFEST.json` and its declared
-reference before accepting a bundle.
+The implementation validates the release JSON metadata, the published SHA-256
+asset, and the extracted `MANIFEST.json` before accepting a bundle.
 
 ## CLI contract
 
@@ -55,12 +60,12 @@ Examples:
 ```text
 cpc toolchain list remote
 cpc toolchain install x86_64-unknown-linux-gnu
-cpc toolchain install aarch64-apple-darwin/dev
+cpc toolchain install arm64-apple-darwin-dev
 cpc toolchain update                         # all published references
 cpc toolchain update x86_64-w64-mingw32      # both dev and rt
 ```
 
-A base triple selects both `/dev` and `/rt`. An exact `/dev` or `/rt`
+A base triple selects both `-dev` and `-rt`. An exact `-dev` or `-rt`
 reference selects only that bundle. `list local` prints references whose local
 bundle contains a validated `MANIFEST.json`; `list remote` prints the upstream
 catalog.
@@ -81,19 +86,21 @@ The default storage root is user-local:
 Bundles are stored as:
 
 ```text
-<storage-root>/<target-triple>/dev/
-<storage-root>/<target-triple>/rt/
+<storage-root>/<target-triple>-dev/
+<storage-root>/<target-triple>-rt/
 ```
 
 ## Installation algorithm and invariants
 
 1. Fetch and parse the upstream catalog.
 2. Expand a base triple into its published `dev` and `rt` references.
-3. Download each reference's ZIP into a temporary file.
-4. Extract into a temporary directory with ZIP-slip protection.
-5. Require `MANIFEST.json` and verify its `reference` field.
-6. Replace the selected local bundle only after validation succeeds.
-7. Remove temporary files on success and failure.
+3. Download the release JSON metadata and verify its reference.
+4. Download the ZIP and its `.sha256` asset into temporary files.
+5. Verify the ZIP digest, then extract it into a temporary directory with
+   ZIP-slip protection.
+6. Require `MANIFEST.json` and verify its `reference` field.
+7. Replace the selected local bundle only after validation succeeds.
+8. Remove temporary files on success and failure.
 
 No bundle is accepted merely because its download returned HTTP 200. The
 catalog prevents arbitrary references from being requested, and the manifest
@@ -109,7 +116,6 @@ catalog or release.
 
 ## Future extensions
 
-- checksum verification against the published `.sha256` asset;
 - signature verification and trusted release pinning;
 - release/version selection instead of only `latest`;
 - explicit remove, repair, and garbage-collection commands;
