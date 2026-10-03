@@ -17,4 +17,4 @@ if [[ -z "$JAVA_BIN" || ! -x "$JAVA_BIN" ]]; then
     echo "c-plus: Java runtime not found; set CPLUS_JAVA or JAVA_HOME" >&2
     exit 127
 fi
-exec "$JAVA_BIN" -Dcplus.home="$SCRIPT_DIR" -jar "$SCRIPT_DIR/c-plus.jar" "$@"
+exec "$JAVA_BIN" --enable-native-access=ALL-UNNAMED -Dcplus.home="$SCRIPT_DIR" -jar "$SCRIPT_DIR/c-plus.jar" "$@"

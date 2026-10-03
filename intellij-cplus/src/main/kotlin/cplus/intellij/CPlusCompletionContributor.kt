@@ -17,6 +17,17 @@ class CPlusCompletionContributor : CompletionContributor() {
             ) {
                 val text = parameters.editor.document.text
                 val prefix = text.substring(0, parameters.editor.caretModel.offset)
+                if (Regex("(?s).*\\b(?:comptime\\s+)?(?:@import|import)\\s*\\\"[^\\\"]*$").matches(prefix)) {
+                    CPlusStdlibIndex.imports(parameters.editor.project ?: return@addCompletions).forEach {
+                        result.addElement(LookupElementBuilder.create(it).withTypeText("C-plus standard library module"))
+                    }
+                    return@addCompletions
+                }
+                parameters.editor.project?.let { project ->
+                    CPlusStdlibIndex.symbols(project).forEach { symbol ->
+                        result.addElement(LookupElementBuilder.create(symbol.name).withTypeText(symbol.detail))
+                    }
+                }
                 val member = memberContext(text, prefix)
                 if (member != null) {
                     val parserSymbols = parameters.originalFile.virtualFile?.path

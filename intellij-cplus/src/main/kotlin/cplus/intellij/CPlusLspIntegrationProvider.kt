@@ -75,7 +75,15 @@ private class CPlusLspServerDescriptor(project: Project) : ProjectWideLspClientD
 
     override fun createCommandLine(): GeneralCommandLine {
         val configured = CPlusSettings.getInstance().current().languageServerCommand.trim()
-        val arguments = CPlusCommand.execution(configured, project.basePath, listOf("lsp"))
+        val configuredArguments = CPlusCommand.execution(configured, project.basePath)
+        // The setting is allowed to contain `cpc lsp` for compatibility, but
+        // the provider owns the protocol subcommand.  Do not produce
+        // `cpc lsp lsp` when an older settings file is loaded.
+        val arguments = if (configuredArguments.lastOrNull() == "lsp") {
+            configuredArguments
+        } else {
+            configuredArguments + "lsp"
+        }
         logger.info("C-plus LSP command: ${arguments.joinToString(" ")}")
         val commandLine = GeneralCommandLine(arguments)
         project.basePath?.let { commandLine.withWorkDirectory(it) }
@@ -133,7 +141,8 @@ internal object CPlusLspCommand {
     }
 
     fun arguments(command: String): List<String> {
-        return parse(command) + "lsp"
+        val parsed = parse(command)
+        return if (parsed.lastOrNull() == "lsp") parsed else parsed + "lsp"
     }
 
     fun parse(command: String): List<String> {

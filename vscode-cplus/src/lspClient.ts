@@ -81,7 +81,9 @@ export class CPlusLspClient implements vscode.Disposable {
             ? this.command
             : resolveLanguageServerCommand({ configured: this.command });
         if (!command.length) throw new Error("cplus.languageServerCommand is empty");
-        const child = childProcess.spawn(command[0], [...command.slice(1), ...this.arguments_, "lsp"], {
+        const serverArguments = [...command.slice(1), ...this.arguments_];
+        if (serverArguments[serverArguments.length - 1] !== "lsp") serverArguments.push("lsp");
+        const child = childProcess.spawn(command[0], serverArguments, {
             cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
             env: commandEnvironment(this.environment),
             stdio: "pipe"

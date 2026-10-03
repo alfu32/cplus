@@ -1028,6 +1028,56 @@ class TranspilerTest {
     }
 
     @Test
+    fun projectManifestResolvesNamedLocalDependenciesAndRejectsCycles() {
+        val directory = Files.createTempDirectory("cplus-local-dependencies")
+        try {
+            val app = directory.resolve("app")
+            val geometry = directory.resolve("geometry")
+            Files.createDirectories(app.resolve("src"))
+            Files.createDirectories(geometry.resolve("modules"))
+            Files.writeString(
+                app.resolve("cplus.toml"),
+                """name = "app"
+                    |source = "src"
+                    |stdlib = "auto"
+                    |module-paths = ["src", "modules"]
+                    |
+                    |[dependencies]
+                    |geometry = { path = "../geometry", version = "0.1.0" }
+                """.trimMargin()
+            )
+            Files.writeString(
+                geometry.resolve("cplus.toml"),
+                """name = "geometry"
+                    |source = "src"
+                    |module-paths = ["modules"]
+                """.trimMargin()
+            )
+            val project = CPlusProject.find(app.resolve("src/main.cp"))
+                ?: error("expected project")
+            assertEquals("app", project.name)
+            assertTrue(project.moduleRoots.contains(geometry.resolve("modules").toAbsolutePath().normalize()))
+
+            Files.writeString(
+                geometry.resolve("cplus.toml"),
+                """name = "geometry"
+                    |source = "src"
+                    |module-paths = ["modules"]
+                    |
+                    |[dependencies]
+                    |app = { path = "../app" }
+                """.trimMargin()
+            )
+            val cycleError = assertThrows(IllegalArgumentException::class.java) {
+                CPlusProject.find(app.resolve("src/main.cp"))
+            }
+            assertTrue(cycleError.message.orEmpty().contains("dependency cycle"), cycleError.message)
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun comptimeFlagsAreCollectedDeduplicatedAndPassedToTcc() {
         val directory = Files.createTempDirectory("cplus-comptime-flags")
         try {

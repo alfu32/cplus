@@ -10,6 +10,7 @@ import { decodeImportGraph } from "./importGraph";
 import { CPlusLspClient, semanticTokenTypes, semanticTokenModifiers } from "./lspClient";
 import { resolveLanguageServerCommand } from "./lspDiscovery";
 import { commandEnvironment } from "./environment";
+import { standardLibraryImports, standardLibrarySymbols } from "./stdlibIndex";
 import {
     builtinTestMacros,
     cKeywords,
@@ -79,6 +80,17 @@ class CPlusCompletionProvider implements vscode.CompletionItemProvider {
             item.insertText = insertText;
             items.push(item);
         };
+
+        const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+        if (/\b(?:comptime\s+)?(?:@import|import)\s*"[^"]*$/.test(line)) {
+            for (const module of standardLibraryImports(workspaceRoot)) {
+                addItem(module, vscode.CompletionItemKind.File, "C-plus standard library module");
+            }
+            return new vscode.CompletionList(items, false);
+        }
+        for (const symbol of standardLibrarySymbols(workspaceRoot)) {
+            addItem(symbol, vscode.CompletionItemKind.Function, "C-plus standard library");
+        }
 
         const context = memberContext(index, line);
         if (context) {

@@ -1,3 +1,5 @@
+declare const process: { env: Record<string, string | undefined> };
+
 declare module "node:child_process" {
     export interface ExecFileChildProcess {
         kill(): boolean;
@@ -18,6 +20,13 @@ declare module "node:fs/promises" {
     export function unlink(path: string): Promise<void>;
 }
 
+declare module "node:fs" {
+    export function existsSync(path: string): boolean;
+    export function readFileSync(path: string, encoding: "utf8"): string;
+    export function readdirSync(path: string): string[];
+    export function statSync(path: string): { isDirectory(): boolean };
+}
+
 declare module "node:os" {
     export function tmpdir(): string;
 }
@@ -31,4 +40,6 @@ declare module "node:timers" {
 declare module "node:path" {
     export function basename(path: string): string;
     export function join(...parts: string[]): string;
+    export function normalize(path: string): string;
+    export function resolve(...parts: string[]): string;
 }

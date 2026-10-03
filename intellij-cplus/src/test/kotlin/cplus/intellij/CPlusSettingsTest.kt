@@ -26,7 +26,7 @@ class CPlusSettingsTest {
         assertEquals("cpc test", settings.current().testProgram)
         assertEquals("cpc parse", settings.current().parserCommand)
         assertEquals("cpc graph", settings.current().importGraphCommand)
-        assertEquals("cpc lsp", settings.current().languageServerCommand)
+        assertEquals("cpc", settings.current().languageServerCommand)
     }
 
     @Test
@@ -95,7 +95,7 @@ class CPlusSettingsTest {
 
         assertEquals("cpc test", settings.current().testProgram)
         assertEquals("cpc parse", settings.current().parserCommand)
-        assertEquals("cpc lsp", settings.current().languageServerCommand)
+        assertEquals("cpc", settings.current().languageServerCommand)
     }
 
     @Test
@@ -104,6 +104,12 @@ class CPlusSettingsTest {
 
         assertEquals("cpc test", CPlusTestRunLineMarkerContributor.commandText(settings, CPlusTestFixture("fixture", 0, 1)))
         assertEquals("cpc run", CPlusTestRunLineMarkerContributor.commandText(settings, null))
+    }
+
+    @Test
+    fun languageServerCommandDoesNotDuplicateTheProtocolSubcommand() {
+        assertEquals(listOf("cpc", "lsp"), CPlusLspCommand.arguments("cpc"))
+        assertEquals(listOf("cpc", "lsp"), CPlusLspCommand.arguments("cpc lsp"))
     }
 
     @Test

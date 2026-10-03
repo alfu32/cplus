@@ -27,7 +27,9 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
         var testProgram: String = "cpc test",
         var parserCommand: String = "cpc parse",
         var importGraphCommand: String = "cpc graph",
-        var languageServerCommand: String = "cpc lsp",
+        // The provider appends the protocol subcommand.  Existing `cpc lsp`
+        // values are accepted and normalized by migrateLegacyDefaults().
+        var languageServerCommand: String = "cpc",
         var environment: String = ""
     )
 
@@ -62,9 +64,11 @@ class CPlusSettings : PersistentStateComponent<CPlusSettings.State> {
     )
 
     private fun String.replaceLegacy(subcommand: String): String =
-        if (trim().split(Regex("\\s+")).filter(String::isNotEmpty) == listOf("cplus", subcommand)) {
-            "cpc $subcommand"
-        } else this
+        when (trim().split(Regex("\\s+")).filter(String::isNotEmpty)) {
+            listOf("cplus", subcommand) -> if (subcommand == "lsp") "cpc" else "cpc $subcommand"
+            listOf("cpc", subcommand) -> if (subcommand == "lsp") "cpc" else this
+            else -> this
+        }
 }
 
 class CPlusSettingsConfigurable : Configurable {

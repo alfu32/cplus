@@ -42,35 +42,93 @@ internal data class CPlusProject(
             return null
         }
 
-        private fun read(root: Path, manifest: Path): CPlusProject {
+        private data class DependencySpec(val name: String, val path: String)
+
+        private fun read(root: Path, manifest: Path, resolving: List<Path> = emptyList()): CPlusProject {
+            val normalizedRoot = root.toAbsolutePath().normalize()
+            val manifestIdentity = runCatching { manifest.toAbsolutePath().normalize().toRealPath() }
+                .getOrDefault(manifest.toAbsolutePath().normalize())
+            if (manifestIdentity in resolving) {
+                val cycle = (resolving + listOf(manifestIdentity)).joinToString(" -> ")
+                throw IllegalArgumentException("cplus dependency cycle: $cycle")
+            }
             var name = root.fileName?.toString() ?: "cplus-project"
             var sourceDirectory = "src"
             var stdlibDirectory: String? = null
             var moduleDirectories = listOf("src", "modules")
+            val dependencies = mutableListOf<DependencySpec>()
+            var section = ""
 
             Files.readAllLines(manifest).forEachIndexed { lineIndex, originalLine ->
                 val line = stripComment(originalLine).trim()
-                if (line.isEmpty() || line.startsWith("[") || '=' !in line) return@forEachIndexed
+                if (line.isEmpty()) return@forEachIndexed
+                if (line.startsWith("[") && line.endsWith("]")) {
+                    section = line.substring(1, line.length - 1).trim()
+                    return@forEachIndexed
+                }
+                if ('=' !in line) return@forEachIndexed
                 val key = line.substringBefore('=').trim()
                 val value = line.substringAfter('=').trim()
+                if (section == "dependencies") {
+                    parseDependency(value, key, manifest, lineIndex + 1)?.let(dependencies::add)
+                    return@forEachIndexed
+                }
                 when (key) {
                     "name" -> name = parseString(value, manifest, lineIndex + 1)
                     "source" -> sourceDirectory = parseString(value, manifest, lineIndex + 1)
-                    "stdlib" -> parseString(value, manifest, lineIndex + 1).takeIf(String::isNotBlank)
+                    "stdlib" -> parseString(value, manifest, lineIndex + 1)
+                        .takeIf { it.isNotBlank() && it != "auto" }
                         ?.let { stdlibDirectory = it }
                     "module-paths" -> moduleDirectories = arrayValue.findAll(value)
                         .map { unescape(it.groupValues[1]) }.toList()
+                    "dependencies" -> {
+                        // Preserve the old empty-array form.  A string array is
+                        // accepted as a concise local-path dependency format.
+                        Regex("\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"").findAll(value).forEachIndexed { dependencyIndex, match ->
+                            dependencies += DependencySpec("dependency-$dependencyIndex", unescape(match.groupValues[1]))
+                        }
+                    }
                 }
             }
 
             fun resolve(value: String) = root.resolve(value).normalize().toAbsolutePath()
+            val duplicateDependencies = dependencies.groupBy { it.name }.filterValues { it.size > 1 }.keys
+            if (duplicateDependencies.isNotEmpty()) {
+                throw IllegalArgumentException("duplicate cplus dependencies: ${duplicateDependencies.joinToString()}")
+            }
+            val ownModuleRoots = moduleDirectories.map(::resolve).distinct()
+            val dependencyModuleRoots = dependencies.flatMap { dependency ->
+                val dependencyRoot = resolve(dependency.path)
+                val dependencyManifest = dependencyRoot.resolve("cplus.toml")
+                val dependencyManifestIdentity = runCatching { dependencyManifest.toAbsolutePath().normalize().toRealPath() }
+                    .getOrDefault(dependencyManifest.toAbsolutePath().normalize())
+                if (dependencyManifestIdentity == manifestIdentity || dependencyManifestIdentity in resolving) {
+                    val cycle = (resolving + listOf(manifestIdentity, dependencyManifestIdentity)).joinToString(" -> ")
+                    throw IllegalArgumentException("cplus dependency cycle: $cycle")
+                }
+                if (!Files.isRegularFile(dependencyManifest)) {
+                    throw IllegalArgumentException("dependency '${dependency.name}' has no cplus.toml: $dependencyRoot")
+                }
+                val child = read(dependencyRoot, dependencyManifest, resolving + listOf(manifestIdentity))
+                if (child.name != dependency.name && !dependency.name.startsWith("dependency-")) {
+                    throw IllegalArgumentException("dependency '${dependency.name}' has manifest name '${child.name}'")
+                }
+                listOf(child.sourceRoot) + child.moduleRoots
+            }
             return CPlusProject(
-                root.toAbsolutePath().normalize(),
+                normalizedRoot,
                 name,
                 resolve(sourceDirectory),
                 stdlibDirectory?.let(::resolve),
-                moduleDirectories.map(::resolve).distinct()
+                (ownModuleRoots + dependencyModuleRoots).distinct()
             )
+        }
+
+        private fun parseDependency(value: String, name: String, manifest: Path, line: Int): DependencySpec? {
+            val path = Regex("(?:path\\s*=\\s*)?\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"").find(value)
+                ?.groupValues?.get(1)?.let(::unescape)
+                ?: throw IllegalArgumentException("dependency '$name' in $manifest:$line requires a quoted path")
+            return DependencySpec(name, path)
         }
 
         private fun parseString(value: String, manifest: Path, line: Int): String =
@@ -142,7 +200,7 @@ internal object CPlusProjectScaffolder {
         val manifest = """name = "${escape(name)}"
 version = "0.1.0"
 source = "src"
-stdlib = ""
+stdlib = "auto"
 module-paths = ["src", "modules"]
 dependencies = []
 """
