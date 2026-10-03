@@ -22,6 +22,10 @@
 
 ## Package command implementation
 
+The package-management goal is considered complete for the initial local and
+direct-download milestone when PKG-1 through PKG-6 are done. PKG-7 and later
+are a new follow-up project, not an implicit part of the current implementation.
+
 | ID | Status | Work / exit condition |
 | --- | --- | --- |
 | PKG-1 | done | Add `cpc pkg init [folder]` with manifest-only output |
@@ -30,7 +34,25 @@
 | PKG-4 | done | Resolve transitive dependencies, detect cycles, and flatten into `modules/` |
 | PKG-5 | done | Move staged packages only after complete validation and refuse overwrites |
 | PKG-6 | done | Add CLI regression tests and package command documentation |
-| PKG-7 | open | Add registry discovery, semver solving, lockfiles, and safe upgrades |
+| PKG-7 | open | Define registry discovery and package publishing protocol |
+| PKG-8 | open | Add semver constraints, version conflict handling, and deterministic selection |
+| PKG-9 | open | Add lockfile format, checksums, and reproducible installations |
+| PKG-10 | open | Add update, remove, upgrade, and existing-module replacement policy |
+| PKG-11 | open | Add non-ZIP archive support and remote-download integration tests |
+| PKG-12 | open | Add package-manager support to IntelliJ and VS Code workflows |
+
+## Current status summary
+
+| Area | Status | Current state |
+| --- | --- | --- |
+| Manifest-only initialization | done | `cpc pkg init [folder]` creates only `cplus.toml` |
+| Dependency declaration | done | `cpc pkg add` writes path or URL dependency entries |
+| Local recursive installation | done | Dependencies are staged, validated, recursively resolved, and flattened |
+| Direct ZIP downloads | done | HTTP(S) `.zip` and `file:` references are supported |
+| Install safety | done | Cycles, missing manifests, unsafe ZIP paths, name mismatches, and collisions fail before publication |
+| CLI regression coverage | done | Init, add, transitive flattening, and invalid-package tests pass |
+| Registry and version solving | open | No registry, semver solver, lockfile, or checksums yet |
+| Editor/package workflow | open | Editors consume installed modules but do not manage packages yet |
 
 ## Explicit non-goals for this iteration
 
