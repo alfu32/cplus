@@ -62,6 +62,29 @@ val nativeHostArch = when (System.getProperty("os.arch").lowercase()) {
     "aarch64", "arm64" -> "aarch64"
     else -> error("Unsupported JNI parser architecture: ${System.getProperty("os.arch")}")
 }
+
+private fun executableAvailable(name: String): Boolean {
+    return try {
+        val process = ProcessBuilder(name, "--version").redirectErrorStream(true).start()
+        try {
+            process.waitFor() == 0
+        } finally {
+            process.destroyForcibly()
+        }
+    } catch (_: Exception) {
+        false
+    }
+}
+
+// Windows development environments commonly provide MSYS2/Clang but no
+// Visual Studio generator or make.exe. Ninja is portable and is also present
+// on the hosted Windows runner, so use it when available instead of allowing
+// CMake to select an unusable implicit generator.
+val nativeCmakeGeneratorArgs = if (nativeHostOs == "windows" && executableAvailable("ninja")) {
+    listOf("-G", "Ninja")
+} else {
+    emptyList()
+}
 tasks.generateGrammarFiles.configure {
     doLast {
         val cmakeFile = cmakeListsFile.get().asFile
@@ -81,12 +104,13 @@ val configureNativeParser = tasks.register<Exec>("configureNativeParser") {
     group = "build"
     description = "Configures the local JNI language shim build."
     dependsOn(tasks.generateGrammarFiles)
-    commandLine(buildList {
-        addAll(listOf(
-            "cmake", "-S", generatedGrammarSrc.get().asFile.parentFile.absolutePath,
-            "-B", layout.buildDirectory.dir("native-parser-cmake").get().asFile.absolutePath,
-            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=${nativeOutputDirectory.get().asFile.absolutePath}"
-        ))
+        commandLine(buildList {
+            addAll(listOf(
+                "cmake", "-S", generatedGrammarSrc.get().asFile.parentFile.absolutePath,
+                "-B", layout.buildDirectory.dir("native-parser-cmake").get().asFile.absolutePath,
+                "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=${nativeOutputDirectory.get().asFile.absolutePath}"
+            ))
+            addAll(nativeCmakeGeneratorArgs)
         if (nativeHostOs == "windows") {
             add("-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE=${nativeOutputDirectory.get().asFile.absolutePath}")
         }
@@ -101,6 +125,17 @@ val buildNativeParser = tasks.register<Exec>("buildNativeParser") {
     commandLine("cmake", "--build", layout.buildDirectory.dir("native-parser-cmake").get().asFile.absolutePath, "--config", "Release")
     inputs.files(generatedGrammarSrc.file("jni/binding.c"), grammarDirectory.file("src/parser.c"))
     outputs.dir(nativeOutputDirectory)
+    outputs.upToDateWhen {
+        val outputRoot = nativeOutputDirectory.get().asFile
+        outputRoot.walkTopDown().any {
+            it.isFile && it.name in setOf(
+                "libktreesitter-c.so",
+                "libktreesitter-c.dylib",
+                "ktreesitter-c.dll",
+                "libktreesitter-c.dll"
+            )
+        }
+    }
 }
 
 val installHostParserLibrary = tasks.register("installHostParserLibrary") {
@@ -258,7 +293,7 @@ val buildHostKTreeSitter = tasks.register("buildHostKTreeSitter") {
             listOf(
                 "cmake", "-S", cmakeRoot.absolutePath, "-B", kTreeSitterBuild.get().asFile.absolutePath,
                 "-DCMAKE_BUILD_TYPE=Release"
-            )
+            ) + nativeCmakeGeneratorArgs
         )
         run(
             listOf(

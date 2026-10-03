@@ -1,23 +1,13 @@
 $ErrorActionPreference = 'Stop'
-
-$project = 'C:\Users\alfu64\Development\cplus'
-Set-Location $project
-
-Write-Output "host=$(hostname)"
-Write-Output "location=$(Get-Location)"
-Write-Output "timestamp=$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')"
-Write-Output '--- git status ---'
+Set-Location 'C:\Users\alfu64\Development\cplus'
+Write-Output 'validation checkout: cplus'
 git status --short
-Write-Output '--- git head ---'
 git log -1 --oneline
-Write-Output '--- toolchain ---'
-java -version
-clang --version | Select-Object -First 3
-Write-Output '--- MinGW UCRT64 ---'
-where.exe gcc
-gcc --version | Select-Object -First 3
-Write-Output '--- parser and CLI tests ---'
-Set-Item Env:CC gcc
-Set-Item Env:TCC gcc
-Set-Item Env:CPLUS_TEST_COMPILER gcc
-.\\gradlew.bat --no-daemon :parser-tree-sitter:jvmTest :cli:test --console=plain
+Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('cmake.exe','clang.exe') -and $_.CommandLine -like '*cplus*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+foreach ($path in @('parser-tree-sitter/build/native-ktreesitter-cmake', 'parser-tree-sitter/build/native-parser-cmake')) {
+    if (Test-Path $path) { Remove-Item -Recurse -Force $path }
+}
+Write-Output ('cmake=' + ((Get-Command cmake).Source))
+Write-Output ('clang=' + ((Get-Command clang).Source))
+Write-Output ('ninja=' + ((Get-Command ninja -ErrorAction SilentlyContinue).Source))
+& .\gradlew.bat --offline --no-daemon :parser-tree-sitter:jvmTest :parser-tree-sitter:testTreeSitterGrammar --max-workers=1 --console=plain
