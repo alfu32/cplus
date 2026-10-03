@@ -50,4 +50,22 @@ class CPlusToolchainManagerTest {
             Files.walk(root).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
     }
+
+    @Test
+    fun resolvesInstalledDevelopmentSysrootFromCanonicalAndCPlusTargets() {
+        val root = Files.createTempDirectory("cplus-toolchain-sysroot")
+        val previous = System.getProperty("cplus.toolchains")
+        try {
+            System.setProperty("cplus.toolchains", root.toString())
+            val sysroot = root.resolve("x86_64-unknown-linux-gnu-dev")
+            Files.createDirectories(sysroot)
+            Files.writeString(sysroot.resolve("MANIFEST.json"), "{\"reference\": \"x86_64-unknown-linux-gnu-dev\"}")
+            assertEquals(sysroot, CPlusToolchainManager.developmentSysrootFor("x86_64-unknown-linux-gnu"))
+            assertEquals(sysroot, CPlusToolchainManager.developmentSysrootFor("linux-x86_64"))
+            assertEquals("arm64-apple-darwin", CPlusToolchainManager.canonicalTriple("macos-aarch64"))
+        } finally {
+            if (previous == null) System.clearProperty("cplus.toolchains") else System.setProperty("cplus.toolchains", previous)
+            Files.walk(root).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
 }

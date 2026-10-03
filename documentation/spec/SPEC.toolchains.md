@@ -114,10 +114,25 @@ manifest, or manifest/reference mismatch. `list local` remains useful offline;
 `list remote`, `install`, and `update` require network access to the upstream
 catalog or release.
 
+## Compiler integration
+
+The compiler automatically checks the same user-local storage before invoking
+the selected C compiler. An installed `<canonical-triple>-dev` bundle is used
+when no explicit `--sysroot` was supplied:
+
+- Clang and GCC receive `--sysroot=<bundle>`.
+- TCC receives the bundle's `usr/include` through `-I`. TCC does not support
+  GCC/Clang's `--sysroot` option and must retain its own native CRT/linker
+  configuration; injecting the bundle's glibc linker-script `libc.so` through
+  `-L` would be invalid.
+
+The selected target may be a canonical sysroot triple or a C-plus spelling such
+as `linux-x86_64`, `macos-aarch64`, or `windows-x86_64`. Explicit sysroot
+options always take precedence over discovery.
+
 ## Future extensions
 
 - signature verification and trusted release pinning;
 - release/version selection instead of only `latest`;
 - explicit remove, repair, and garbage-collection commands;
-- integration with compiler `--sysroot` discovery and project configuration;
 - CI fixtures against a published sysroots release.

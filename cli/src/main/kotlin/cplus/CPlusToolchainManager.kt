@@ -40,24 +40,16 @@ internal object CPlusToolchainManager {
         return selected.map { installExact(it) }
     }
 
+    internal fun developmentSysrootFor(target: String?): Path? {
+        return CPlusToolchainLocator.developmentSysrootFor(target)
+    }
+
+    internal fun canonicalTriple(target: String?): String? {
+        return CPlusToolchainLocator.canonicalTriple(target)
+    }
+
     fun storageRoot(): Path {
-        System.getProperty("cplus.toolchains")?.takeIf(String::isNotBlank)?.let {
-            return Path.of(it).toAbsolutePath().normalize()
-        }
-        System.getenv("CPLUS_TOOLCHAINS")?.takeIf(String::isNotBlank)?.let {
-            return Path.of(it).toAbsolutePath().normalize()
-        }
-        val home = Path.of(System.getProperty("user.home"))
-        val os = System.getProperty("os.name").lowercase()
-        return if (os.contains("win")) {
-            val localAppData = System.getenv("LOCALAPPDATA")?.takeIf(String::isNotBlank)?.let(Path::of)
-            (localAppData ?: home.resolve("AppData/Local")).resolve("cplus/toolchains")
-        } else if (os.contains("mac") || os.contains("darwin")) {
-            home.resolve("Library/Application Support/cplus/toolchains")
-        } else {
-            val dataHome = System.getenv("XDG_DATA_HOME")?.takeIf(String::isNotBlank)?.let(Path::of)
-            (dataHome ?: home.resolve(".local/share")).resolve("cplus/toolchains")
-        }.toAbsolutePath().normalize()
+        return CPlusToolchainLocator.storageRoot()
     }
 
     internal fun selectReferences(requested: String, available: List<String>): List<String> {

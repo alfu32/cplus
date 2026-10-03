@@ -93,13 +93,14 @@ class TccCompiler {
         try {
             Files.writeString(sourceFile, source.code)
             val raylibTarget = targetOption(options) ?: hostTarget()
-            val effectiveOptions = if (hasCustomSysroot(options)) {
-                options
+            val sysrootOptions = autoSysrootOptions(options, "tcc")
+            val effectiveOptions = if (hasCustomSysroot(sysrootOptions)) {
+                sysrootOptions
             } else {
-                materializeBundledRaylib(options, raylibTarget, source.code)?.let { (rewritten, directory) ->
+                materializeBundledRaylib(sysrootOptions, raylibTarget, source.code)?.let { (rewritten, directory) ->
                     packagedRaylibDirectory = directory
                     rewritten
-                } ?: options
+                } ?: sysrootOptions
             }
             val (compileOptions, linkOptions) = splitLinkOptions(effectiveOptions)
             val arguments = buildList {
@@ -196,6 +197,21 @@ class TccCompiler {
     private fun hasCustomSysroot(options: List<String>): Boolean =
         options.any { it == "--sysroot" || it.startsWith("--sysroot=") }
 
+    private fun autoSysrootOptions(options: List<String>, compilerName: String): List<String> {
+        if (hasCustomSysroot(options)) return options
+        val target = rawTargetOption(options)
+        val sysroot = CPlusToolchainLocator.developmentSysrootFor(target) ?: return options
+        return if (compilerName.lowercase().contains("tcc")) {
+            // TCC does not implement GCC/Clang's --sysroot and treats glibc's
+            // linker-script libc.so as an object when it is placed on -L.
+            // Use the installed development headers for native TCC and leave
+            // its configured CRT/linker search path authoritative.
+            CompilerOptions.merge(options, listOf("-I", sysroot.resolve("usr/include").toString()))
+        } else {
+            CompilerOptions.merge(options, listOf("--sysroot", sysroot.toString()))
+        }
+    }
+
     private fun deleteTree(directory: Path) {
         if (!Files.exists(directory)) return
         Files.walk(directory).use { paths ->
@@ -245,12 +261,16 @@ class TccCompiler {
     }
 
     private fun targetOption(options: List<String>): String? {
+        val raw = rawTargetOption(options)
+        return raw?.let { CPlusTarget.shippedTargetId(it) ?: it }
+    }
+
+    private fun rawTargetOption(options: List<String>): String? {
         val targetFlag = options.indexOf("--target")
-        val raw = when {
+        return when {
             targetFlag >= 0 -> options.getOrNull(targetFlag + 1)
             else -> options.firstOrNull { it.startsWith("--target=") }?.substringAfter('=')
         }
-        return raw?.let { CPlusTarget.shippedTargetId(it) ?: it }
     }
 
     private fun targetDiagnostic(message: String) = CompilerDiagnostic(
@@ -299,7 +319,8 @@ class TccCompiler {
             )
 
             Files.writeString(sourceFile, source.code)
-            val (compileOptions, linkOptions) = splitLinkOptions(withoutRedundantHostTarget(options))
+            val compilerOptions = autoSysrootOptions(options, compiler.executable.fileName.toString())
+            val (compileOptions, linkOptions) = splitLinkOptions(withoutRedundantHostTarget(compilerOptions))
             val command = buildList {
                 add(compiler.executable.toString())
                 addAll(compiler.arguments)

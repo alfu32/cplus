@@ -21,7 +21,7 @@ selection, system compiler installation, or release publication itself.
 | TC-8 | done | Add offline unit tests for catalog parsing, selection, and local listing |
 | TC-9 | done | Document command semantics, storage, invariants, and failure behavior |
 | TC-10 | done | Verify installation against the first published sysroots release |
-| TC-11 | open | Verify compiler `--sysroot` discovery consumes installed bundles |
+| TC-11 | done | Verify compiler sysroot discovery consumes installed bundles |
 | TC-12 | done | Verify release JSON metadata and published SHA-256 checksums |
 | TC-13 | open | Add signature verification and trusted release pinning |
 | TC-14 | open | Add remove/repair/garbage-collection lifecycle commands |
@@ -48,7 +48,8 @@ After `cplus-sysroots` publishes its first release:
 
 ### Known current limitation
 
-Release `0.1.1` is now published. The Linux x86_64 runtime bundle was
-installed successfully; release catalog listing, metadata validation, SHA-256
-verification, archive extraction, and local discovery all passed. Compiler
-sysroot consumption remains the next integration gate.
+Release `0.1.1` is now published. Linux x86_64 runtime and development bundles
+were installed successfully; release catalog listing, metadata validation,
+SHA-256 verification, archive extraction, local discovery, and a host compile
+using the discovered development headers all passed. Clang/GCC use full
+`--sysroot`; TCC uses a compatible include-path overlay.
