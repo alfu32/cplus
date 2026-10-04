@@ -763,6 +763,20 @@ class TreeSitterCPlusParserBackendTest {
     }
 
     @Test
+    fun treeSitterParsesDoubleQuotedScopedImportAlias() {
+        val text = "@import \"helper.cp\" as local_helper;\nint main(void) { return local_helper.answer(); }\n"
+        val source = sources.open(SourceId.named("scoped-import.cp"), text)
+        val parsed = backend.parse(source)
+        assertTrue(parsed.diagnostics.none { it.severity == ParserDiagnosticSeverity.ERROR }, parsed.diagnostics.toString())
+        fun descendants(node: CPlusSyntaxNode): Sequence<CPlusSyntaxNode> =
+            sequenceOf(node) + node.children.asSequence().flatMap(::descendants)
+        val import = descendants(parsed.root).first { it.kind == "cplus_at_import" }
+        assertEquals("local_helper", import.children.last { it.kind == "identifier" }
+            .let { text.substring(it.span.startOffset, it.span.endOffset) })
+        assertTrue("'helper.cp'" !in text, "scoped import paths are intentionally double-quoted")
+    }
+
+    @Test
     fun prototypeLowersAstCImportsToMappedAbsoluteIncludes() {
         val directory = Files.createTempDirectory("cplus-ast-c-import")
         try {

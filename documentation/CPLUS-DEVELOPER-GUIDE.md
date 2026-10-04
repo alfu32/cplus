@@ -134,6 +134,19 @@ comptime import "module:/shared/types.cp";
 
 `stdlib:/` resolves against the selected standard-library root. `module:/` resolves through the project source/module and dependency roots. Imports are compile-time textual/module inputs and are processed before generated C is compiled.
 
+Use `as` when the imported API should be referenced through a local scope name:
+
+```c
+@import "stdlib:c/stdio.cp" as local_stdio;
+
+int main(void) {
+    local_stdio.printf("hello\\n");
+    return 0;
+}
+```
+
+Scoped aliases are local compile-time names. The transcoder lowers `local_stdio.printf(...)` to the existing C symbol `printf(...)`; no runtime module object or ABI rename is introduced. Aliases must be unique identifiers in the importing file, paths must use double quotes, and aliased imports are currently for C-plus modules only. Keep C fixture imports unaliased (`@import("fixture.c")`). Unqualified imports continue to work.
+
 ### Comptime declarations and generators
 
 Comptime can declare values and generate declarations. The standard library uses generic generators such as:

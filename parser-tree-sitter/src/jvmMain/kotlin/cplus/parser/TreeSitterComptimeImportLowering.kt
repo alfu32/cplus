@@ -116,13 +116,34 @@ class TreeSitterComptimeImportLowering(
 
             val ast = CPlusAstAdapter().adapt(parsed)
             val replacements = linkedMapOf<CPlusAstNode, MappedText>()
-            for (declaration in collectImports(ast.root)) {
+            val declarations = collectImports(ast.root, mapped.text)
+            val duplicateAlias = declarations.mapNotNull { it.alias }
+                .groupingBy { it }.eachCount().entries.firstOrNull { it.value > 1 }
+            if (duplicateAlias != null) {
+                active.remove(id)
+                return loweringFailure(
+                    "CPLUS_IMPORT_ALIAS_DUPLICATE",
+                    "duplicate scoped import alias '${duplicateAlias.key}'",
+                    mapped.toOriginalSpan(declarations.first { it.alias == duplicateAlias.key }.span)
+                )
+            }
+            for (declaration in declarations) {
                 val literalText = mapped.text.substring(declaration.literal.span.startOffset, declaration.literal.span.endOffset)
                 val pathText = decodeStringLiteral(literalText)
                 val extension = pathText.substringAfterLast('/').substringAfterLast('\\').substringAfterLast('.', "")
                 // Legacy @import("name.c") belongs to the C include pass; extensionless legacy imports
                 // keep their specified C-file meaning. Every explicit C-plus suffix is a module edge.
-                if (!declaration.isComptime && extension !in setOf("cp", "c+")) continue
+                if (!declaration.isComptime && extension !in setOf("cp", "c+")) {
+                    if (declaration.alias != null) {
+                        active.remove(id)
+                        return loweringFailure(
+                            "CPLUS_IMPORT_ALIAS_C_SOURCE",
+                            "C source imports cannot declare a C-plus alias",
+                            span = mapped.toOriginalSpan(declaration.span)
+                        )
+                    }
+                    continue
+                }
 
                 val importOriginFile = mapped.originAt(declaration.span.startOffset)?.file ?: sourceFile
                 val importOriginId = sourceId(importOriginFile)
@@ -211,7 +232,13 @@ class TreeSitterComptimeImportLowering(
             }
 
             val stripped = if (replacements.isEmpty()) mapped else CPlusMappedAstEmitter().emit(ast, mapped, replacements)
-            moduleTexts[id] = stripped
+            val scopedAliases = declarations.mapNotNull { declaration ->
+                val importedPath = decodeStringLiteral(declaration.path)
+                if (declaration.isComptime || importedPath.endsWith(".cp") || importedPath.endsWith(".c+")) {
+                    declaration.alias?.let { alias -> alias to declaration.path }
+                } else null
+            }.toMap()
+            moduleTexts[id] = rewriteScopedReferences(stripped, scopedAliases)
             active.remove(id)
             return null
         }
@@ -281,7 +308,7 @@ class TreeSitterComptimeImportLowering(
             )
     }
 
-    private fun collectImports(root: CPlusAstNode): List<ImportDeclaration> {
+    private fun collectImports(root: CPlusAstNode, sourceText: String): List<ImportDeclaration> {
         val declarations = mutableListOf<ImportDeclaration>()
         fun visit(node: CPlusAstNode, parent: CPlusAstNode?, moduleScope: Boolean, dormant: Boolean) {
             if (dormant) return
@@ -289,14 +316,22 @@ class TreeSitterComptimeImportLowering(
                 val declaration = parent?.takeIf { it.syntaxKind == "cplus_comptime_declaration" } ?: node
                 node.children.firstOrNull { it.syntaxKind == "string_literal" }?.let { literal ->
                     declarations += ImportDeclaration(
-                        declaration, literal, declaration.span, isComptime = true, moduleScope = moduleScope
+                        declaration, literal, declaration.span, isComptime = true, moduleScope = moduleScope,
+                        alias = node.children.lastOrNull { it.syntaxKind == "identifier" }
+                            ?.let { alias -> sourceText.substring(alias.span.startOffset, alias.span.endOffset) },
+                        path = sourceText.substring(literal.span.startOffset, literal.span.endOffset)
                     )
                 }
                 return
             }
             if (node.syntaxKind == "cplus_at_import") {
                 node.children.firstOrNull { it.syntaxKind == "string_literal" }?.let { literal ->
-                    declarations += ImportDeclaration(node, literal, node.span, isComptime = false, moduleScope = moduleScope)
+                    declarations += ImportDeclaration(
+                        node, literal, node.span, isComptime = false, moduleScope = moduleScope,
+                        alias = node.children.lastOrNull { it.syntaxKind == "identifier" }
+                            ?.let { alias -> sourceText.substring(alias.span.startOffset, alias.span.endOffset) },
+                        path = sourceText.substring(literal.span.startOffset, literal.span.endOffset)
+                    )
                 }
                 return
             }
@@ -307,6 +342,65 @@ class TreeSitterComptimeImportLowering(
         visit(root, null, moduleScope = true, dormant = false)
         return declarations.sortedBy { it.span.startOffset }
     }
+
+    /** Lowers the first scoped-import slice: alias.member becomes the imported C symbol. */
+    private fun rewriteScopedReferences(source: MappedText, aliases: Map<String, String>): MappedText {
+        if (aliases.isEmpty()) return source
+        val names = aliases.keys.sortedByDescending(String::length).joinToString("|") { Regex.escape(it) }
+        val matches = Regex("\\b(?:$names)\\s*\\.\\s*([A-Za-z_]\\w*)")
+            .findAll(maskSource(source.text))
+            .toList()
+        if (matches.isEmpty()) return source
+        val edits = matches.map { match ->
+            CPlusMappedEdit(
+                cplus.SourceSpan(null, match.range.first, match.range.last + 1, 0, 0, 0, 0),
+                MappedText.generated(match.groupValues[1], source.originAt(match.range.first))
+            )
+        }
+        return CPlusMappedAstEmitter().emit(
+            CPlusAstAdapter().adapt(backend.parse(sourceManager.open(SourceId.named("<scoped-import-rewrite>"), source.text))),
+            source,
+            edits
+        )
+    }
+
+    private fun maskSource(input: String): String {
+        val chars = input.toCharArray()
+        var index = 0
+        var state = MaskState.CODE
+        while (index < chars.size) {
+            when (state) {
+                MaskState.CODE -> when {
+                    chars[index] == '/' && index + 1 < chars.size && chars[index + 1] == '/' -> {
+                        chars[index] = ' '; chars[index + 1] = ' '; index += 2; state = MaskState.LINE
+                    }
+                    chars[index] == '/' && index + 1 < chars.size && chars[index + 1] == '*' -> {
+                        chars[index] = ' '; chars[index + 1] = ' '; index += 2; state = MaskState.BLOCK
+                    }
+                    chars[index] == '"' -> { chars[index] = ' '; index++; state = MaskState.STRING }
+                    chars[index] == '\'' -> { chars[index] = ' '; index++; state = MaskState.CHAR }
+                    else -> index++
+                }
+                MaskState.LINE -> { if (chars[index] == '\n') state = MaskState.CODE else chars[index] = ' '; index++ }
+                MaskState.BLOCK -> {
+                    if (chars[index] == '*' && index + 1 < chars.size && chars[index + 1] == '/') {
+                        chars[index] = ' '; chars[index + 1] = ' '; index += 2; state = MaskState.CODE
+                    } else { if (chars[index] != '\n') chars[index] = ' '; index++ }
+                }
+                MaskState.STRING, MaskState.CHAR -> {
+                    val terminator = if (state == MaskState.STRING) '"' else '\''
+                    if (chars[index] == '\\') {
+                        chars[index] = ' '; if (index + 1 < chars.size && chars[index + 1] != '\n') chars[index + 1] = ' '; index += 2
+                    } else if (chars[index] == terminator) {
+                        chars[index] = ' '; index++; state = MaskState.CODE
+                    } else { if (chars[index] != '\n') chars[index] = ' '; index++ }
+                }
+            }
+        }
+        return String(chars)
+    }
+
+    private enum class MaskState { CODE, LINE, BLOCK, STRING, CHAR }
 
     private fun decodeStringLiteral(literal: String): String {
         val content = literal.removeSurrounding("\"")
@@ -358,7 +452,9 @@ class TreeSitterComptimeImportLowering(
         val literal: CPlusAstNode,
         val span: cplus.SourceSpan,
         val isComptime: Boolean,
-        val moduleScope: Boolean
+        val moduleScope: Boolean,
+        val alias: String? = null,
+        val path: String = ""
     )
 
     private companion object {

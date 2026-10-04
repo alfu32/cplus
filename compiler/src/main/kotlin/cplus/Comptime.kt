@@ -73,7 +73,8 @@ internal class ComptimeCompiler(
                     result.environment,
                     test.bodyStart,
                     test.source,
-                    deferUnknown = false
+                    deferUnknown = false,
+                    scopedAliases = test.scopedAliases
                 )
             )
         }
@@ -116,6 +117,7 @@ internal class ComptimeCompiler(
                 values["os"] = CtString(CPlusTarget.normalizeOs(targetOs))
             }
             val importedModules = linkedMapOf<String, ComptimeModuleResult>()
+            val scopedAliases = linkedMapOf<String, String>()
             val compilerOptions = mutableListOf<String>()
             val seenSources = mutableSetOf<String>()
             var mapped = MappedText.identity(source)
@@ -143,7 +145,8 @@ internal class ComptimeCompiler(
                         item.name,
                         parsed.mapped.slice(item.bodyStart, item.bodyEnd),
                         item.source,
-                        item.bodyStart
+                        item.bodyStart,
+                        scopedAliases = scopedAliases.toMap()
                     )
                 }
                 parsed.items.filterIsInstance<ComptimeFlags>().forEach { item ->
@@ -151,6 +154,11 @@ internal class ComptimeCompiler(
                 }
                 environment.registerRuntimeTypes(passSource)
                 parsed.items.filterIsInstance<ComptimeImport>().forEach { item ->
+                    item.alias?.let { alias ->
+                        if (scopedAliases.put(alias, item.path) != null) {
+                            throw syntax("duplicate scoped import alias '$alias'", passSource, item.start)
+                        }
+                    }
                     val importedSource = loadImport(passSource, item)
                     val importerId = sourceIdFor(passSource)
                     val importedId = sourceIdFor(importedSource)
@@ -175,7 +183,7 @@ internal class ComptimeCompiler(
                 parsed.items.forEach(environment::register)
 
                 val next = logger.pass("comptime-pass-${passIndex + 1}-expand") {
-                    materializeModule(parsed, environment, deferUnknown = parsed.items.isNotEmpty())
+                    materializeModule(parsed, environment, deferUnknown = parsed.items.isNotEmpty(), scopedAliases)
                 }
                 if (next.text.toByteArray(Charsets.UTF_8).size > MAX_GENERATED_BYTES) {
                     throw syntax(
@@ -200,13 +208,14 @@ internal class ComptimeCompiler(
                             next,
                             key?.toString() ?: "<input:${source.name}>",
                             importedModules.values.toList(),
-                            CompilerOptions.distinct(compilerOptions)
+                            CompilerOptions.distinct(compilerOptions),
+                            scopedAliases.toMap()
                         )
                         if (key != null) modules[key] = result
                         return result
                     }
                     // Retry deferred names strictly once expansion reaches a fixed point.
-                    materializeModule(parsed, environment, deferUnknown = false)
+                    materializeModule(parsed, environment, deferUnknown = false, scopedAliases)
                     throw syntax("comptime expansion made no progress", passSource, parsed.items.first().start)
                 }
                 mapped = next
@@ -367,13 +376,14 @@ internal class ComptimeCompiler(
     private fun materializeModule(
         parsed: ParsedModule,
         environment: ComptimeEnvironment,
-        deferUnknown: Boolean
+        deferUnknown: Boolean,
+        scopedAliases: Map<String, String> = emptyMap()
     ): MappedText {
         val output = MappedTextBuilder()
         val input = parsed.mapped
         var cursor = 0
         parsed.items.sortedBy { it.start }.forEach { item ->
-            output.append(resolveRuntimeReferences(input.slice(cursor, item.start), environment, cursor, parsed.source, deferUnknown))
+            output.append(resolveRuntimeReferences(input.slice(cursor, item.start), environment, cursor, parsed.source, deferUnknown, scopedAliases))
             val replacement = try {
                 when (item) {
                     is ComptimeImport,
@@ -396,7 +406,7 @@ internal class ComptimeCompiler(
             else output.append(replacement)
             cursor = item.end
         }
-        output.append(resolveRuntimeReferences(input.slice(cursor, input.text.length), environment, cursor, parsed.source, deferUnknown))
+        output.append(resolveRuntimeReferences(input.slice(cursor, input.text.length), environment, cursor, parsed.source, deferUnknown, scopedAliases))
         return output.build()
     }
 
@@ -580,10 +590,13 @@ internal class ComptimeCompiler(
         environment: ComptimeEnvironment,
         offset: Int,
         source: SourceFile,
-        deferUnknown: Boolean
+        deferUnknown: Boolean,
+        scopedAliases: Map<String, String> = emptyMap()
     ): MappedText {
         val masked = SourceMasker.mask(input.text)
-        if ('@' !in masked && !masked.indices.any { isKeywordAt(masked, it, "comptime") }) return input
+        if ('@' !in masked && !masked.indices.any { isKeywordAt(masked, it, "comptime") }) {
+            return rewriteScopedReferences(input, scopedAliases)
+        }
         val output = MappedTextBuilder()
         var cursor = 0
         var index = 0
@@ -650,6 +663,23 @@ internal class ComptimeCompiler(
             output.appendGenerated(replacement.third, input.originAt(index))
             cursor = replacement.second
             index = cursor
+        }
+        output.append(input, cursor, input.text.length)
+        return rewriteScopedReferences(output.build(), scopedAliases)
+    }
+
+    private fun rewriteScopedReferences(input: MappedText, scopedAliases: Map<String, String>): MappedText {
+        if (scopedAliases.isEmpty()) return input
+        val names = scopedAliases.keys.joinToString("|") { Regex.escape(it) }
+        val matches = Regex("\\b(?:$names)\\s*\\.\\s*([A-Za-z_]\\w*)").findAll(SourceMasker.mask(input.text)).toList()
+        if (matches.isEmpty()) return input
+        val output = MappedTextBuilder()
+        var cursor = 0
+        matches.forEach { match ->
+            output.append(input, cursor, match.range.first)
+            val member = match.groupValues[1]
+            output.appendGenerated(member, input.originAt(match.range.first))
+            cursor = match.range.last + 1
         }
         output.append(input, cursor, input.text.length)
         return output.build()
@@ -1125,7 +1155,8 @@ internal data class ComptimeTestBlock(
     val body: MappedText,
     val source: SourceFile,
     val bodyStart: Int,
-    val assertions: List<ComptimeTestAssertionInvocation>? = null
+    val assertions: List<ComptimeTestAssertionInvocation>? = null,
+    val scopedAliases: Map<String, String> = emptyMap()
 )
 
 internal data class ComptimeTestAssertionInvocation(
@@ -1147,7 +1178,8 @@ private data class ComptimeModuleResult(
     val runtime: MappedText,
     val identity: String,
     val runtimeDependencies: List<ComptimeModuleResult>,
-    val ownCompilerOptions: List<String>
+    val ownCompilerOptions: List<String>,
+    val scopedAliases: Map<String, String> = emptyMap()
 ) {
     val compilerOptions: List<String>
         get() {
@@ -1180,7 +1212,8 @@ private data class ComptimeImport(
     override val source: SourceFile,
     override val start: Int,
     override val end: Int,
-    val path: String
+    val path: String,
+    val alias: String? = null
 ) : ComptimeItem
 
 private data class ComptimeCImport(
@@ -1656,15 +1689,27 @@ private class ComptimeParser(private val source: SourceFile) {
             }
             cursor = skipWhitespace(source.text, cursor + 1)
         }
+        var alias: String? = null
+        if (isKeywordAt(masked, cursor, "as")) {
+            cursor = skipWhitespace(masked, cursor + 2)
+            val aliasStart = cursor
+            val aliasEnd = identifierEnd(masked, cursor)
+            if (aliasEnd == aliasStart) throw syntax("scoped import alias must be an identifier", source, cursor)
+            alias = source.text.substring(aliasStart, aliasEnd)
+            cursor = skipWhitespace(masked, aliasEnd)
+        }
         if (cursor < source.text.length && source.text[cursor] == ';') cursor++
 
         val extension = path.substringAfterLast('/').substringAfterLast('\\').substringAfterLast('.', "")
         return when (extension) {
-            "cp", "c+" -> ComptimeImport(source, start, cursor, path)
-            "c" -> if (allowC) ComptimeCImport(source, start, cursor, path) else {
+            "cp", "c+" -> ComptimeImport(source, start, cursor, path, alias)
+            "c" -> if (allowC) {
+                if (alias != null) throw syntax("C source imports cannot declare a C-plus alias", source, keywordAt)
+                ComptimeCImport(source, start, cursor, path)
+            } else {
                 throw syntax("comptime import accepts only .cp or .c+ files; use @import or #include for C", source, keywordAt)
             }
-            "" -> if (allowC) ComptimeCImport(source, start, cursor, path) else ComptimeImport(source, start, cursor, path)
+            "" -> if (allowC) ComptimeCImport(source, start, cursor, path) else ComptimeImport(source, start, cursor, path, alias)
             else -> throw syntax("unsupported import extension '$extension'", source, keywordAt)
         }
     }

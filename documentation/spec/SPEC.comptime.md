@@ -223,9 +223,23 @@ Comptime control flow uses the `@` forms and operates only on comptime values. `
 
 ```c
 comptime import "math.cp";
+@import "stdlib:c/stdio.cp" as local_stdio;
 ```
 
-Comptime imports are declared at module scope. An import inside a top-level C preprocessor guard (`#if`, `#ifdef`, or an alternative branch) remains at module scope; the same syntax inside a function or runtime compound statement is invalid. Ordinary paths are relative to the importing file. Stable `stdlib:/path` prefixes search the standard-library root selected by the CLI/project. `module:/path` and its `project:/path` alias search project module roots. `.cp` or `.c+` may be omitted and is resolved in that order. Paths are canonicalized, constrained to their configured root for prefixed imports, and loaded once per compilation graph. Imported comptime declarations become available to the importer; materialized runtime declarations are emitted once in dependency order. Comptime imports are not C `#include`s and do not reach the C preprocessor. The legacy `@import` spelling remains accepted.
+Comptime imports are declared at module scope. An import inside a top-level C preprocessor guard (`#if`, `#ifdef`, or an alternative branch) remains at module scope; the same syntax inside a function or runtime compound statement is invalid. Ordinary paths are relative to the importing file. Stable `stdlib:/path` prefixes search the standard-library root selected by the CLI/project; `stdlib:c/` is an accepted spelling for the C-facing standard-library facade root. `module:/path` and its `project:/path` alias search project module roots. `.cp` or `.c+` may be omitted and is resolved in that order. Paths are canonicalized, constrained to their configured root for prefixed imports, and loaded once per compilation graph. Imported comptime declarations become available to the importer; materialized runtime declarations are emitted once in dependency order. Comptime imports are not C `#include`s and do not reach the C preprocessor. The legacy `@import` spelling remains accepted.
+
+An import may declare a local scope alias with `as`:
+
+```c
+@import "stdlib:c/stdio.cp" as local_stdio;
+
+int main(void) {
+    local_stdio.printf("hello from a scoped import\\n");
+    return 0;
+}
+```
+
+The alias is compile-time source syntax, local to the importing file, and is lowered to the ordinary C symbol name before C emission (`local_stdio.printf(...)` becomes `printf(...)`). It does not create a runtime module object or rename the imported ABI. Aliases must be identifiers and must be unique within one file. The first slice supports member-style references and double-quoted paths only. An aliased C source import is invalid; use an unaliased `@import("file.c")` or `#include` for unchanged C files. Existing unqualified imports remain supported.
 
 For unchanged C implementation files, `@import("fixture.c")` instead resolves the path and emits an absolute `#include` directive. The C file is processed by the C preprocessor/compiler rather than the comptime evaluator. `#include "fixture.c"` remains equally valid and is the direct C spelling.
 

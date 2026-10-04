@@ -1041,7 +1041,10 @@ module.exports = grammar({
       '@', field('generator', $.identifier), $.argument_list, ';',
     )),
 
-    cplus_comptime_import: $ => seq('comptime', 'import', optional($.string_literal), ';'),
+    cplus_comptime_import: $ => seq(
+      'comptime', 'import', optional(field('path', $.string_literal)),
+      optional(seq('as', field('alias', $.identifier))), ';'
+    ),
 
     // Empty argument lists remain structurally parseable so the compiler can emit a precise
     // semantic diagnostic at the terminating semicolon instead of a whole-directive ERROR node.
@@ -1105,10 +1108,12 @@ module.exports = grammar({
     cplus_at_import: $ => prec.right(seq(
       '@', 'import',
       optional('('),
-      $.string_literal,
+      field('path', $.string_literal),
       optional(')'),
+      optional(seq('as', field('alias', $.identifier))),
       optional(';'),
     )),
+
 
     cplus_test_declaration: $ => seq(
       '@', 'test',

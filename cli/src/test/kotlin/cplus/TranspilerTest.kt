@@ -1341,6 +1341,65 @@ class TranspilerTest {
     }
 
     @Test
+    fun scopedModuleImportLowersQualifiedCallsToTheImportedCName() {
+        val directory = Files.createTempDirectory("cplus-scoped-import")
+        try {
+            val helper = directory.resolve("helper.cp")
+            val source = directory.resolve("main.cp")
+            val generated = directory.resolve("main.c")
+            Files.writeString(helper, "int answer(void) { return 42; }\n")
+            Files.writeString(
+                source,
+                "@import \"helper.cp\" as local_helper;\nint main(void) { return local_helper.answer() == 42 ? 0 : 1; }\n"
+            )
+            for (frontend in listOf("tree-sitter", "legacy")) {
+                val errors = StringBuilder()
+                val status = CPlusCli(output = StringBuilder(), errors = errors).run(
+                    listOf("--frontend=$frontend", "transcode", source.toString(), "-o", generated.toString())
+                )
+                assertEquals(0, status, errors.toString())
+                val text = Files.readString(generated)
+                assertTrue("local_helper." !in text, text)
+                assertTrue("answer()" in text, text)
+            }
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun scopedImportsRejectDuplicateAliasesAndAliasedCFiles() {
+        val directory = Files.createTempDirectory("cplus-scoped-import-errors")
+        try {
+            val duplicate = directory.resolve("duplicate.cp")
+            Files.writeString(
+                duplicate,
+                "@import \"one.cp\" as local;\n@import \"two.cp\" as local;\nint main(void) { return 0; }\n"
+            )
+            Files.writeString(directory.resolve("one.cp"), "int one(void) { return 1; }\n")
+            Files.writeString(directory.resolve("two.cp"), "int two(void) { return 2; }\n")
+            val duplicateErrors = StringBuilder()
+            val duplicateStatus = CPlusCli(output = StringBuilder(), errors = duplicateErrors).run(
+                listOf("--frontend=tree-sitter", "transcode", duplicate.toString())
+            )
+            assertTrue(duplicateStatus == 0, duplicateErrors.toString())
+            assertTrue("duplicate" in duplicateErrors.toString(), duplicateErrors.toString())
+
+            val cImport = directory.resolve("c-import.cp")
+            Files.writeString(cImport, "@import \"fixture.c\" as local;\nint main(void) { return 0; }\n")
+            Files.writeString(directory.resolve("fixture.c"), "int fixture(void) { return 0; }\n")
+            val cErrors = StringBuilder()
+            val cStatus = CPlusCli(output = StringBuilder(), errors = cErrors).run(
+                listOf("--frontend=tree-sitter", "transcode", cImport.toString())
+            )
+            assertTrue(cStatus == 0, cErrors.toString())
+            assertTrue("C source imports cannot declare" in cErrors.toString(), cErrors.toString())
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
     fun packageInitCreatesOnlyAManifest() {
         val directory = Files.createTempDirectory("cplus-pkg-init")
         try {

@@ -16,10 +16,11 @@ class CPlusImportResolver(
         requestedPath: String,
         extensionlessCandidates: List<String>
     ): Path {
+        val normalizedRequest = requestedPath.replaceFirst("^stdlib:c/".toRegex(), "stdlib:/")
         val (roots, relativePath, confined) = when {
-            requestedPath.startsWith("stdlib:/") -> Triple(importPaths.standardLibraryRoots, requestedPath.removePrefix("stdlib:/"), true)
-            requestedPath.startsWith("module:/") -> Triple(importPaths.moduleRoots, requestedPath.removePrefix("module:/"), true)
-            requestedPath.startsWith("project:/") -> Triple(importPaths.moduleRoots, requestedPath.removePrefix("project:/"), true)
+            normalizedRequest.startsWith("stdlib:/") -> Triple(importPaths.standardLibraryRoots, normalizedRequest.removePrefix("stdlib:/"), true)
+            normalizedRequest.startsWith("module:/") -> Triple(importPaths.moduleRoots, normalizedRequest.removePrefix("module:/"), true)
+            normalizedRequest.startsWith("project:/") -> Triple(importPaths.moduleRoots, normalizedRequest.removePrefix("project:/"), true)
             else -> {
                 val sourceName = source.name
                     ?: throw CPlusImportResolutionException("import requires a named source file")
@@ -32,7 +33,7 @@ class CPlusImportResolver(
             }
         }
         if (roots.isEmpty()) {
-            val namespace = requestedPath.substringBefore(":/")
+            val namespace = normalizedRequest.substringBefore(":/")
             throw CPlusImportResolutionException("no $namespace search path is configured for import '$requestedPath'")
         }
 
@@ -41,7 +42,7 @@ class CPlusImportResolver(
         } catch (error: Exception) {
             throw CPlusImportResolutionException("invalid import path '$requestedPath': ${error.message}")
         }
-        val extension = requestedPath.substringAfterLast('/').substringAfterLast('\\').substringAfterLast('.', "")
+        val extension = normalizedRequest.substringAfterLast('/').substringAfterLast('\\').substringAfterLast('.', "")
         val candidates = if (extension.isNotEmpty()) {
             listOf(requested)
         } else {
@@ -52,7 +53,7 @@ class CPlusImportResolver(
             for (candidate in candidates) {
                 val resolved = (if (requested.isAbsolute) requested else normalizedRoot.resolve(candidate)).normalize()
                 if (confined && !resolved.startsWith(normalizedRoot)) {
-                    throw CPlusImportResolutionException("import path escapes its configured root: '$requestedPath'")
+                    throw CPlusImportResolutionException("import path escapes its configured root: '$normalizedRequest'")
                 }
                 if (sourceAvailable(resolved)) {
                     // Keep emitted absolute C includes and SourceId values
@@ -64,14 +65,14 @@ class CPlusImportResolver(
                     if (confined) {
                         val canonicalRoot = try { normalizedRoot.toRealPath() } catch (_: Exception) { normalizedRoot }
                         if (!canonical.startsWith(canonicalRoot)) {
-                            throw CPlusImportResolutionException("import path escapes its configured root: '$requestedPath'")
+                            throw CPlusImportResolutionException("import path escapes its configured root: '$normalizedRequest'")
                         }
                     }
                     return canonical
                 }
             }
         }
-        throw CPlusImportResolutionException("imported file does not exist: '$requestedPath'")
+        throw CPlusImportResolutionException("imported file does not exist: '$normalizedRequest'")
     }
 }
 
