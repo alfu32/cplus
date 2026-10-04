@@ -1302,6 +1302,7 @@ class TranspilerTest {
             assertTrue(Files.isRegularFile(project.resolve("src/main.cp")))
             assertTrue(Files.isDirectory(project.resolve("modules")))
             assertTrue(Files.isDirectory(project.resolve("tests")))
+            assertTrue(Files.isRegularFile(project.resolve("CPLUS-DEVELOPER-GUIDE.md")))
             assertTrue(output.contains("Created C-plus project"), output.toString())
 
             val errors = StringBuilder()
@@ -1313,6 +1314,27 @@ class TranspilerTest {
             assertThrows(IllegalArgumentException::class.java) {
                 CPlusCli(output = StringBuilder(), errors = StringBuilder()).run(listOf("new", project.toString()))
             }
+        } finally {
+            Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+
+    @Test
+    fun cliInitIsAnAliasForTheFullProjectScaffoldAndGuideIsAvailable() {
+        val directory = Files.createTempDirectory("cplus-init-project")
+        try {
+            val project = directory.resolve("hello")
+            val output = StringBuilder()
+            assertEquals(0, CPlusCli(output = output, errors = StringBuilder()).run(listOf("init", project.toString())))
+            assertTrue(Files.isRegularFile(project.resolve("CPLUS-DEVELOPER-GUIDE.md")))
+
+            val guide = StringBuilder()
+            assertEquals(0, CPlusCli(output = guide, errors = StringBuilder()).run(listOf("guide")))
+            assertTrue("# C-plus developer guide" in guide.toString())
+
+            val path = StringBuilder()
+            assertEquals(0, CPlusCli(output = path, errors = StringBuilder()).run(listOf("guide", "path")))
+            assertTrue(path.toString().trim().endsWith("CPLUS-DEVELOPER-GUIDE.md"))
         } finally {
             Files.walk(directory).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
@@ -2557,6 +2579,8 @@ invalid = { path = "../invalid" }
         assertTrue("transcode filename.cp" in help.toString(), help.toString())
         assertTrue("compile filename.cp" in help.toString(), help.toString())
         assertTrue("run filename.cp" in help.toString(), help.toString())
+        assertTrue("guide [path|list]" in help.toString(), help.toString())
+        assertTrue("init project_name|." in help.toString(), help.toString())
     }
 
     @Test

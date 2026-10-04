@@ -3,6 +3,7 @@ package cplus
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.nio.file.StandardCopyOption
 
 internal data class CPlusProject(
     val root: Path,
@@ -194,7 +195,12 @@ internal object CPlusProjectScaffolder {
         if (Files.exists(directory) && !Files.isDirectory(directory)) {
             throw IllegalArgumentException("project path is not a directory: $directory")
         }
-        val conflicts = listOf(directory.resolve("cplus.toml"), directory.resolve("src/main.cp"), directory.resolve("README.md"))
+        val conflicts = listOf(
+            directory.resolve("cplus.toml"),
+            directory.resolve("src/main.cp"),
+            directory.resolve("README.md"),
+            directory.resolve("CPLUS-DEVELOPER-GUIDE.md")
+        )
             .filter(Files::exists)
         if (conflicts.isNotEmpty()) {
             throw IllegalArgumentException("refusing to overwrite existing project files: ${conflicts.joinToString()}")
@@ -227,6 +233,9 @@ Run the program with `cpc run src/main.cp` from this directory.
 Project modules may be imported with `comptime import "module:/path/to/module.cp"`.
 Standard-library modules use the stable `stdlib:/` prefix.
 """)
+        val guide = CPlusDeveloperGuide.locate()
+            ?: throw IllegalArgumentException("C-plus developer guide is not installed; cannot scaffold project")
+        Files.copy(guide, directory.resolve("CPLUS-DEVELOPER-GUIDE.md"), StandardCopyOption.COPY_ATTRIBUTES)
         return directory
     }
 

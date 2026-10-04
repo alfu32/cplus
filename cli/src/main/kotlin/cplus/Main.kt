@@ -13,7 +13,7 @@ private val sourceExtensions = listOf(".cp", ".c+")
 
 fun main(args: Array<String>) {
     val commandIndex = args.indexOfFirst {
-        it in setOf("help", "--help", "-h", "parse", "lsp", "graph", "transcode", "compile", "run", "test", "new", "pkg", "toolchain", "version")
+        it in setOf("help", "--help", "-h", "guide", "docs", "parse", "lsp", "graph", "transcode", "compile", "run", "test", "init", "new", "pkg", "toolchain", "version")
     }
     val globalPrefix = args.take(if (commandIndex >= 0) commandIndex else args.size)
     val verbosity = globalPrefix.firstOrNull { it.matches(Regex("-v[012]")) }?.substring(2)?.toInt() ?: 1
@@ -78,7 +78,8 @@ class CPlusCli(
             "compile" -> compile(commandArguments.drop(1), runAfter = false)
             "run" -> compile(commandArguments.drop(1), runAfter = true)
             "test" -> test(commandArguments.drop(1))
-            "new" -> newProject(commandArguments.drop(1))
+            "guide", "docs" -> guide(commandArguments.drop(1))
+            "init", "new" -> newProject(commandArguments.drop(1))
             "pkg" -> packageCommand(commandArguments.drop(1))
             "toolchain" -> toolchainCommand(commandArguments.drop(1))
             "version" -> {
@@ -864,6 +865,20 @@ class CPlusCli(
         return 0
     }
 
+    private fun guide(arguments: List<String>): Int {
+        if (arguments.size > 1 || (arguments.isNotEmpty() && arguments[0] !in setOf("path", "list"))) {
+            throw IllegalArgumentException("guide accepts no arguments, or path/list")
+        }
+        val guide = CPlusDeveloperGuide.locate()
+            ?: throw IllegalArgumentException("C-plus developer guide is not installed")
+        when (arguments.firstOrNull()) {
+            "path" -> output.append(guide.toString()).append('\n')
+            "list" -> output.append("C-plus developer guide: ").append(guide.toString()).append('\n')
+            else -> output.append(Files.readString(guide)).append('\n')
+        }
+        return 0
+    }
+
     private fun packageCommand(arguments: List<String>): Int {
         val action = arguments.firstOrNull() ?: throw IllegalArgumentException("pkg requires init, add, or install")
         val current = Path("").toAbsolutePath().normalize()
@@ -1002,6 +1017,8 @@ usage:
   cplus [global options] run filename.cp [-o executable]
   cplus [global options] test filename.cp [filename2.cp ...] [test name ...]
   cplus [global options] test [run|compile|transcode] [-o output] filename.cp ... [test name ...]
+  cplus [global options] guide [path|list]
+  cplus [global options] init project_name|.
   cplus [global options] new project_name|.
   cplus [global options] pkg init [folder]
   cplus [global options] pkg add name=path-or-url
@@ -1028,7 +1045,8 @@ defaults:
   compiler: bundled TinyCC, then TCC, system tcc on PATH, then compiler from CC
   frontend: AST-first AUTO by default with legacy compatibility fallback; use --frontend=legacy for rollback or --frontend=tree-sitter for strict AST mode
   test: runs all @test blocks by default; run, compile, and transcode are explicit modes
-  new: creates a C-plus project with cplus.toml and src/main.cp
+  guide: prints the self-contained C-plus developer guide shipped with the distribution
+  init/new: creates a C-plus project with cplus.toml, src/main.cp, tests, modules, README.md, and the developer guide
   pkg init: creates only a package manifest; it does not create source files or directories
   pkg install: accepts local paths, file: URLs, and HTTP(S) .zip package URLs; dependencies are staged and flattened into modules/
   toolchain: manages user-local dev/rt sysroot bundles published by cplus-sysroots
