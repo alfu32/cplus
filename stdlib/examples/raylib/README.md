@@ -2,16 +2,16 @@
 
 These eight programs implement the games described in [`games.md`](games.md) and [`games2.md`](games2.md). Each `.cp` file owns its entities, events, update rules, renderer, and `main`; methods that operate on an app are declared inside that app's struct. The examples intentionally do not share a game-state framework.
 
-| Example | Controls |
-| --- | --- |
-| [`arkanoid.cp`](arkanoid.cp) | Left/right or A/D; mouse drag; Space to launch; M toggles mouse control. Bricks, lives, levels, and powerups. |
-| [`space_invaders.cp`](space_invaders.cp) | Left/right or A/D; Space to start/fire. Formation movement, enemy fire, shields, lives, and waves. |
-| [`tetris.cp`](tetris.cp) | Left/right, down, Up/X rotate, Z reverse-rotate, Space hard drop, C hold. Line clears, levels, previews, and landing ghost. |
-| [`game_2048.cp`](game_2048.cp) | Arrow keys/WASD or mouse swipe; R restarts. 2/4 tile spawns, score, win, and no-moves states. |
-| [`pong.cp`](pong.cp) | W/S and Up/Down move paddles; hold left mouse to steer the right paddle; Space serves/restarts; R resets. |
-| [`snake.cp`](snake.cp) | Arrow keys/WASD steer; Space starts/pauses; R restarts. Fixed-step movement, queued turns, growth, and collisions. |
-| [`asteroids.cp`](asteroids.cp) | Left/right or A/D rotate; Up/W thrust; hold Space to fire; R resets; Enter restarts. Wraparound, splitting, waves, lives. |
-| [`game_of_life.cp`](game_of_life.cp) | Space runs/pauses; N steps; R randomizes; C clears; B toggles wrapping; +/- adjusts speed. Mouse paints/erases. |
+|Example                                  | Controls                                                                                                                    |
+|-----------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+|[`arkanoid.cp`](arkanoid.cp)             | Left/right or A/D; mouse drag; Space to launch; M toggles mouse control. Bricks, lives, levels, and powerups.               |
+|[`space_invaders.cp`](space_invaders.cp) | Left/right or A/D; Space to start/fire. Formation movement, enemy fire, shields, lives, and waves.                          |
+|[`tetris.cp`](tetris.cp)                 | Left/right, down, Up/X rotate, Z reverse-rotate, Space hard drop, C hold. Line clears, levels, previews, and landing ghost. |
+|[`game_2048.cp`](game_2048.cp)           | Arrow keys/WASD or mouse swipe; R restarts. 2/4 tile spawns, score, win, and no-moves states.                               |
+|[`pong.cp`](pong.cp)                     | W/S and Up/Down move paddles; hold left mouse to steer the right paddle; Space serves/restarts; R resets.                   |
+|[`snake.cp`](snake.cp)                   | Arrow keys/WASD steer; Space starts/pauses; R restarts. Fixed-step movement, queued turns, growth, and collisions.          |
+|[`asteroids.cp`](asteroids.cp)           | Left/right or A/D rotate; Up/W thrust; hold Space to fire; R resets; Enter restarts. Wraparound, splitting, waves, lives.   |
+|[`game_of_life.cp`](game_of_life.cp)     | Space runs/pauses; N steps; R randomizes; C clears; B toggles wrapping; +/- adjusts speed. Mouse paints/erases.             |
 
 ## Tests and screenshots
 
