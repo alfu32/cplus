@@ -31,6 +31,12 @@ See [the LSP contract](../documentation/spec/SPEC.lsp.md) for boundaries and exa
 
 ## Development
 
+Packaging the VSIX requires Node.js 20.18.1 or newer because the pinned
+`@vscode/vsce` toolchain uses `undici` APIs that are not available on Node 18.
+CI uses Node 22. `npm run compile` remains usable independently, but
+`npm run package` and the root `packageVscode` task fail early with the exact
+runtime requirement when an older Node installation is selected.
+
 ```sh
 npm install
 npm run compile

@@ -5,12 +5,13 @@
   "version": "0.1.0",
   "publisher": "cplus",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.18.1",
+    "vscode": "^1.85.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/c-plus/c-plus"
-  },
-  "engines": {
-    "vscode": "^1.85.0"
   },
   "categories": [
     "Programming Languages"
@@ -151,7 +152,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test": "npm run compile && node test/smoke.js && node test/restart.js && node test/diagnostics.js && node test/tooling.js",
-    "package": "npm run compile && node scripts/package.js"
+    "package": "node scripts/check-node.js && npm run compile && node scripts/package.js"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",

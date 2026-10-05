@@ -336,6 +336,45 @@ fun findNpmExecutable(): String? {
     }
 }
 
+fun findNodeExecutable(): String? {
+    val configured = providers.gradleProperty("nodeExecutable").orNull
+    if (!configured.isNullOrBlank()) return configured
+
+    if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+        return "node.exe"
+    }
+
+    return try {
+        val process = ProcessBuilder("bash", "-lc", "type -P node")
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readLines() }
+        if (process.waitFor() != 0) return null
+        output.asReversed()
+            .map(String::trim)
+            .firstOrNull { candidate ->
+                candidate.isNotEmpty() && File(candidate).let { it.isFile && it.canExecute() }
+            }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+fun nodeVersion(nodeExecutable: String, path: String): String? {
+    return try {
+        val process = ProcessBuilder(nodeExecutable, "--version")
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .apply { environment()["PATH"] = path }
+            .start()
+        val version = process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().trim() }
+        if (process.waitFor() == 0) version else null
+    } catch (_: Exception) {
+        null
+    }
+}
+
 val packageVscode = tasks.register<Exec>("packageVscode") {
     group = "build"
     description = "Packages the VS Code extension."
@@ -352,10 +391,30 @@ val packageVscode = tasks.register<Exec>("packageVscode") {
 
         // npm and its node shebang must resolve to the same installation.
         val npmDirectory = File(npmExecutable).absoluteFile.parent
-        if (!npmDirectory.isNullOrBlank()) {
-            val inheritedPath = System.getenv("PATH").orEmpty()
-            environment("PATH", npmDirectory + File.pathSeparator + inheritedPath)
+        val inheritedPath = System.getenv("PATH").orEmpty()
+        val runtimePath = if (!npmDirectory.isNullOrBlank()) {
+            npmDirectory + File.pathSeparator + inheritedPath
+        } else {
+            inheritedPath
         }
+        val nodeExecutable = findNodeExecutable()
+            ?: throw GradleException(
+                "Node.js was not found. Install Node.js >=20.18.1 or set -PnodeExecutable to its path."
+            )
+        val nodeVersion = nodeVersion(nodeExecutable, runtimePath)
+            ?: throw GradleException("Unable to execute Node.js at '$nodeExecutable'.")
+        val nodeMatch = Regex("^v(\\d+)\\.(\\d+)\\.(\\d+)").find(nodeVersion)
+            ?: throw GradleException("Unable to determine Node.js version from '$nodeVersion'.")
+        val (major, minor, patch) = nodeMatch.destructured
+        val supported = major.toInt() > 20 ||
+            (major.toInt() == 20 && (minor.toInt() > 18 || (minor.toInt() == 18 && patch.toInt() >= 1)))
+        if (!supported) {
+            throw GradleException(
+                "VS Code packaging requires Node.js >=20.18.1; found $nodeVersion. " +
+                    "Use Node 22 (the CI toolchain) or set -PnodeExecutable to a newer Node binary."
+            )
+        }
+        environment("PATH", runtimePath)
     }
 }
 
