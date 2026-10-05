@@ -245,6 +245,14 @@ val buildHostKTreeSitter = tasks.register("buildHostKTreeSitter") {
             project(ktreesitter LANGUAGES C)
             find_package(JNI REQUIRED)
             set(CMAKE_C_STANDARD 11)
+            # The CLI carries this JNI library inside its self-contained JAR.
+            # Do not require the Visual C++ redistributable to be installed on
+            # the user's machine just to start the parser.  The UCRT API-set
+            # DLLs remain Windows system components; the compiler runtime is
+            # linked statically into this small C-only shim.
+            if(WIN32)
+                set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+            endif()
             if(MSVC)
                 add_compile_options(/W3 /wd4244)
             else()
@@ -279,6 +287,9 @@ val buildHostKTreeSitter = tasks.register("buildHostKTreeSitter") {
             # libktreesitter.dylib.
             if(WIN32)
                 set_target_properties(ktreesitter PROPERTIES PREFIX "")
+                if(NOT MSVC)
+                    target_link_options(ktreesitter PRIVATE -static-libgcc -static-libstdc++)
+                endif()
             else()
                 set_target_properties(ktreesitter PROPERTIES PREFIX "lib")
             endif()
