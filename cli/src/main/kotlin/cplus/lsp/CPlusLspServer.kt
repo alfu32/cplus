@@ -411,6 +411,7 @@ class CPlusLspServer(
             diagnostics = diagnostics,
             editorAst = if (materialized == null) ast else CPlusAstAdapter().adapt(parser.parse(snapshot, options)),
             indexedSymbols = provisional.runtimeSymbols,
+            scopedImports = scopedImportBindings(snapshot.text),
             activeImports = materialization.getOrNull()?.imports?.filter { sameSourceFile(it.importer.value, uri) }?.map { edge ->
                 val span = edge.location
                 val direct = if (sameSourceFile(span.file, uri) && span.startOffset >= 0 && span.endOffset <= snapshot.text.length)
@@ -707,6 +708,25 @@ class CPlusLspServer(
 
     private fun importPath(text: String): String? = IMPORT_LITERAL.find(text)?.groupValues?.get(1)?.let(::unescapeImport)
 
+    private fun scopedImportBindings(text: String): List<LspImportBinding> =
+        SCOPED_IMPORT.findAll(text)
+            .filter { match ->
+                val masked = maskToolingText(text)
+                masked.getOrNull(match.range.first) != ' '
+            }
+            .map { match ->
+                val path = unescapeImport(match.groupValues[1])
+                val alias = match.groupValues[2]
+                val aliasStart = match.groups[2]?.range?.first ?: match.range.first
+                LspImportBinding(
+                    alias = alias,
+                    path = path,
+                    importSpan = SourceFile(text).span(match.range.first, match.range.last + 1),
+                    aliasSpan = SourceFile(text).span(aliasStart, aliasStart + alias.length)
+                )
+            }
+            .toList()
+
     private fun importRequests(document: LspDocument): List<String> {
         document.activeImports?.let { return it.distinct() }
         val indexed = comptimeIndexer.index(document.editorAst).imports
@@ -820,6 +840,19 @@ class CPlusLspServer(
         val document = request.uri()?.let(readDocuments()::get) ?: return "{\"isIncomplete\":false,\"items\":[]}"
         val prefix = document.wordAt(request.position())
         val offset = document.snapshot.offsetAt(request.position())
+        val scopedTarget = offset?.let { scopedImportTarget(document, it) }
+        if (scopedTarget != null) {
+            val names = scopedTarget.symbols.asSequence()
+                .filter { it.ownerName == null && !it.local }
+                .filter { prefix.isEmpty() || it.name.startsWith(prefix) }
+                .distinctBy { it.name }
+                .sortedBy { it.name }
+                .joinToString(",", "[", "]") { symbol ->
+                    "{\"label\":${Json.string(symbol.name)},\"kind\":${symbol.completionKind()}," +
+                        "\"detail\":${Json.string(symbol.toolingDetail())}}"
+                }
+            return "{\"isIncomplete\":false,\"items\":$names}"
+        }
         val receiverAccess = offset?.let { receiverAccess(document, it) }
         if (receiverAccess?.typeName == null && receiverAccess != null) {
             return "{\"isIncomplete\":false,\"items\":[]}"
@@ -1135,6 +1168,7 @@ class CPlusLspServer(
         val word = document.wordAt(request.position())
         if (word.isEmpty()) return null
         val offset = document.snapshot.offsetAt(request.position()) ?: return null
+        scopedImportMember(document, offset, word)?.let { return it }
         val callArguments = callArguments(document.snapshot.text, offset)
         if (direct != null && callArguments == null) return direct
         val candidates = visibleSymbols(document)
@@ -1178,6 +1212,40 @@ class CPlusLspServer(
             ?: compatibleCandidates.firstOrNull()
         else precedingCandidates.maxByOrNull { it.selection.startOffset }
             ?: compatibleCandidates.firstOrNull()
+    }
+
+    /** Returns the imported module member under the cursor for `alias.member`. */
+    private fun scopedImportMember(document: LspDocument, offset: Int, word: String): LspSymbol? {
+        var memberStart = offset.coerceAtMost(document.snapshot.text.length)
+        while (memberStart > 0 && document.snapshot.text[memberStart - 1].isIdentifierPart()) memberStart--
+        val receiver = Regex("\\b($IDENTIFIER)\\s*\\.\\s*$")
+            .find(document.snapshot.text.substring(0, memberStart))?.groupValues?.get(1)
+            ?: return null
+        val binding = document.scopedImports.firstOrNull { it.alias == receiver } ?: return null
+        val target = scopedImportTarget(document, binding) ?: return null
+        return target.symbols.asSequence()
+            .filter { it.name == word && it.ownerName == null && !it.local }
+            .map { displaySymbol(it, target.uri) }
+            .minByOrNull { it.selection.startOffset }
+    }
+
+    /** Resolves the namespace before the cursor in `alias.` for completion. */
+    private fun scopedImportTarget(document: LspDocument, offset: Int): LspDocument? {
+        var memberStart = offset.coerceAtMost(document.snapshot.text.length)
+        while (memberStart > 0 && document.snapshot.text[memberStart - 1].isIdentifierPart()) memberStart--
+        val receiver = Regex("\\b($IDENTIFIER)\\s*\\.\\s*$")
+            .find(document.snapshot.text.substring(0, memberStart))?.groupValues?.get(1)
+            ?: return null
+        val binding = document.scopedImports.firstOrNull { it.alias == receiver } ?: return null
+        return scopedImportTarget(document, binding)
+    }
+
+    private fun scopedImportTarget(document: LspDocument, binding: LspImportBinding): LspDocument? {
+        val importedUri = lexicalImportUri(document.uri, binding.path)
+            ?: resolveImport(document, binding.path)?.toUri()?.toString()
+        return readDocuments().entries.firstOrNull { (uri, _) ->
+            importedUri != null && sameSourceUri(uri, importedUri)
+        }?.value
     }
 
     private fun isAmbiguousCallable(
@@ -2181,11 +2249,23 @@ private data class LspDocument(
     val diagnostics: List<ParserDiagnostic> = emptyList(),
     val editorAst: CPlusAst = ast,
     val activeImports: List<String>? = null,
+    val scopedImports: List<LspImportBinding> = emptyList(),
     private val indexedSymbols: List<LspSymbol>? = null
 ) {
     val runtimeSymbols: List<LspSymbol> = indexedSymbols ?: LspSymbolIndex.build(uri, parsedText, mappedSource, ast)
     val symbols: List<LspSymbol> = runtimeSymbols +
-        LspSymbolIndex.toolingDeclarations(uri, editorAst)
+        LspSymbolIndex.toolingDeclarations(uri, editorAst) +
+        scopedImports.map { binding ->
+            LspSymbol(
+                uri = uri,
+                name = binding.alias,
+                kind = 23,
+                detail = "import \"${binding.path}\" as ${binding.alias}",
+                span = binding.importSpan,
+                selection = binding.aliasSpan,
+                scope = ast.root.span
+            )
+        }
 
     /** One immutable hierarchy per snapshot; never rescan every owner for every request. */
     val symbolTreeJson: String by lazy {
@@ -2232,6 +2312,13 @@ private data class LspDocument(
         }
     }
 }
+
+private data class LspImportBinding(
+    val alias: String,
+    val path: String,
+    val importSpan: SourceSpan,
+    val aliasSpan: SourceSpan
+)
 
 private data class LspDocumentUpdate(
     val uri: String,
@@ -2629,6 +2716,9 @@ private fun String.endsWithAny(vararg suffixes: String): Boolean = suffixes.any(
 
 private val IDENTIFIER = Regex("[A-Za-z_][A-Za-z0-9_]*")
 private val IMPORT_LITERAL = Regex("\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"")
+private val SCOPED_IMPORT = Regex(
+    "(?m)(?:\\bcomptime\\s+import|@import)\\s*(?:\\(\\s*)?\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\"\\s*(?:\\))?\\s+as\\s+([A-Za-z_]\\w*)"
+)
 private val IMPORT_RECOVERY_LITERAL = Regex(
     "(?m)^\\s*(?:comptime\\s+)?(?:@import|import)\\s*(?:\\(\\s*)?\\\"((?:[^\\\"\\\\]|\\\\.)*)\\\""
 )

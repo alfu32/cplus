@@ -211,6 +211,46 @@ class CPlusLspServerTest {
     }
 
     @Test
+    fun indexesCompletesHoversAndDefinesScopedImportMembers(@TempDir directory: Path) {
+        val helper = directory.resolve("helper.cp")
+        val main = directory.resolve("main.cp")
+        Files.writeString(helper, "int answer(int value) { return value + 1; }\n")
+        val source = "@import \"helper.cp\" as helper;\n" +
+            "int main(void) { return helper.answer(1); }\n"
+        Files.writeString(main, source)
+        val uri = main.toUri().toString()
+        val helperUri = helper.toUri().toString()
+        val encodedSource = source.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val memberOffset = source.indexOf("answer")
+        val memberCharacter = memberOffset - source.lastIndexOf('\n', memberOffset) - 1
+        val dotCharacter = source.indexOf("helper.") + "helper.".length
+        val messages = listOf(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"${directory.toUri()}\"}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{" +
+                "\"textDocument\":{\"uri\":\"$uri\",\"version\":1,\"text\":\"$encodedSource\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/documentSymbol\",\"params\":{\"textDocument\":{\"uri\":\"$uri\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":1,\"character\":$dotCharacter}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":1,\"character\":$memberCharacter}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"$uri\"},\"position\":{\"line\":1,\"character\":$memberCharacter}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"shutdown\",\"params\":null}"
+        ).joinToString("") { frame(it) }
+        val output = ByteArrayOutputStream()
+
+        CPlusLspServer(
+            ByteArrayInputStream(messages.toByteArray(StandardCharsets.UTF_8)),
+            output
+        ).serve()
+
+        val response = output.toString(StandardCharsets.UTF_8)
+        assertTrue(response.contains("\"name\":\"helper\""), response)
+        assertTrue(response.contains("\"id\":3,\"result\":{\"isIncomplete\":false") &&
+            response.contains("\"label\":\"answer\""), response)
+        assertTrue(response.contains("\"id\":4,\"result\":[{\"uri\":\"$helperUri\""), response)
+        assertTrue(response.contains("\"id\":5,\"result\":{\"contents\"") &&
+            response.contains("answer(int value)"), response)
+    }
+
+    @Test
     fun exposesAdvisoryAccessAndOwnershipMetadataThroughSymbolsAndHover() {
         val uri = "file:///ownership-metadata.cp"
         val source = "typedef struct box_t {\n" +

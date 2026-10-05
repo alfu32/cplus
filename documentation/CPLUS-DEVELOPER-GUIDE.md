@@ -147,6 +147,8 @@ int main(void) {
 
 Scoped aliases are local compile-time names. The transcoder lowers `local_stdio.printf(...)` to the existing C symbol `printf(...)`; no runtime module object or ABI rename is introduced. Aliases must be unique identifiers in the importing file, paths must use double quotes, and aliased imports are currently for C-plus modules only. Keep C fixture imports unaliased (`@import("fixture.c")`). Unqualified imports continue to work.
 
+The C-plus LSP indexes scoped aliases as document symbols. After the imported module is available in the open-document import closure, completion after `alias.` lists its top-level declarations, and hover/definition on `alias.member` resolves to the member declaration in the imported file. The alias itself can also be hovered or navigated as the local import binding.
+
 ### Comptime declarations and generators
 
 Comptime can declare values and generate declarations. The standard library uses generic generators such as:

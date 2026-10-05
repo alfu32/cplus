@@ -76,7 +76,7 @@ Each step is intended to be a similar-sized, independently testable change.
 | SI-3 | DONE | Extend compiler import data and resolver validation | Duplicate/invalid/C-import alias diagnostics pass |
 | SI-4 | DONE | Lower qualified references and preserve dependency-first emission | A scoped module transcodes through both frontend paths |
 | SI-5 | OPEN | Update AST/import graph JSON and compiler metadata | Alias/path data is stable and import graph tests pass |
-| SI-6 | OPEN | Add LSP namespace indexing, completion, definition, and diagnostics | Open-document scoped import fixtures pass |
+| SI-6 | DONE | Add LSP namespace indexing, completion, definition, and hover support | Open-document scoped import fixture passes over stdio |
 | SI-7 | OPEN | Add standard-library/example migration samples and documentation | Guide/spec/examples describe the final behavior |
 | SI-8 | OPEN | Full regression and cross-host validation | CLI, parser, stdlib, examples, and CI host gates pass |
 
@@ -88,6 +88,7 @@ Each step is intended to be a similar-sized, independently testable change.
 | 2026-10-05 | SI-2 | Tree-sitter grammar regenerated; grammar corpus and highlighting checks pass. |
 | 2026-10-05 | SI-3 | Legacy compiler parses aliases, rejects duplicates, preserves C-import separation, and normalizes `stdlib:c/`. |
 | 2026-10-05 | SI-4 | Legacy and explicit Tree-sitter pipelines lower `alias.member`; focused CLI regression passes. |
+| 2026-10-05 | SI-6 | LSP indexes alias symbols, resolves `alias.` completion, and maps member hover/definition to the imported document. |
 
 ## Compatibility and retirement
 
